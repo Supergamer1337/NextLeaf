@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root {
+      --bg: #0f1a14;
+      --card: #16241b;
+      --ink: #eaf3ec;
+      --muted: #9db3a4;
+      --leaf: #6ee7a0;
+      --leaf-deep: #2f9e63;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 600px at 70% -10%, rgba(110,231,160,0.14), transparent 60%),
+        radial-gradient(900px 500px at -10% 110%, rgba(47,158,99,0.12), transparent 55%),
+        var(--bg);
+      display: grid;
+      place-items: center;
+      padding: 1.5rem;
+    }
+    .card {
+      width: min(32rem, 100%);
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent), var(--card);
+      border: 1px solid rgba(110,231,160,0.14);
+      border-radius: 18px;
+      padding: 2.5rem 2.25rem;
+      box-shadow: 0 24px 60px -30px rgba(0,0,0,0.7);
+      text-align: center;
+    }
+    .mark {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 1.25rem;
+      display: block;
+      color: var(--leaf);
+      filter: drop-shadow(0 6px 14px rgba(110,231,160,0.25));
+    }
+    h1 {
+      margin: 0 0 0.5rem;
+      font-size: 2rem;
+      letter-spacing: -0.02em;
+    }
+    p.tagline {
+      margin: 0 0 1.75rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8rem;
+      color: var(--leaf);
+      background: rgba(110,231,160,0.08);
+      border: 1px solid rgba(110,231,160,0.2);
+      padding: 0.4rem 0.85rem;
+      border-radius: 999px;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--leaf);
+      box-shadow: 0 0 0 4px rgba(110,231,160,0.18);
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 21c0-6 3-11 9-13-1 8-4 12-9 13Z" fill="currentColor" opacity="0.9"/>
+      <path d="M12 21C7 20 4 16 3 8c6 2 9 7 9 13Z" fill="currentColor" opacity="0.45"/>
+    </svg>
+    <h1>{{.Heading}}</h1>
+    <p class="tagline">{{.Message}}</p>
+    <span class="badge"><span class="dot"></span> server is running</span>
+  </main>
+</body>
+</html>

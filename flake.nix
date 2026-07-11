@@ -15,6 +15,9 @@
           go
           gopls
           gotools
+          golangci-lint
+          delve
+          gotestsum
         ];
       };
     };
