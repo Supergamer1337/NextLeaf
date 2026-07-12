@@ -25,14 +25,19 @@ type Series struct {
 	Position float64
 }
 
-// Book is the provider-neutral description of a single title.
+// Book is the provider-neutral description of a single title. Fields a given
+// source can't supply stay zero/nil, and the picker's dimensions no-op on them,
+// so every field is optional context rather than a requirement.
 type Book struct {
 	Title       string
 	Subtitle    string
 	Authors     []string
 	Genres      []string
+	Moods       []string // tone tags, e.g. "dark", "hopeful"; nil if unknown
 	Series      *Series
 	ReleaseYear int
+	PageCount   int   // 0 if unknown
+	Nonfiction  *bool // nil if the source can't classify fiction vs nonfiction
 	CoverURL    string
 	URL         string
 }

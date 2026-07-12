@@ -39,6 +39,10 @@ func NewCached(src Source, ttl time.Duration) *Cached {
 
 func (c *Cached) Name() string { return c.src.Name() }
 
+// Unwrap exposes the wrapped Source so optional capabilities (e.g.
+// SeriesResolver) remain reachable through the cache via AsSeriesResolver.
+func (c *Cached) Unwrap() Source { return c.src }
+
 func (c *Cached) fresh(at time.Time, ok bool) bool {
 	return ok && c.now().Sub(at) < c.ttl
 }
