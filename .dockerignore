@@ -1,0 +1,18 @@
+# Build artifacts and local state — never needed in the image context.
+/build/
+coverage.out
+
+# Secrets and machine-local config.
+.env
+.envrc
+.direnv/
+
+# Tooling and docs irrelevant to the build.
+.git/
+.github/
+.claude/
+.mcp.json
+docs/
+*_test.go
+Dockerfile
+.dockerignore
