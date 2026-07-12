@@ -1,6 +1,7 @@
 .direnv/
 /build/
 coverage.out
+.env
 
 # Local, machine-specific preview launch config (e.g. the nix develop wrapper)
 .claude/launch.json
