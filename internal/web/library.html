@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Library · Nextleaf</title>
+  <style>
+    :root {
+      --bg: #0f1a14;
+      --panel: #16241b;
+      --ink: #eaf3ec;
+      --muted: #9db3a4;
+      --faint: #6f8878;
+      --leaf: #6ee7a0;
+      --leaf-deep: #2f9e63;
+      --line: rgba(110,231,160,0.14);
+      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+      --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      font-family: var(--sans);
+      color: var(--ink);
+      background:
+        radial-gradient(1100px 550px at 78% -12%, rgba(110,231,160,0.12), transparent 60%),
+        radial-gradient(900px 500px at -12% 108%, rgba(47,158,99,0.10), transparent 55%),
+        var(--bg);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 3rem 1.5rem 5rem; }
+
+    /* Header */
+    .masthead { display: flex; align-items: baseline; gap: 0.85rem; flex-wrap: wrap; }
+    .mark { width: 30px; height: 30px; color: var(--leaf); flex: none; align-self: center;
+            filter: drop-shadow(0 4px 10px rgba(110,231,160,0.25)); }
+    h1 { font-family: var(--serif); font-weight: 600; font-size: clamp(2rem, 5vw, 2.9rem);
+         letter-spacing: -0.02em; margin: 0; }
+    .summary { margin: 0.6rem 0 0; color: var(--muted); font-size: 0.95rem; }
+    .summary b { color: var(--leaf); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    /* Sections */
+    .section { margin-top: 3rem; }
+    .section-head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.3rem; }
+    .eyebrow { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase;
+               color: var(--leaf); white-space: nowrap; }
+    .count { font-size: 0.72rem; color: var(--faint); font-variant-numeric: tabular-nums; }
+    .rule { flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
+    .empty { color: var(--faint); font-style: italic; margin: 0; }
+
+    /* Covers */
+    .cover { display: block; width: 100%; aspect-ratio: 2 / 3; object-fit: cover;
+             border-radius: 4px; background: #0c130e;
+             box-shadow: 0 10px 22px -12px rgba(0,0,0,0.75), inset 0 0 0 1px rgba(255,255,255,0.04); }
+    .cover--blank { display: grid; place-items: center; padding: 0.5rem; text-align: center;
+                    background: linear-gradient(155deg, #1d3226, #12201a);
+                    color: var(--muted); font-family: var(--serif); font-size: 0.82rem; line-height: 1.25; }
+
+    /* Reading now — the featured "now" */
+    .now { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem; }
+    .now-card { display: flex; gap: 1.1rem; background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent), var(--panel);
+                border: 1px solid var(--line); border-radius: 14px; padding: 1.1rem; }
+    .now-card .cover { width: 92px; flex: none; }
+    .now-body { min-width: 0; display: flex; flex-direction: column; }
+    .now-status { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.72rem;
+                  letter-spacing: 0.1em; text-transform: uppercase; color: var(--leaf); margin-bottom: 0.35rem; }
+    .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--leaf);
+             box-shadow: 0 0 0 0 rgba(110,231,160,0.5); animation: pulse 2.4s ease-out infinite; }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(110,231,160,0.45); }
+      70% { box-shadow: 0 0 0 9px rgba(110,231,160,0); }
+      100% { box-shadow: 0 0 0 0 rgba(110,231,160,0); }
+    }
+    .now-title { font-family: var(--serif); font-size: 1.25rem; line-height: 1.2; margin: 0; }
+    .now-author { color: var(--muted); font-size: 0.9rem; margin: 0.2rem 0 0; }
+    .now-series { color: var(--faint); font-size: 0.82rem; margin: 0.15rem 0 0; }
+    .tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: auto; padding-top: 0.7rem; }
+    .tag { font-size: 0.7rem; color: var(--muted); border: 1px solid var(--line);
+           border-radius: 999px; padding: 0.12rem 0.55rem; }
+
+    /* Grids — recent shelf and the to-read wall */
+    .grid { list-style: none; margin: 0; padding: 0; display: grid; }
+    .grid--recent { grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 1.4rem 1.15rem; }
+    .grid--tbr { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 1.15rem 0.9rem; }
+    .book { min-width: 0; }
+    .book-link { color: inherit; text-decoration: none; display: block; border-radius: 6px;
+                 transition: transform 0.18s ease; }
+    .book-link[href]:hover { transform: translateY(-4px); }
+    .book-link:focus-visible { outline: 2px solid var(--leaf); outline-offset: 3px; }
+    .book-title { font-family: var(--serif); font-size: 0.9rem; line-height: 1.25; margin: 0.5rem 0 0;
+                  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .book-author { color: var(--faint); font-size: 0.76rem; margin: 0.12rem 0 0;
+                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .book-date { color: var(--leaf-deep); font-size: 0.72rem; margin: 0.2rem 0 0; font-variant-numeric: tabular-nums; }
+    .grid--tbr .book-title { font-size: 0.78rem; }
+
+    .notice { background: rgba(110,231,160,0.06); border: 1px solid var(--line);
+              padding: 1rem 1.2rem; border-radius: 12px; color: var(--muted); margin-top: 2rem; }
+    .notice code { color: var(--leaf); background: rgba(110,231,160,0.1); padding: 0.1rem 0.35rem; border-radius: 4px; }
+    .notice--error { background: rgba(240,120,120,0.08); border-color: rgba(240,120,120,0.3); color: #f4c2c2; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .pulse { animation: none; }
+      .book-link { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="masthead">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 21c0-6 3-11 9-13-1 8-4 12-9 13Z" fill="currentColor" opacity="0.9"/>
+        <path d="M12 21C7 20 4 16 3 8c6 2 9 7 9 13Z" fill="currentColor" opacity="0.45"/>
+      </svg>
+      <h1>Library</h1>
+    </header>
+
+    {{if not .Configured}}
+      <p class="notice">No reading source connected. Set <code>HARDCOVER_TOKEN</code> and restart to pull in your shelves.</p>
+    {{else if .Error}}
+      <p class="notice notice--error">Couldn’t load your library: {{.Error}}</p>
+    {{else}}
+      <p class="summary"><b>{{len .Reading}}</b> reading · <b>{{len .Reads}}</b> recently finished · <b>{{len .ToRead}}</b> to read</p>
+
+      <section class="section">
+        <div class="section-head"><span class="eyebrow">Reading now</span><span class="rule"></span></div>
+        {{if .Reading}}
+          <div class="now">
+            {{range .Reading}}
+              <article class="now-card">
+                {{template "cover" .}}
+                <div class="now-body">
+                  <span class="now-status"><span class="pulse"></span> In progress</span>
+                  <h3 class="now-title">{{.Book.Title}}</h3>
+                  {{if .Book.Authors}}<p class="now-author">{{template "authors" .Book.Authors}}</p>{{end}}
+                  {{with .Book.Series}}<p class="now-series">{{.Name}}{{if .Position}} · Book {{.Position}}{{end}}</p>{{end}}
+                  {{if .Book.Genres}}<div class="tags">{{range firstN 3 .Book.Genres}}<span class="tag">{{.}}</span>{{end}}</div>{{end}}
+                </div>
+              </article>
+            {{end}}
+          </div>
+        {{else}}
+          <p class="empty">Nothing in progress — time to start something.</p>
+        {{end}}
+      </section>
+
+      <section class="section">
+        <div class="section-head"><span class="eyebrow">Recently finished</span><span class="count">{{len .Reads}}</span><span class="rule"></span></div>
+        {{if .Reads}}
+          <ul class="grid grid--recent">
+            {{range .Reads}}
+              <li class="book">
+                <a class="book-link"{{with .Book.URL}} href="{{.}}" target="_blank" rel="noopener"{{end}}>
+                  {{template "cover" .}}
+                  <p class="book-title">{{.Book.Title}}</p>
+                  {{if .Book.Authors}}<p class="book-author">{{template "authors" .Book.Authors}}</p>{{end}}
+                  {{if not .FinishedAt.IsZero}}<p class="book-date">{{.FinishedAt.Format "Jan 2, 2006"}}</p>{{end}}
+                </a>
+              </li>
+            {{end}}
+          </ul>
+        {{else}}
+          <p class="empty">No finished books yet.</p>
+        {{end}}
+      </section>
+
+      <section class="section">
+        <div class="section-head"><span class="eyebrow">To read</span><span class="count">{{len .ToRead}}</span><span class="rule"></span></div>
+        {{if .ToRead}}
+          <ul class="grid grid--tbr">
+            {{range .ToRead}}
+              <li class="book">
+                <a class="book-link"{{with .Book.URL}} href="{{.}}" target="_blank" rel="noopener"{{end}}>
+                  {{template "cover" .}}
+                  <p class="book-title">{{.Book.Title}}</p>
+                  {{if .Book.Authors}}<p class="book-author">{{template "authors" .Book.Authors}}</p>{{end}}
+                </a>
+              </li>
+            {{end}}
+          </ul>
+        {{else}}
+          <p class="empty">Your list is empty.</p>
+        {{end}}
+      </section>
+    {{end}}
+  </main>
+</body>
+</html>
+
+{{define "cover"}}
+  {{- if .Book.CoverURL -}}
+    <img class="cover" src="{{.Book.CoverURL}}" alt="Cover of {{.Book.Title}}" loading="lazy">
+  {{- else -}}
+    <div class="cover cover--blank"><span>{{.Book.Title}}</span></div>
+  {{- end -}}
+{{end}}
+
+{{define "authors"}}{{range $i, $a := .}}{{if $i}}, {{end}}{{$a}}{{end}}{{end}}

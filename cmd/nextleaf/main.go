@@ -10,10 +10,21 @@ import (
 	"syscall"
 	"time"
 
+	"nextleaf/internal/config"
+	"nextleaf/internal/sources"
 	"nextleaf/internal/web"
 )
 
 func main() {
+	if err := config.LoadDotEnv(".env"); err != nil {
+		log.Printf("loading .env: %v", err)
+	}
+
+	source := sources.FromEnv()
+	if source == nil {
+		log.Print("no reading sources configured; /library will show a configuration hint")
+	}
+
 	addr := os.Getenv("ADDR")
 	if addr == "" {
 		addr = ":8080"
@@ -21,7 +32,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           web.NewHandler(),
+		Handler:           web.NewHandler(source),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
