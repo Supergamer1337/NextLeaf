@@ -24,6 +24,7 @@ const readsResponse = `{"data":{"user_books":[
       "subtitle": "",
       "slug": "the-fifth-season",
       "release_year": 2015,
+      "pages": 512,
       "cached_tags": {"Genre": [{"tag": "Fantasy"}, {"tag": "Science Fiction"}], "Mood": [{"tag": "dark"}]},
       "image": {"url": "https://covers.example/fifth.jpg"},
       "contributions": [{"author": {"name": "N. K. Jemisin"}}],
@@ -121,6 +122,52 @@ func TestRecentReadsMapsData(t *testing.T) {
 	if b.Series == nil || b.Series.Name != "The Broken Earth" || b.Series.Position != 1 {
 		t.Errorf("Series = %+v, want The Broken Earth #1 (featured)", b.Series)
 	}
+	if b.PageCount != 512 {
+		t.Errorf("PageCount = %d, want 512", b.PageCount)
+	}
+	if len(b.Moods) != 1 || b.Moods[0] != "Dark" {
+		t.Errorf("Moods = %v, want [Dark] (casing normalized)", b.Moods)
+	}
+	if b.Nonfiction != nil {
+		t.Errorf("Nonfiction = %v, want nil (no fiction/nonfiction tag)", *b.Nonfiction)
+	}
+}
+
+func TestClassifyMode(t *testing.T) {
+	cases := []struct {
+		genres []string
+		want   *bool
+	}{
+		{[]string{"History", "Nonfiction"}, boolp(true)},
+		{[]string{"Science", "Non-Fiction"}, boolp(true)},
+		{[]string{"Fantasy", "Fiction"}, boolp(false)},
+		{[]string{"Fantasy", "Adventure"}, nil},
+		{nil, nil},
+	}
+	for _, tc := range cases {
+		got := classifyMode(tc.genres)
+		switch {
+		case tc.want == nil && got != nil:
+			t.Errorf("classifyMode(%v) = %v, want nil", tc.genres, *got)
+		case tc.want != nil && (got == nil || *got != *tc.want):
+			t.Errorf("classifyMode(%v) = %v, want %v", tc.genres, got, *tc.want)
+		}
+	}
+}
+
+func boolp(b bool) *bool { return &b }
+
+func TestCleanGenres(t *testing.T) {
+	got := cleanGenres([]string{"political science", "General", "Fantasy", "Fiction", "Science Fiction", "genre fiction", "LGBT"})
+	want := []string{"Political Science", "Fantasy", "Science Fiction", "LGBT"}
+	if len(got) != len(want) {
+		t.Fatalf("cleanGenres = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("cleanGenres[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
 }
 
 func TestRecentReadsSendsStatusAndLimit(t *testing.T) {
@@ -201,6 +248,100 @@ func TestToReadOrdersByDateAddedNoLimit(t *testing.T) {
 	}
 	if _, ok := api.lastVars["limit"]; ok {
 		t.Errorf("ToRead must not send a limit, got %v", api.lastVars["limit"])
+	}
+}
+
+const nextInSeriesResponse = `{"data":{"book_series":[
+  {
+    "book": {
+      "title": "The Obelisk Gate",
+      "subtitle": "",
+      "slug": "the-obelisk-gate",
+      "release_year": 2016,
+      "cached_tags": {"Genre": [{"tag": "Fantasy"}]},
+      "image": {"url": "https://covers.example/obelisk.jpg"},
+      "contributions": [{"author": {"name": "N. K. Jemisin"}}],
+      "book_series": [{"position": 2, "featured": true, "series": {"name": "The Broken Earth"}}]
+    }
+  }
+]}}`
+
+func TestNextInSeriesReturnsNextBook(t *testing.T) {
+	var gotQuery string
+	var gotVars map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.Unmarshal(body, &req)
+		gotQuery, gotVars = req.Query, req.Variables
+		_, _ = io.WriteString(w, nextInSeriesResponse)
+	}))
+	defer srv.Close()
+
+	c := New("tok", WithEndpoint(srv.URL))
+	book, found, err := c.NextInSeries(context.Background(), library.Series{Name: "The Broken Earth", Position: 1})
+	if err != nil {
+		t.Fatalf("NextInSeries: %v", err)
+	}
+	if !found {
+		t.Fatal("found = false, want true")
+	}
+	if book.Title != "The Obelisk Gate" {
+		t.Errorf("Title = %q, want The Obelisk Gate", book.Title)
+	}
+	if book.URL != "https://hardcover.app/books/the-obelisk-gate" {
+		t.Errorf("URL = %q", book.URL)
+	}
+	if book.Series == nil || book.Series.Position != 2 {
+		t.Errorf("Series = %+v, want position 2", book.Series)
+	}
+
+	// It must query the next position (>) of the named series, not by user.
+	if !strings.Contains(gotQuery, "position: {_gt: $after}") {
+		t.Errorf("query should fetch the next position:\n%s", gotQuery)
+	}
+	if got := gotVars["name"]; got != "The Broken Earth" {
+		t.Errorf("name var = %v, want The Broken Earth", got)
+	}
+	if got := gotVars["after"]; got != float64(1) {
+		t.Errorf("after var = %v, want 1", got)
+	}
+}
+
+func TestNextInSeriesNoLaterBook(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"data":{"book_series":[]}}`)
+	}))
+	defer srv.Close()
+
+	c := New("tok", WithEndpoint(srv.URL))
+	_, found, err := c.NextInSeries(context.Background(), library.Series{Name: "Ended", Position: 9})
+	if err != nil {
+		t.Fatalf("NextInSeries: %v", err)
+	}
+	if found {
+		t.Error("found = true, want false for a series with no later book")
+	}
+}
+
+func TestNextInSeriesSkipsQueryWhenUnresolvable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		t.Error("NextInSeries should not hit the API without a name and position")
+	}))
+	defer srv.Close()
+
+	c := New("tok", WithEndpoint(srv.URL))
+	cases := []library.Series{
+		{Position: 1},   // missing name
+		{Name: "Known"}, // unknown position (0)
+	}
+	for _, s := range cases {
+		if _, found, err := c.NextInSeries(context.Background(), s); err != nil || found {
+			t.Errorf("NextInSeries(%+v) = (found %v, err %v), want (false, nil)", s, found, err)
+		}
 	}
 }
 
