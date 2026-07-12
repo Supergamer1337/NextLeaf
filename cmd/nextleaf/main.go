@@ -22,7 +22,7 @@ func main() {
 
 	source := sources.FromEnv()
 	if source == nil {
-		log.Print("no reading sources configured; /library will show a configuration hint")
+		log.Print("no reading sources configured; the home page will show a configuration hint")
 	}
 
 	addr := os.Getenv("ADDR")
