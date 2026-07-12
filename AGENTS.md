@@ -9,6 +9,7 @@ The project is called *NextLeaf*, and is a self-hosted book-recommendation servi
 - Try to keep build outputs to the `./build` directory.
 - Avoid overly commenting code. Keep the comments short, succint and specific. Only document behaviour where the code is not obvious, or where you need information that may only be found elsewhere to fully understand.
 - Keep to GO idioms and precidence when writing, to make it as conventional as possible.
+- Make sure things work by running the server and serving the webapp locally. Prefer using `go run` instead of build for running the development preview. Never just show the HTML, show the whole application to the operator.
 
 ## Project Notes
 
