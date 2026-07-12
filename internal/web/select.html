@@ -4,104 +4,140 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Nextleaf</title>
+  <script>
+    // Apply a saved theme override before first paint to avoid a flash.
+    (function () {
+      var theme = localStorage.getItem("theme");
+      if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+    })();
+  </script>
   <style>
     :root {
-      --bg: #0f1a14;
-      --panel: #16241b;
-      --ink: #eaf3ec;
-      --muted: #9db3a4;
-      --faint: #6f8878;
-      --leaf: #6ee7a0;
-      --leaf-deep: #2f9e63;
-      --line: rgba(110,231,160,0.14);
-      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+      color-scheme: light dark;
+      --bg:       light-dark(#eef0e6, #171d18);
+      --card:     light-dark(#fbfaf5, #202a21);
+      --ink:      light-dark(#24312a, #e9ece2);
+      --muted:    light-dark(#64756a, #9aa894);
+      --moss:     light-dark(#3f7d54, #7cc491);
+      --on-moss:  light-dark(#fbfaf5, #171d18);
+      --tint:     light-dark(rgba(63,125,84,0.10), rgba(124,196,145,0.12));
+      --line:     light-dark(rgba(36,49,42,0.14), rgba(233,236,226,0.12));
+      --error:      light-dark(#8c3b34, #e39e96);
+      --error-tint: light-dark(rgba(140,59,52,0.07), rgba(227,158,150,0.09));
+      --shadow-c: light-dark(rgba(36,49,42,0.35), rgba(0,0,0,0.6));
+      --serif: Charter, "Bitstream Charter", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
       --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
+    :root[data-theme="light"] { color-scheme: light; }
+    :root[data-theme="dark"]  { color-scheme: dark; }
+
     * { box-sizing: border-box; }
     html, body { margin: 0; }
     body {
       font-family: var(--sans);
       color: var(--ink);
-      background:
-        radial-gradient(1100px 550px at 78% -12%, rgba(110,231,160,0.12), transparent 60%),
-        radial-gradient(900px 500px at -12% 108%, rgba(47,158,99,0.10), transparent 55%),
-        var(--bg);
+      background: var(--bg);
       min-height: 100vh;
-      line-height: 1.5;
+      line-height: 1.55;
     }
-    .wrap { max-width: 720px; margin: 0 auto; padding: 3rem 1.5rem 5rem; }
+    .wrap { max-width: 680px; margin: 0 auto; padding: 2.8rem 1.5rem 5rem; }
 
     /* Header */
-    .masthead { display: flex; align-items: baseline; gap: 0.85rem; flex-wrap: wrap; }
-    .mark { width: 30px; height: 30px; color: var(--leaf); flex: none; align-self: center;
-            filter: drop-shadow(0 4px 10px rgba(110,231,160,0.25)); }
-    h1 { font-family: var(--serif); font-weight: 600; font-size: clamp(2rem, 5vw, 2.9rem);
-         letter-spacing: -0.02em; margin: 0; }
-    .lede { margin: 0.6rem 0 0; color: var(--muted); font-size: 0.95rem; }
+    .masthead { display: flex; align-items: center; gap: 0.7rem; }
+    .mark { width: 26px; height: 26px; color: var(--moss); flex: none; }
+    h1 { font-family: var(--serif); font-weight: 600; font-size: 1.7rem; letter-spacing: -0.01em; margin: 0; }
+    .theme-toggle {
+      margin-left: auto; display: grid; place-items: center; width: 36px; height: 36px;
+      color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 50%;
+      cursor: pointer; transition: color 0.15s ease, border-color 0.15s ease;
+    }
+    .theme-toggle:hover { color: var(--moss); border-color: var(--moss); }
+    .theme-toggle svg { width: 17px; height: 17px; }
+    .lede { margin: 1.6rem 0 0; color: var(--muted); font-size: 0.92rem; }
 
     /* Recommendation card */
-    .rec { margin-top: 2.5rem; display: flex; gap: 1.4rem;
-           background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent), var(--panel);
-           border: 1px solid var(--line); border-radius: 16px; padding: 1.5rem; }
+    .rec {
+      position: relative; margin-top: 0.9rem; display: flex; gap: 1.3rem;
+      background: var(--card); border-radius: 16px; padding: 1.4rem;
+      box-shadow: 0 12px 28px -16px var(--shadow-c);
+    }
+    .ribbon {
+      position: absolute; top: -6px; right: 1.4rem; width: 24px; height: 68px;
+      background: var(--moss); border-radius: 2px 2px 0 0;
+      clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 84%, 0 100%);
+    }
     .rec-body { min-width: 0; display: flex; flex-direction: column; }
-    .eyebrow { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase;
-               color: var(--leaf); margin-bottom: 0.5rem; }
-    .rec-title { font-family: var(--serif); font-size: 1.6rem; line-height: 1.15; margin: 0; }
-    .rec-author { color: var(--muted); font-size: 1rem; margin: 0.35rem 0 0; }
-    .rec-series { color: var(--faint); font-size: 0.86rem; margin: 0.2rem 0 0; }
-    .tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.9rem; }
-    .tag { font-size: 0.7rem; color: var(--muted); border: 1px solid var(--line);
-           border-radius: 999px; padding: 0.12rem 0.55rem; }
+    .eyebrow {
+      font-size: 0.68rem; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+      color: var(--moss); margin-bottom: 0.4rem;
+    }
+    .rec-title { font-family: var(--serif); font-size: 1.7rem; font-weight: 600; line-height: 1.1; margin: 0; }
+    .rec-author { color: var(--muted); font-size: 0.95rem; margin: 0.3rem 0 0; }
+    .rec-series { color: var(--muted); font-size: 0.84rem; margin: 0.2rem 0 0; }
+    .rec-meta { color: var(--muted); font-size: 0.8rem; margin: 0.5rem 0 0; }
+    .tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.85rem; }
+    .tag { font-size: 0.72rem; color: var(--muted); background: var(--tint); border-radius: 999px; padding: 0.16rem 0.6rem; }
 
     /* Cover */
-    .cover { display: block; width: 132px; flex: none; aspect-ratio: 2 / 3; object-fit: cover;
-             border-radius: 5px; background: #0c130e;
-             box-shadow: 0 10px 22px -12px rgba(0,0,0,0.75), inset 0 0 0 1px rgba(255,255,255,0.04); }
-    .cover--blank { display: grid; place-items: center; padding: 0.5rem; text-align: center;
-                    background: linear-gradient(155deg, #1d3226, #12201a);
-                    color: var(--muted); font-family: var(--serif); font-size: 0.82rem; line-height: 1.25; }
+    .cover {
+      display: block; width: 116px; flex: none; aspect-ratio: 2 / 3; object-fit: cover;
+      border-radius: 6px; box-shadow: 0 8px 18px -10px var(--shadow-c);
+    }
+    .cover--blank {
+      display: grid; place-items: center; padding: 0.6rem; text-align: center;
+      background: var(--tint); color: var(--muted);
+      font-family: var(--serif); font-size: 0.84rem; line-height: 1.3;
+    }
 
-    /* Why this */
-    .why { margin-top: 1.6rem; padding: 1.1rem 1.3rem; background: rgba(110,231,160,0.06);
-           border: 1px solid var(--line); border-radius: 12px; }
+    /* Why this pick */
+    .why { margin-top: 1.6rem; }
     .why-group + .why-group { margin-top: 1.15rem; }
-    .why-label { display: block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 0.5rem; }
-    .why-label--for { color: var(--leaf); }
-    .why-label--against { color: var(--faint); }
-    .why-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
-    .why-list li { font-size: 0.92rem; padding-left: 1.35rem; position: relative; }
-    .why-list--for li { color: var(--ink); }
-    .why-list--for li::before { content: "＋"; color: var(--leaf); position: absolute; left: 0.15rem; font-weight: 700; }
+    .why-label {
+      display: block; font-size: 0.68rem; font-weight: 600; letter-spacing: 0.14em;
+      text-transform: uppercase; margin-bottom: 0.6rem;
+    }
+    .why-label--for { color: var(--moss); }
+    .why-label--against { color: var(--muted); }
+    .why-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+    .why-list li { display: flex; gap: 0.65rem; align-items: baseline; font-size: 0.92rem; }
+    .why-list .dot {
+      flex: none; width: 17px; height: 17px; border-radius: 50%; display: grid; place-items: center;
+      font-size: 0.74rem; font-weight: 700; transform: translateY(2px);
+    }
+    .why-list--for .dot { background: var(--moss); color: var(--on-moss); }
     .why-list--against li { color: var(--muted); }
-    .why-list--against li::before { content: "－"; color: var(--faint); position: absolute; left: 0.2rem; font-weight: 700; }
+    .why-list--against .dot { background: var(--tint); color: var(--muted); }
     .why-none { color: var(--muted); font-size: 0.92rem; margin: 0; }
 
     /* Actions */
-    .actions { margin-top: 1.8rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
-    .btn { display: inline-flex; align-items: center; gap: 0.5rem; font: inherit; font-size: 0.9rem;
-           color: var(--bg); background: var(--leaf); border: none; border-radius: 999px;
-           padding: 0.55rem 1.2rem; text-decoration: none; font-weight: 600; cursor: pointer;
-           transition: transform 0.15s ease, background 0.15s ease; }
-    .btn:hover { transform: translateY(-2px); background: #86efac; }
-    .btn:focus-visible { outline: 2px solid var(--leaf); outline-offset: 3px; }
-    .btn--ghost { color: var(--leaf); background: transparent; border: 1px solid var(--line); }
-    .btn--ghost:hover { background: rgba(110,231,160,0.08); }
-    .open-link { color: var(--faint); font-size: 0.82rem; text-decoration: none; }
-    .open-link:hover { color: var(--leaf); }
+    .actions { margin-top: 1.7rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; font: inherit; font-size: 0.9rem; font-weight: 600;
+      color: var(--on-moss); background: var(--moss); border: none; border-radius: 999px;
+      padding: 0.58rem 1.3rem; text-decoration: none; cursor: pointer;
+      transition: transform 0.15s ease, filter 0.15s ease;
+    }
+    .btn:hover { transform: translateY(-1px); filter: brightness(1.07); }
+    .open-link { color: var(--muted); font-size: 0.84rem; text-decoration: underline; text-underline-offset: 3px; }
+    .open-link:hover { color: var(--moss); }
+    :is(.btn, .open-link, .theme-toggle):focus-visible { outline: 2px solid var(--moss); outline-offset: 3px; }
 
     /* Notices */
-    .notice { margin-top: 2.5rem; background: rgba(110,231,160,0.06); border: 1px solid var(--line);
-              padding: 1.1rem 1.3rem; border-radius: 12px; color: var(--muted); }
-    .notice code { color: var(--leaf); background: rgba(110,231,160,0.1); padding: 0.1rem 0.35rem; border-radius: 4px; }
-    .notice--error { background: rgba(240,120,120,0.08); border-color: rgba(240,120,120,0.3); color: #f4c2c2; }
-    .empty { color: var(--faint); font-style: italic; }
+    .notice {
+      margin-top: 1.6rem; background: var(--card); border: 1px solid var(--line);
+      padding: 1.1rem 1.3rem; border-radius: 12px; color: var(--muted);
+      box-shadow: 0 12px 28px -16px var(--shadow-c);
+    }
+    .notice code { color: var(--moss); background: var(--tint); padding: 0.1rem 0.35rem; border-radius: 4px; }
+    .notice--error { border-color: var(--error); background: var(--error-tint); color: var(--error); box-shadow: none; }
 
     @media (max-width: 460px) {
       .rec { flex-direction: column; }
-      .cover { width: 108px; }
+      .cover { width: 104px; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .btn { transition: none; }
+      .btn, .theme-toggle { transition: none; }
+      .btn:hover { transform: none; }
     }
   </style>
 </head>
@@ -113,6 +149,12 @@
         <path d="M12 21C7 20 4 16 3 8c6 2 9 7 9 13Z" fill="currentColor" opacity="0.45"/>
       </svg>
       <h1>Nextleaf</h1>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch between light and dark">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor"/>
+        </svg>
+      </button>
     </header>
 
     {{if not .Configured}}
@@ -124,14 +166,22 @@
       <p class="notice">Your Want-to-Read list is empty — add a few books and come back.</p>
     {{else}}
       {{with .Rec}}
-      <p class="lede">Your next read:</p>
+      <p class="lede">Something different for your next read.</p>
       <article class="rec">
+        <span class="ribbon" aria-hidden="true"></span>
         {{template "cover" .Entry}}
         <div class="rec-body">
           <span class="eyebrow">Recommended</span>
           <h2 class="rec-title">{{.Entry.Book.Title}}</h2>
           {{if .Entry.Book.Authors}}<p class="rec-author">{{template "authors" .Entry.Book.Authors}}</p>{{end}}
           {{with .Entry.Book.Series}}<p class="rec-series">{{.Name}}{{if .Position}} · Book {{.Position}}{{end}}</p>{{end}}
+          {{if or .Entry.Book.ReleaseYear .Entry.Book.PageCount}}
+            <p class="rec-meta">
+              {{- if .Entry.Book.ReleaseYear}}{{.Entry.Book.ReleaseYear}}{{end -}}
+              {{- if and .Entry.Book.ReleaseYear .Entry.Book.PageCount}} · {{end -}}
+              {{- if .Entry.Book.PageCount}}{{.Entry.Book.PageCount}} pages{{end -}}
+            </p>
+          {{end}}
           {{if .Entry.Book.Genres}}<div class="tags">{{range firstN 4 .Entry.Book.Genres}}<span class="tag">{{.}}</span>{{end}}</div>{{end}}
         </div>
       </article>
@@ -140,13 +190,17 @@
         {{if .Pros}}
           <div class="why-group">
             <span class="why-label why-label--for">In favour</span>
-            <ul class="why-list why-list--for">{{range .Pros}}<li>{{ucfirst .}}</li>{{end}}</ul>
+            <ul class="why-list why-list--for">
+              {{range .Pros}}<li><span class="dot" aria-hidden="true">+</span>{{ucfirst .}}</li>{{end}}
+            </ul>
           </div>
         {{end}}
         {{if .Cons}}
           <div class="why-group">
             <span class="why-label why-label--against">Trade-offs</span>
-            <ul class="why-list why-list--against">{{range .Cons}}<li>{{ucfirst .}}</li>{{end}}</ul>
+            <ul class="why-list why-list--against">
+              {{range .Cons}}<li><span class="dot" aria-hidden="true">–</span>{{ucfirst .}}</li>{{end}}
+            </ul>
           </div>
         {{end}}
         {{if and (not .Pros) (not .Cons)}}
@@ -161,6 +215,29 @@
       {{end}}
     {{end}}
   </main>
+
+  <script>
+    (function () {
+      var btn = document.getElementById("theme-toggle");
+      function system() {
+        return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+      function effective() {
+        return document.documentElement.dataset.theme || system();
+      }
+      btn.addEventListener("click", function () {
+        var next = effective() === "dark" ? "light" : "dark";
+        if (next === system()) {
+          // Back to the browser's own preference: follow it instead of pinning it.
+          delete document.documentElement.dataset.theme;
+          localStorage.removeItem("theme");
+        } else {
+          document.documentElement.dataset.theme = next;
+          localStorage.setItem("theme", next);
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
 
