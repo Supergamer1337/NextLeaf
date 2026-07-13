@@ -18,7 +18,8 @@ const cacheTTL = 10 * time.Minute
 
 // FromEnv builds the reading source from the environment: every backend whose
 // credentials are present, each cached and merged into one. It returns nil when
-// nothing is configured, so the caller can surface a setup hint.
+// FromEnv builds a combined source from the configured Hardcover and Grimmory backends.
+// It returns nil when no backend has the required environment configuration.
 func FromEnv() library.Source {
 	var enabled []library.Source
 

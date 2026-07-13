@@ -48,7 +48,7 @@ type Client struct {
 // Option configures a Client.
 type Option func(*Client)
 
-// WithHTTPClient overrides the HTTP client.
+// WithHTTPClient configures the client to use h for HTTP requests.
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
 
 // WithUserAgent overrides the User-Agent header.
@@ -57,7 +57,10 @@ func WithUserAgent(ua string) Option { return func(c *Client) { c.userAgent = ua
 // New returns a Client for the Grimmory instance at baseURL, authenticating
 // with a local account's username and password. Grimmory has no long-lived API
 // keys, so the credentials are kept to re-login whenever the short-lived
-// access token expires; tokens live only in memory.
+// New creates a Grimmory client for the specified instance and credentials.
+// It trims whitespace and trailing slashes from baseURL, applies default HTTP
+// and user-agent settings, and then applies the provided options. Access tokens
+// are kept only in memory.
 func New(baseURL, username, password string, opts ...Option) *Client {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	c := &Client{
@@ -74,6 +77,10 @@ func New(baseURL, username, password string, opts ...Option) *Client {
 	return c
 }
 
+// statusError maps an HTTP status code to the corresponding Grimmory error.
+// It returns nil for a successful response, categorized errors for authentication,
+// authorization, rate-limit, and server failures, and an unexpected-status error
+// for other responses.
 func statusError(code int) error {
 	switch {
 	case code == http.StatusOK:
