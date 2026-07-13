@@ -181,13 +181,12 @@ func (s *server) continueSeries(ctx context.Context, reading, reads, toRead []li
 	}
 
 	if resolver, ok := library.AsSeriesResolver(s.src); ok {
-		book, found, err := resolver.NextInSeries(ctx, series)
+		entry, found, err := resolver.NextInSeries(ctx, series)
 		if err != nil {
 			return picker.Recommendation{}, false, err
 		}
 		if found {
-			// Off-shelf book: no provenance, it is on none of the user's lists.
-			return picker.ContinueSeries(library.Entry{Book: book}, anchor.Rating), true, nil
+			return picker.ContinueSeries(entry, anchor.Rating), true, nil
 		}
 	}
 

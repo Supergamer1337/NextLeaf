@@ -9,11 +9,11 @@ import (
 // resolverSource is a listSource that also resolves series — a capable source.
 type resolverSource struct {
 	listSource
-	next  Book
+	next  Entry
 	found bool
 }
 
-func (s resolverSource) NextInSeries(_ context.Context, _ Series) (Book, bool, error) {
+func (s resolverSource) NextInSeries(_ context.Context, _ Series) (Entry, bool, error) {
 	return s.next, s.found, nil
 }
 
@@ -24,23 +24,23 @@ func TestAsSeriesResolverDetectsCapability(t *testing.T) {
 	}
 
 	// A capable source is detected directly.
-	capable := resolverSource{listSource: listSource{name: "cap"}, next: Book{Title: "Book 2"}, found: true}
+	capable := resolverSource{listSource: listSource{name: "cap"}, next: Entry{Book: Book{Title: "Book 2"}}, found: true}
 	if _, ok := AsSeriesResolver(capable); !ok {
 		t.Error("capable source should resolve series")
 	}
 }
 
 func TestAsSeriesResolverSeesThroughCache(t *testing.T) {
-	capable := resolverSource{listSource: listSource{name: "cap"}, next: Book{Title: "Book 2"}, found: true}
+	capable := resolverSource{listSource: listSource{name: "cap"}, next: Entry{Book: Book{Title: "Book 2"}}, found: true}
 	cached := NewCached(capable, time.Minute)
 
 	r, ok := AsSeriesResolver(cached)
 	if !ok {
 		t.Fatal("AsSeriesResolver should see through Cached to a capable source")
 	}
-	book, found, err := r.NextInSeries(context.Background(), Series{Name: "S", Position: 1})
-	if err != nil || !found || book.Title != "Book 2" {
-		t.Errorf("NextInSeries = (%+v, %v, %v), want Book 2/true/nil", book, found, err)
+	entry, found, err := r.NextInSeries(context.Background(), Series{Name: "S", Position: 1})
+	if err != nil || !found || entry.Book.Title != "Book 2" {
+		t.Errorf("NextInSeries = (%+v, %v, %v), want Book 2/true/nil", entry, found, err)
 	}
 
 	// An incapable source behind the cache stays undetected.
@@ -59,15 +59,15 @@ func TestMultiWithoutCapableSourceReportsUnsupported(t *testing.T) {
 func TestMultiResolvesSeriesFromCapableSource(t *testing.T) {
 	m := Combine(
 		listSource{name: "plain"},
-		resolverSource{listSource: listSource{name: "cap"}, next: Book{Title: "Next"}, found: true},
+		resolverSource{listSource: listSource{name: "cap"}, next: Entry{Book: Book{Title: "Next"}}, found: true},
 	)
 
 	r, ok := AsSeriesResolver(m)
 	if !ok {
 		t.Fatal("Multi should resolve series when one source is capable")
 	}
-	book, found, err := r.NextInSeries(context.Background(), Series{Name: "S"})
-	if err != nil || !found || book.Title != "Next" {
-		t.Errorf("NextInSeries = (%+v, %v, %v), want Next/true/nil", book, found, err)
+	entry, found, err := r.NextInSeries(context.Background(), Series{Name: "S"})
+	if err != nil || !found || entry.Book.Title != "Next" {
+		t.Errorf("NextInSeries = (%+v, %v, %v), want Next/true/nil", entry, found, err)
 	}
 }

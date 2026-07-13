@@ -135,9 +135,7 @@
       transition: transform 0.15s ease, filter 0.15s ease;
     }
     .btn:hover { transform: translateY(-1px); filter: brightness(1.07); }
-    .open-link { color: var(--muted); font-size: 0.84rem; text-decoration: underline; text-underline-offset: 3px; }
-    .open-link:hover { color: var(--moss); }
-    :is(.btn, .open-link, .theme-toggle):focus-visible { outline: 2px solid var(--moss); outline-offset: 3px; }
+    :is(.btn, .theme-toggle):focus-visible { outline: 2px solid var(--moss); outline-offset: 3px; }
 
     /* Notices */
     .notice {
@@ -235,7 +233,6 @@
 
       <div class="actions">
         <a class="btn" href="/?another=1">Pick another</a>
-        {{with .Entry.Book.URL}}<a class="open-link" href="{{.}}" target="_blank" rel="noopener">View details ↗</a>{{end}}
       </div>
       {{end}}
     {{end}}

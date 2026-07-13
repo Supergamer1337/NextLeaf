@@ -38,13 +38,14 @@ func (c *Client) ToRead(ctx context.Context) ([]library.Entry, error) {
 	return c.fetchEntries(ctx, int(library.StatusWantToRead), "date_added: asc", 0)
 }
 
-// NextInSeries returns the book that follows s.Position in the named series,
-// even if it sits on none of the user's shelves. found is false when the series
-// has no later book. It satisfies library.SeriesResolver.
-func (c *Client) NextInSeries(ctx context.Context, s library.Series) (library.Book, bool, error) {
+// NextInSeries returns the entry that follows s.Position in the named series,
+// even if it sits on none of the user's shelves — so it carries hardcover's
+// provenance but stays unavailable. found is false when the series has no
+// later book. It satisfies library.SeriesResolver.
+func (c *Client) NextInSeries(ctx context.Context, s library.Series) (library.Entry, bool, error) {
 	// A missing name or unknown position (0) has no well-defined "next".
 	if s.Name == "" || s.Position == 0 {
-		return library.Book{}, false, nil
+		return library.Entry{}, false, nil
 	}
 
 	query := fmt.Sprintf(`
@@ -65,12 +66,16 @@ query NextInSeries($name: String!, $after: float8!) {
 	}
 	vars := map[string]any{"name": s.Name, "after": s.Position}
 	if err := c.execute(ctx, query, vars, &data); err != nil {
-		return library.Book{}, false, err
+		return library.Entry{}, false, err
 	}
 	if len(data.BookSeries) == 0 {
-		return library.Book{}, false, nil
+		return library.Entry{}, false, nil
 	}
-	return mapBook(data.BookSeries[0].Book), true, nil
+	book := mapBook(data.BookSeries[0].Book)
+	return library.Entry{
+		Book:    book,
+		Sources: []library.SourceRef{{Name: "hardcover", URL: book.URL}},
+	}, true, nil
 }
 
 // userBook mirrors the fields we request from a user_books row.
