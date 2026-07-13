@@ -7,6 +7,12 @@ recently and weights the pick toward genres, authors and formats you've been
 neglecting, so you don't end up reading the same kind of book five times in a
 row. A series you're in the middle of still gets a fair shot.
 
+![NextLeaf recommending a book in light mode](docs/screenshots/light.png)
+*A variety-weighted pick, and why it was chosen.*
+
+![NextLeaf recommending a book in dark mode](docs/screenshots/dark.png)
+*Dark mode, following the system theme. Any trade-offs of a pick are shown too.*
+
 ## Configuration
 
 Everything is configured through environment variables. In development a local
