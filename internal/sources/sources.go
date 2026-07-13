@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"nextleaf/internal/grimmory"
 	"nextleaf/internal/hardcover"
 	"nextleaf/internal/library"
 )
@@ -23,6 +24,13 @@ func FromEnv() library.Source {
 
 	if token := os.Getenv("HARDCOVER_TOKEN"); token != "" {
 		enabled = append(enabled, library.NewCached(hardcover.New(token), cacheTTL))
+	}
+
+	if url := os.Getenv("GRIMMORY_URL"); url != "" {
+		user, pass := os.Getenv("GRIMMORY_USERNAME"), os.Getenv("GRIMMORY_PASSWORD")
+		if user != "" && pass != "" {
+			enabled = append(enabled, library.NewCached(grimmory.New(url, user, pass), cacheTTL))
+		}
 	}
 
 	return library.Combine(enabled...)
