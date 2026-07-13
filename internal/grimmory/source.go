@@ -78,7 +78,8 @@ func (c *Client) entriesWithStatus(ctx context.Context, want library.Status) ([]
 // mapStatus translates Grimmory's readStatus into the neutral Status. An
 // absent status means the user never touched the book, which for a personal
 // library reads as "still to be read". Unknown values map to 0 so new upstream
-// statuses are skipped rather than misfiled.
+// mapStatus converts a Grimmory read-status string to a library status.
+// It returns zero for unrecognized statuses.
 func mapStatus(s string) library.Status {
 	switch s {
 	case "UNREAD", "UNSET", "":
@@ -142,7 +143,7 @@ func (c *Client) resolveCover(thumb string) string {
 
 // cleanAuthors collapses stray whitespace in author names ("David    Allen"),
 // which Grimmory metadata sometimes carries, so the picker's author dimension
-// matches the same author across sources.
+// cleanAuthors normalizes author names by collapsing internal whitespace to single spaces.
 func cleanAuthors(names []string) []string {
 	for i, n := range names {
 		names[i] = strings.Join(strings.Fields(n), " ")
@@ -151,7 +152,7 @@ func cleanAuthors(names []string) []string {
 }
 
 // parseInstant reads an ISO-8601 timestamp, returning the zero time on any
-// mismatch so one malformed date degrades gracefully.
+// parseInstant parses an RFC3339 timestamp with nanosecond precision, returning the zero time for empty or malformed input.
 func parseInstant(s string) time.Time {
 	if s == "" {
 		return time.Time{}
@@ -163,7 +164,7 @@ func parseInstant(s string) time.Time {
 	return t
 }
 
-// parseYear extracts the year from a "2006-01-02" (or bare "2006") date.
+// parseYear extracts the four-digit year from a date string, returning zero when the string is too short or does not start with a valid year.
 func parseYear(s string) int {
 	if len(s) < 4 {
 		return 0
