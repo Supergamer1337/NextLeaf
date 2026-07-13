@@ -50,4 +50,6 @@ type Entry struct {
 	Rating     float64   // user rating, 0 if unrated
 	DateAdded  time.Time // when the book entered the user's library
 	FinishedAt time.Time // last completion date; zero unless read
+	Sources    []string  // names of the backends holding this entry, e.g. ["grimmory"]
+	Available  bool      // a source already holds a readable copy; nothing to acquire
 }

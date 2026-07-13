@@ -226,6 +226,68 @@ func TestResolveCover(t *testing.T) {
 	}
 }
 
+func TestMapBookCoverPrecedence(t *testing.T) {
+	c := New("http://gm.local", "u", "p")
+	cases := []struct {
+		name string
+		meta metadata
+		id   int
+		want string
+	}{
+		{
+			name: "local cover uses the app proxy with a cache-buster",
+			meta: metadata{CoverUpdatedOn: "2025-06-01T10:00:00Z"},
+			id:   7,
+			want: "/cover/grimmory/7?v=1748772000",
+		},
+		{
+			name: "malformed cover timestamp drops the cache-buster",
+			meta: metadata{CoverUpdatedOn: "not-a-date"},
+			id:   7,
+			want: "/cover/grimmory/7",
+		},
+		{
+			name: "external thumbnail wins over the proxy",
+			meta: metadata{ThumbnailURL: "https://cdn.example/x.jpg", CoverUpdatedOn: "2025-06-01T10:00:00Z"},
+			id:   7,
+			want: "https://cdn.example/x.jpg",
+		},
+		{
+			name: "instance-relative thumbnail yields to the proxy",
+			meta: metadata{ThumbnailURL: "/api/v1/media/book/7/thumbnail", CoverUpdatedOn: "2025-06-01T10:00:00Z"},
+			id:   7,
+			want: "/cover/grimmory/7?v=1748772000",
+		},
+		{
+			name: "no cover at all stays empty",
+			meta: metadata{},
+			id:   7,
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := tc.meta
+			b := c.mapBook(book{ID: tc.id, Metadata: &m})
+			if b.CoverURL != tc.want {
+				t.Errorf("CoverURL = %q, want %q", b.CoverURL, tc.want)
+			}
+		})
+	}
+}
+
+func TestMapEntryStampsProvenance(t *testing.T) {
+	c := New("http://gm.local", "u", "p")
+	e := c.mapEntry(book{ID: 7, Title: "Bare Book"})
+
+	if len(e.Sources) != 1 || e.Sources[0] != "grimmory" {
+		t.Errorf("Sources = %v, want [grimmory]", e.Sources)
+	}
+	if !e.Available {
+		t.Error("Available = false, want true: a library book is on the shelf")
+	}
+}
+
 func TestSeriesNamelessDropped(t *testing.T) {
 	c := New("http://gm.local", "u", "p")
 	e := c.mapEntry(book{Metadata: &metadata{Title: "Solo", SeriesNumber: 3}})

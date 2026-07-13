@@ -223,6 +223,88 @@ func TestBooksStatusErrors(t *testing.T) {
 	}
 }
 
+func TestCoverImageAuthedFetch(t *testing.T) {
+	var logins atomic.Int32
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/login":
+			n := logins.Add(1)
+			_, _ = fmt.Fprintf(w, `{"accessToken":"tok%d","refreshToken":"unused","expires":7200}`, n)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/media/book/7/thumbnail":
+			gotAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "image/jpeg")
+			_, _ = io.WriteString(w, "jpeg-bytes")
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL, "user", "pass")
+	body, ct, err := c.CoverImage(context.Background(), "7")
+	if err != nil {
+		t.Fatalf("CoverImage: %v", err)
+	}
+	defer func() { _ = body.Close() }()
+
+	data, _ := io.ReadAll(body)
+	if string(data) != "jpeg-bytes" || ct != "image/jpeg" {
+		t.Errorf("CoverImage = (%q, %q), want (jpeg-bytes, image/jpeg)", data, ct)
+	}
+	if gotAuth != "Bearer tok1" {
+		t.Errorf("Authorization = %q, want Bearer tok1", gotAuth)
+	}
+}
+
+func TestCoverImage401RetryOnce(t *testing.T) {
+	var logins atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/auth/login" {
+			n := logins.Add(1)
+			_, _ = fmt.Fprintf(w, `{"accessToken":"tok%d","refreshToken":"unused","expires":7200}`, n)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer tok2" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = io.WriteString(w, "png")
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL, "user", "pass")
+	body, _, err := c.CoverImage(context.Background(), "7")
+	if err != nil {
+		t.Fatalf("CoverImage: %v", err)
+	}
+	_ = body.Close()
+	if got := logins.Load(); got != 2 {
+		t.Errorf("logins = %d, want 2 (one re-login after 401)", got)
+	}
+}
+
+func TestCoverImageRejectsBadID(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL, "user", "pass")
+	for _, id := range []string{"", "7abc", "../7", "7/cover"} {
+		if _, _, err := c.CoverImage(context.Background(), id); err == nil {
+			t.Errorf("CoverImage(%q): want error for a non-numeric id", id)
+		}
+	}
+	if got := requests.Load(); got != 0 {
+		t.Errorf("server saw %d requests, want 0 (ids rejected before HTTP)", got)
+	}
+}
+
 func TestFetchBooksDecoding(t *testing.T) {
 	// One fully populated book and one minimal book, mirroring Grimmory's
 	// NON_NULL serialization where unset fields are omitted entirely.

@@ -77,6 +77,7 @@ query NextInSeries($name: String!, $after: float8!) {
 type userBook struct {
 	StatusID     int      `json:"status_id"`
 	Rating       *float64 `json:"rating"`
+	Owned        bool     `json:"owned"`
 	DateAdded    string   `json:"date_added"`
 	LastReadDate string   `json:"last_read_date"`
 	Book         bookData `json:"book"`
@@ -141,6 +142,7 @@ query Entries($userID: Int!, $status: Int!%s) {
   ) {
     status_id
     rating
+    owned
     date_added
     last_read_date
     book {%s}
@@ -174,6 +176,8 @@ func mapEntry(ub userBook) library.Entry {
 		Status:     library.Status(ub.StatusID),
 		DateAdded:  parseDate(ub.DateAdded),
 		FinishedAt: parseDate(ub.LastReadDate),
+		Sources:    []string{"hardcover"},
+		Available:  ub.Owned,
 	}
 	if ub.Rating != nil {
 		e.Rating = *ub.Rating

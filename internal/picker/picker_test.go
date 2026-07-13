@@ -94,6 +94,87 @@ func TestPickExposesProsAndCons(t *testing.T) {
 	}
 }
 
+func TestCollapseSeries(t *testing.T) {
+	entries := []library.Entry{
+		{Book: seriesBook("Vol 5", "Saga", 5)},
+		{Book: book("Standalone", nil, nil)},
+		{Book: seriesBook("Vol 3", "Saga", 3)},
+		{Book: seriesBook("Unknown Pos", "Saga", 0)},
+		{Book: seriesBook("Other 1", "other saga", 1)},
+		{Book: seriesBook("Other 2", "OTHER SAGA", 2)},
+	}
+
+	got := collapseSeries(entries)
+
+	// Saga is one candidate (its earliest volume), position-0 and standalones
+	// pass through, and grouping is case-insensitive. Original order is kept.
+	want := []string{"Vol 3", "Standalone", "Unknown Pos", "Other 1"}
+	if len(got) != len(want) {
+		t.Fatalf("titles = %v, want %v", entryTitles(got), want)
+	}
+	for i, w := range want {
+		if got[i].Book.Title != w {
+			t.Fatalf("titles = %v, want %v", entryTitles(got), want)
+		}
+	}
+}
+
+func TestCollapseSeriesNoSeries(t *testing.T) {
+	entries := []library.Entry{
+		{Book: book("A", nil, nil)},
+		{Book: book("B", nil, nil)},
+	}
+	if got := collapseSeries(entries); len(got) != 2 {
+		t.Errorf("collapse of series-free pool changed it: %v", entryTitles(got))
+	}
+}
+
+func TestPickNeverReturnsLaterVolume(t *testing.T) {
+	cands := []library.Entry{
+		{Book: seriesBook("Vol 5", "Saga", 5)},
+		{Book: seriesBook("Vol 3", "Saga", 3)},
+	}
+	for seed := int64(0); seed < 50; seed++ {
+		rec, ok := Pick(rand.New(rand.NewSource(seed)), cands, nil, nil)
+		if !ok || rec.Entry.Book.Title != "Vol 3" {
+			t.Fatalf("seed %d picked %q, want the earliest unread volume", seed, rec.Entry.Book.Title)
+		}
+	}
+}
+
+func TestPickSeriesCompetesAsOneCandidate(t *testing.T) {
+	// A four-volume series must not out-draw an equally scored standalone.
+	cands := []library.Entry{
+		{Book: seriesBook("Vol 1", "Saga", 1)},
+		{Book: seriesBook("Vol 2", "Saga", 2)},
+		{Book: seriesBook("Vol 3", "Saga", 3)},
+		{Book: seriesBook("Vol 4", "Saga", 4)},
+		{Book: book("Standalone", nil, nil)},
+	}
+	rng := rand.New(rand.NewSource(42))
+	seriesWins := 0
+	const draws = 1000
+	for i := 0; i < draws; i++ {
+		rec, _ := Pick(rng, cands, nil, nil)
+		if rec.Entry.Book.Title == "Vol 1" {
+			seriesWins++
+		}
+	}
+	// One ticket each: expect ~500, tolerate sampling noise; 5 tickets vs 1
+	// would give ~800, well outside the band.
+	if seriesWins < 400 || seriesWins > 600 {
+		t.Errorf("series won %d/%d draws, want roughly half (one ticket)", seriesWins, draws)
+	}
+}
+
+func entryTitles(entries []library.Entry) []string {
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = e.Book.Title
+	}
+	return out
+}
+
 func TestActiveSeriesPrefersMostRecentFinish(t *testing.T) {
 	recent := []library.Entry{
 		{Book: seriesBook("Book 2", "Broken Earth", 2), Rating: 5},
@@ -140,7 +221,7 @@ func TestNextOnShelvesAbsent(t *testing.T) {
 }
 
 func TestContinueSeriesReasonWithRating(t *testing.T) {
-	rec := ContinueSeries(seriesBook("The Obelisk Gate", "The Broken Earth", 2), 4.5)
+	rec := ContinueSeries(library.Entry{Book: seriesBook("The Obelisk Gate", "The Broken Earth", 2)}, 4.5)
 	if len(rec.Pros) != 1 {
 		t.Fatalf("want one pro, got %v", rec.Pros)
 	}
@@ -152,8 +233,26 @@ func TestContinueSeriesReasonWithRating(t *testing.T) {
 }
 
 func TestContinueSeriesOmitsRatingWhenUnrated(t *testing.T) {
-	rec := ContinueSeries(seriesBook("The Obelisk Gate", "The Broken Earth", 2), 0)
+	rec := ContinueSeries(library.Entry{Book: seriesBook("The Obelisk Gate", "The Broken Earth", 2)}, 0)
 	if strings.Contains(rec.Pros[0], "★") {
 		t.Errorf("unrated series should not mention a rating: %q", rec.Pros[0])
+	}
+}
+
+func TestContinueSeriesKeepsEntryProvenance(t *testing.T) {
+	e := library.Entry{
+		Book:      seriesBook("The Obelisk Gate", "The Broken Earth", 2),
+		Sources:   []string{"grimmory"},
+		Available: true,
+	}
+	rec := ContinueSeries(e, 0)
+	if len(rec.Entry.Sources) != 1 || rec.Entry.Sources[0] != "grimmory" {
+		t.Errorf("Sources = %v, want [grimmory]", rec.Entry.Sources)
+	}
+	if !rec.Entry.Available {
+		t.Error("Available = false, want the on-shelf entry's flag kept")
+	}
+	if rec.Entry.Status != library.StatusWantToRead {
+		t.Errorf("Status = %v, want StatusWantToRead", rec.Entry.Status)
 	}
 }

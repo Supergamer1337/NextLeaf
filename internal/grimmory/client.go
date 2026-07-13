@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -162,26 +163,27 @@ func (c *Client) loginLocked(ctx context.Context) (string, error) {
 	return c.accessToken, nil
 }
 
-// getJSON performs an authenticated GET and decodes the response into out.
-// A 401 invalidates the token and retries once with a fresh login, since the
-// server may revoke tokens before their advertised expiry.
-func (c *Client) getJSON(ctx context.Context, path string, out any) error {
+// getRaw performs an authenticated GET and returns the open response body with
+// its content type; the caller must close the body. A 401 invalidates the
+// token and retries once with a fresh login, since the server may revoke
+// tokens before their advertised expiry.
+func (c *Client) getRaw(ctx context.Context, path string) (io.ReadCloser, string, error) {
 	for attempt := 0; ; attempt++ {
 		token, err := c.token(ctx)
 		if err != nil {
-			return err
+			return nil, "", err
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseRaw+path, nil)
 		if err != nil {
-			return fmt.Errorf("grimmory: build request: %w", err)
+			return nil, "", fmt.Errorf("grimmory: build request: %w", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("User-Agent", c.userAgent)
 
 		resp, err := c.http.Do(req)
 		if err != nil {
-			return fmt.Errorf("grimmory: request: %w", err)
+			return nil, "", fmt.Errorf("grimmory: request: %w", err)
 		}
 
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
@@ -191,16 +193,38 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 		}
 		if err := statusError(resp.StatusCode); err != nil {
 			_ = resp.Body.Close()
-			return err
+			return nil, "", err
 		}
-
-		err = json.NewDecoder(resp.Body).Decode(out)
-		_ = resp.Body.Close()
-		if err != nil {
-			return fmt.Errorf("grimmory: decode response: %w", err)
-		}
-		return nil
+		return resp.Body, resp.Header.Get("Content-Type"), nil
 	}
+}
+
+// getJSON performs an authenticated GET and decodes the response into out.
+func (c *Client) getJSON(ctx context.Context, path string, out any) error {
+	body, _, err := c.getRaw(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = body.Close() }()
+	if err := json.NewDecoder(body).Decode(out); err != nil {
+		return fmt.Errorf("grimmory: decode response: %w", err)
+	}
+	return nil
+}
+
+// CoverImage streams a book's cover thumbnail from the instance, satisfying
+// library.CoverProvider: Grimmory serves covers behind auth, so the app relays
+// them instead of pointing the browser at the instance directly.
+func (c *Client) CoverImage(ctx context.Context, id string) (io.ReadCloser, string, error) {
+	if id == "" {
+		return nil, "", errors.New("grimmory: empty cover id")
+	}
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return nil, "", fmt.Errorf("grimmory: invalid cover id %q", id)
+		}
+	}
+	return c.getRaw(ctx, "/api/v1/media/book/"+id+"/thumbnail")
 }
 
 // book mirrors the fields we use from Grimmory's book JSON. Unset fields are
@@ -218,17 +242,18 @@ type book struct {
 }
 
 type metadata struct {
-	Title         string   `json:"title"`
-	Subtitle      string   `json:"subtitle"`
-	PublishedDate string   `json:"publishedDate"` // "2006-01-02"
-	SeriesName    string   `json:"seriesName"`
-	SeriesNumber  float64  `json:"seriesNumber"`
-	PageCount     int      `json:"pageCount"`
-	Authors       []string `json:"authors"`
-	Categories    []string `json:"categories"`
-	Moods         []string `json:"moods"`
-	ThumbnailURL  string   `json:"thumbnailUrl"`
-	ExternalURL   string   `json:"externalUrl"`
+	Title          string   `json:"title"`
+	Subtitle       string   `json:"subtitle"`
+	PublishedDate  string   `json:"publishedDate"` // "2006-01-02"
+	SeriesName     string   `json:"seriesName"`
+	SeriesNumber   float64  `json:"seriesNumber"`
+	PageCount      int      `json:"pageCount"`
+	Authors        []string `json:"authors"`
+	Categories     []string `json:"categories"`
+	Moods          []string `json:"moods"`
+	ThumbnailURL   string   `json:"thumbnailUrl"`   // external thumbnails only
+	CoverUpdatedOn string   `json:"coverUpdatedOn"` // set when a cover is stored on the instance
+	ExternalURL    string   `json:"externalUrl"`
 }
 
 // fetchBooks retrieves every book visible to the account, with full metadata
