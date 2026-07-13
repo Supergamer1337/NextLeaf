@@ -242,11 +242,11 @@ func TestContinueSeriesOmitsRatingWhenUnrated(t *testing.T) {
 func TestContinueSeriesKeepsEntryProvenance(t *testing.T) {
 	e := library.Entry{
 		Book:      seriesBook("The Obelisk Gate", "The Broken Earth", 2),
-		Sources:   []string{"grimmory"},
+		Sources:   []library.SourceRef{{Name: "grimmory"}},
 		Available: true,
 	}
 	rec := ContinueSeries(e, 0)
-	if len(rec.Entry.Sources) != 1 || rec.Entry.Sources[0] != "grimmory" {
+	if len(rec.Entry.Sources) != 1 || rec.Entry.Sources[0].Name != "grimmory" {
 		t.Errorf("Sources = %v, want [grimmory]", rec.Entry.Sources)
 	}
 	if !rec.Entry.Available {

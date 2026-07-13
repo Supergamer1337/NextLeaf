@@ -9,19 +9,23 @@ import (
 
 // listSource is a Source backed by fixed slices.
 type listSource struct {
-	name      string
-	reading   []Entry
-	reads     []Entry
-	toRead    []Entry
-	readsErr  error
-	toReadErr error
+	name       string
+	reading    []Entry
+	reads      []Entry
+	toRead     []Entry
+	readsErr   error
+	toReadErr  error
+	readsLimit *int // records the limit RecentReads was called with, when non-nil
 }
 
 func (s listSource) Name() string { return s.name }
 func (s listSource) CurrentlyReading(_ context.Context) ([]Entry, error) {
 	return s.reading, nil
 }
-func (s listSource) RecentReads(_ context.Context, _ int) ([]Entry, error) {
+func (s listSource) RecentReads(_ context.Context, limit int) ([]Entry, error) {
+	if s.readsLimit != nil {
+		*s.readsLimit = limit
+	}
 	return s.reads, s.readsErr
 }
 func (s listSource) ToRead(_ context.Context) ([]Entry, error) {
@@ -151,12 +155,12 @@ func TestMultiToReadDedupsAcrossSources(t *testing.T) {
 		listSource{name: "a", toRead: []Entry{{
 			Book:      Book{Title: "Dune", Authors: []string{"Frank Herbert"}},
 			DateAdded: feb,
-			Sources:   []string{"a"},
+			Sources:   []SourceRef{{Name: "a", URL: "http://a/1"}},
 		}}},
 		listSource{name: "b", toRead: []Entry{{
 			Book:      Book{Title: "Dune", Authors: []string{"Frank Herbert"}, PageCount: 412, CoverURL: "x"},
 			DateAdded: jan,
-			Sources:   []string{"b"},
+			Sources:   []SourceRef{{Name: "b", URL: "http://b/1"}},
 			Available: true,
 		}}},
 	)
@@ -169,8 +173,9 @@ func TestMultiToReadDedupsAcrossSources(t *testing.T) {
 		t.Fatalf("got %v, want one merged entry", titles(got))
 	}
 	e := got[0]
-	if len(e.Sources) != 2 || e.Sources[0] != "a" || e.Sources[1] != "b" {
-		t.Errorf("Sources = %v, want [a b]", e.Sources)
+	want := []SourceRef{{Name: "a", URL: "http://a/1"}, {Name: "b", URL: "http://b/1"}}
+	if len(e.Sources) != 2 || e.Sources[0] != want[0] || e.Sources[1] != want[1] {
+		t.Errorf("Sources = %v, want %v", e.Sources, want)
 	}
 	if !e.DateAdded.Equal(jan) {
 		t.Errorf("DateAdded = %v, want the earliest (%v)", e.DateAdded, jan)
@@ -262,12 +267,12 @@ func TestMultiToReadDedupDoesNotMutateInputs(t *testing.T) {
 	aEntries := []Entry{{
 		Book:      Book{Title: "Dune", Authors: []string{"Frank Herbert"}},
 		DateAdded: now,
-		Sources:   []string{"a"},
+		Sources:   []SourceRef{{Name: "a"}},
 	}}
 	bEntries := []Entry{{
 		Book:      Book{Title: "Dune", Authors: []string{"Frank Herbert"}, PageCount: 412},
 		DateAdded: now,
-		Sources:   []string{"b"},
+		Sources:   []SourceRef{{Name: "b"}},
 		Available: true,
 	}}
 
@@ -280,12 +285,132 @@ func TestMultiToReadDedupDoesNotMutateInputs(t *testing.T) {
 	}
 
 	// Sources hand back retained slices; the merge must not write into them.
-	if len(aEntries[0].Sources) != 1 || aEntries[0].Sources[0] != "a" ||
+	if len(aEntries[0].Sources) != 1 || aEntries[0].Sources[0].Name != "a" ||
 		aEntries[0].Available || aEntries[0].Book.PageCount != 0 {
 		t.Errorf("source a's entry was mutated: %+v", aEntries[0])
 	}
-	if len(bEntries[0].Sources) != 1 || bEntries[0].Sources[0] != "b" {
+	if len(bEntries[0].Sources) != 1 || bEntries[0].Sources[0].Name != "b" {
 		t.Errorf("source b's entry was mutated: %+v", bEntries[0])
+	}
+}
+
+func TestMergeEntryFillsDescription(t *testing.T) {
+	base := Entry{Book: Book{Title: "Dune"}}
+	dup := Entry{Book: Book{Title: "Dune", Description: "Spice and sand."}}
+	if got := mergeEntry(base, dup).Book.Description; got != "Spice and sand." {
+		t.Errorf("Description = %q, want filled from the duplicate", got)
+	}
+
+	base.Book.Description = "Original."
+	if got := mergeEntry(base, dup).Book.Description; got != "Original." {
+		t.Errorf("Description = %q, want the base kept when non-empty", got)
+	}
+}
+
+func TestMergeEntryUnionsSourcesByName(t *testing.T) {
+	base := Entry{Sources: []SourceRef{{Name: "a", URL: "http://a/1"}}}
+	dup := Entry{Sources: []SourceRef{{Name: "a", URL: "http://other"}, {Name: "b"}}}
+
+	got := mergeEntry(base, dup).Sources
+	want := []SourceRef{{Name: "a", URL: "http://a/1"}, {Name: "b"}}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("Sources = %v, want %v (first occurrence of a name wins)", got, want)
+	}
+}
+
+func TestMultiToReadSuppressesBooksReadElsewhere(t *testing.T) {
+	now := time.Now()
+	m := Combine(
+		listSource{name: "a", toRead: []Entry{{
+			Book: Book{Title: "Dune", Authors: []string{"Frank Herbert"}}, DateAdded: now,
+		}}},
+		listSource{name: "b", reads: []Entry{{
+			Book: Book{Title: "  DUNE ", Authors: []string{"frank herbert"}}, FinishedAt: now,
+		}}},
+	)
+
+	got, err := m.ToRead(context.Background())
+	if err != nil {
+		t.Fatalf("ToRead: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %v, want a book read elsewhere suppressed from the pool", titles(got))
+	}
+}
+
+func TestMultiToReadSuppressesCurrentlyReading(t *testing.T) {
+	now := time.Now()
+	m := Combine(
+		listSource{name: "a", toRead: []Entry{{
+			Book: Book{Title: "Dune", Authors: []string{"Frank Herbert"}}, DateAdded: now,
+		}}},
+		listSource{name: "b", reading: []Entry{{
+			Book: Book{Title: "Dune", Authors: []string{"Frank Herbert"}},
+		}}},
+	)
+
+	got, err := m.ToRead(context.Background())
+	if err != nil {
+		t.Fatalf("ToRead: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %v, want an in-progress book suppressed from the pool", titles(got))
+	}
+}
+
+func TestMultiToReadKeepsEntriesWithEmptyDedupKey(t *testing.T) {
+	now := time.Now()
+	m := Combine(
+		listSource{name: "a", toRead: []Entry{{Book: Book{}, DateAdded: now}}},
+		listSource{name: "b", reads: []Entry{{Book: Book{}, FinishedAt: now}}},
+	)
+
+	got, err := m.ToRead(context.Background())
+	if err != nil {
+		t.Fatalf("ToRead: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("got %d entries, want a title-less entry never suppressed", len(got))
+	}
+}
+
+func TestMultiRecentReadsRequestsUncappedFromSources(t *testing.T) {
+	jan := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	feb := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+	mar := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	limit := -1
+	m := Combine(
+		listSource{name: "a", reads: []Entry{entry("jan", jan), entry("feb", feb), entry("mar", mar)}, readsLimit: &limit},
+		listSource{name: "b"},
+	)
+
+	got, err := m.RecentReads(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("RecentReads: %v", err)
+	}
+	// Sources must always see one limit (0) so their per-limit cache never
+	// thrashes; the caller's cap is applied after the merge.
+	if limit != 0 {
+		t.Errorf("source saw limit %d, want 0", limit)
+	}
+	if len(got) != 2 || got[0].Book.Title != "mar" {
+		t.Errorf("got %v, want [mar feb] (caller's cap still applied)", titles(got))
+	}
+}
+
+func TestMultiToReadFetchesReadsUncapped(t *testing.T) {
+	limit := -1
+	m := Combine(
+		listSource{name: "a", toRead: []Entry{entry("tbr", time.Now())}, readsLimit: &limit},
+		listSource{name: "b"},
+	)
+
+	if _, err := m.ToRead(context.Background()); err != nil {
+		t.Fatalf("ToRead: %v", err)
+	}
+	if limit != 0 {
+		t.Errorf("reconciliation fetched reads with limit %d, want 0 (full history)", limit)
 	}
 }
 

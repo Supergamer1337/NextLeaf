@@ -83,7 +83,7 @@ func TestLoginAndRequestShape(t *testing.T) {
 	if gotUA != "nextleaf-test" {
 		t.Errorf("User-Agent = %q, want nextleaf-test", gotUA)
 	}
-	want := "withDescription=false&stripForListView=false"
+	want := "withDescription=true&stripForListView=false"
 	if gotQuery != want {
 		t.Errorf("query = %q, want %q", gotQuery, want)
 	}

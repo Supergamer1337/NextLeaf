@@ -49,11 +49,14 @@ func (m *Multi) CurrentlyReading(ctx context.Context) ([]Entry, error) {
 	return all, nil
 }
 
-// RecentReads merges every source's recent reads, newest first, capped at limit.
+// RecentReads merges every source's recent reads, newest first, capped at
+// limit. Sources are always asked for their full history (limit 0) so their
+// per-limit caches see one shape — the cap is applied after the merge, and
+// ToRead's reconciliation reuses the same uncapped fetch.
 func (m *Multi) RecentReads(ctx context.Context, limit int) ([]Entry, error) {
 	var all []Entry
 	for _, s := range m.sources {
-		entries, err := s.RecentReads(ctx, limit)
+		entries, err := s.RecentReads(ctx, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +73,10 @@ func (m *Multi) RecentReads(ctx context.Context, limit int) ([]Entry, error) {
 
 // ToRead merges every source's TBR list, oldest additions first. The same book
 // held by several sources becomes one entry so it doesn't get extra chances in
-// the pick; reads and in-progress lists are history and stay per-source.
+// the pick, and a book any source reports as read or in progress is dropped —
+// a copy left on another source's TBR is stale, not a fresh candidate. (A
+// single source needs none of this and bypasses Multi via Combine.) Reads and
+// in-progress lists themselves are history and stay per-source.
 func (m *Multi) ToRead(ctx context.Context) ([]Entry, error) {
 	var all []Entry
 	for _, s := range m.sources {
@@ -81,10 +87,51 @@ func (m *Multi) ToRead(ctx context.Context) ([]Entry, error) {
 		all = append(all, entries...)
 	}
 	all = dedup(all)
-	sort.SliceStable(all, func(i, j int) bool {
-		return all[i].DateAdded.Before(all[j].DateAdded)
+
+	exclude, err := m.readKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	kept := all[:0] // dedup returns a fresh slice, so filtering in place is safe
+	for _, e := range all {
+		if key := dedupKey(e); key == "" || !exclude[key] {
+			kept = append(kept, e)
+		}
+	}
+
+	sort.SliceStable(kept, func(i, j int) bool {
+		return kept[i].DateAdded.Before(kept[j].DateAdded)
 	})
-	return all, nil
+	return kept, nil
+}
+
+// readKeys identifies every book some source knows the user has read or is
+// reading, for exclusion from the TBR pool. Title-less entries yield no key.
+func (m *Multi) readKeys(ctx context.Context) (map[string]bool, error) {
+	keys := make(map[string]bool)
+	for _, s := range m.sources {
+		reads, err := s.RecentReads(ctx, 0)
+		if err != nil {
+			return nil, err
+		}
+		reading, err := s.CurrentlyReading(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// Two loops, not an append: the slices are the source's retained
+		// copies and must not be grown in place.
+		for _, e := range reads {
+			if key := dedupKey(e); key != "" {
+				keys[key] = true
+			}
+		}
+		for _, e := range reading {
+			if key := dedupKey(e); key != "" {
+				keys[key] = true
+			}
+		}
+	}
+	return keys, nil
 }
 
 // dedup folds entries describing the same book (matched on normalized title
@@ -130,10 +177,13 @@ func normalize(s string) string {
 // the earliest addition date wins, and fields one source couldn't supply are
 // filled from the other. Slices are reallocated, never extended in place.
 func mergeEntry(base, dup Entry) Entry {
-	sources := make([]string, 0, len(base.Sources)+len(dup.Sources))
+	sources := make([]SourceRef, 0, len(base.Sources)+len(dup.Sources))
 	sources = append(sources, base.Sources...)
 	for _, s := range dup.Sources {
-		if !slices.Contains(sources, s) {
+		known := slices.ContainsFunc(sources, func(have SourceRef) bool {
+			return have.Name == s.Name
+		})
+		if !known {
 			sources = append(sources, s)
 		}
 	}
@@ -153,6 +203,9 @@ func mergeEntry(base, dup Entry) Entry {
 	b, d := &base.Book, dup.Book
 	if b.Subtitle == "" {
 		b.Subtitle = d.Subtitle
+	}
+	if b.Description == "" {
+		b.Description = d.Description
 	}
 	if b.Authors == nil {
 		b.Authors = d.Authors

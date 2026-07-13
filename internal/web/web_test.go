@@ -266,7 +266,7 @@ func TestSelectorShowsShelfBadgeAndSources(t *testing.T) {
 	src := stubSource{
 		toRead: []library.Entry{{
 			Book:      library.Book{Title: "Shelf Book"},
-			Sources:   []string{"grimmory"},
+			Sources:   []library.SourceRef{{Name: "grimmory"}},
 			Available: true,
 		}},
 	}
@@ -284,7 +284,7 @@ func TestSelectorShowsSourcesWithoutBadge(t *testing.T) {
 	src := stubSource{
 		toRead: []library.Entry{{
 			Book:    library.Book{Title: "Wishlist Book"},
-			Sources: []string{"hardcover"},
+			Sources: []library.SourceRef{{Name: "hardcover"}},
 		}},
 	}
 	body := get(t, src, "/?another=1").Body.String()
@@ -301,7 +301,7 @@ func TestSelectorJoinsMergedSources(t *testing.T) {
 	src := stubSource{
 		toRead: []library.Entry{{
 			Book:      library.Book{Title: "Both Places"},
-			Sources:   []string{"grimmory", "hardcover"},
+			Sources:   []library.SourceRef{{Name: "grimmory"}, {Name: "hardcover"}},
 			Available: true,
 		}},
 	}
@@ -311,6 +311,61 @@ func TestSelectorJoinsMergedSources(t *testing.T) {
 		t.Errorf("merged sources should be joined:\n%s", body)
 	}
 }
+
+func TestSelectorShowsDescription(t *testing.T) {
+	src := stubSource{
+		toRead: []library.Entry{{Book: library.Book{Title: "Pick", Description: "A world ends in ash."}}},
+	}
+	body := get(t, src, "/?another=1").Body.String()
+	if !strings.Contains(body, "A world ends in ash.") || !strings.Contains(body, `class="rec-desc"`) {
+		t.Errorf("description should render below the card:\n%s", body)
+	}
+}
+
+func TestSelectorOmitsEmptyDescription(t *testing.T) {
+	src := stubSource{
+		toRead: []library.Entry{{Book: library.Book{Title: "Pick"}}},
+	}
+	body := get(t, src, "/?another=1").Body.String()
+	if strings.Contains(body, `class="rec-desc"`) {
+		t.Errorf("no description element should render when there is none:\n%s", body)
+	}
+}
+
+func TestSelectorSourceChipLinksToSource(t *testing.T) {
+	src := stubSource{
+		toRead: []library.Entry{{
+			Book:    library.Book{Title: "Linked Book"},
+			Sources: []library.SourceRef{{Name: "grimmory", URL: "http://gm.local/book/7"}},
+		}},
+	}
+	body := get(t, src, "/?another=1").Body.String()
+
+	if !strings.Contains(body, `href="http://gm.local/book/7"`) {
+		t.Errorf("chip should link to the source's book page:\n%s", body)
+	}
+	if !strings.Contains(body, `class="rec-source" href="http://gm.local/book/7" target="_blank" rel="noopener">Grimmory</a>`) {
+		t.Errorf("chip link should open safely in a new tab:\n%s", body)
+	}
+}
+
+func TestSelectorSourceWithoutURLIsPlainText(t *testing.T) {
+	src := stubSource{
+		toRead: []library.Entry{{
+			Book:    library.Book{Title: "Unlinked Book"},
+			Sources: []library.SourceRef{{Name: "hardcover"}},
+		}},
+	}
+	body := get(t, src, "/?another=1").Body.String()
+
+	if !strings.Contains(body, "Hardcover") {
+		t.Errorf("source name should still render:\n%s", body)
+	}
+	if strings.Contains(body, `<a class="rec-source"`) {
+		t.Errorf("a URL-less source must not render as a link:\n%s", body)
+	}
+}
+
 func TestSelectorResolverPickHasNoProvenance(t *testing.T) {
 	// The off-shelf resolver book is on none of the user's lists.
 	src := resolverStub{
@@ -329,7 +384,7 @@ func TestSelectorResolverPickHasNoProvenance(t *testing.T) {
 
 func TestSelectorContinuationKeepsProvenance(t *testing.T) {
 	next := seriesEntry("Book Two", "Saga", 2)
-	next.Sources = []string{"grimmory"}
+	next.Sources = []library.SourceRef{{Name: "grimmory"}}
 	next.Available = true
 	src := stubSource{
 		reads:  []library.Entry{seriesEntry("Book One", "Saga", 1)},

@@ -7,7 +7,9 @@ The twist is that it optimises for variety rather than similarity: it looks at
 what you've read recently and weights the pick toward genres, authors and
 formats you've been neglecting, so you don't end up reading the same kind of
 book five times in a row. A series you're in the middle of still gets a fair
-shot. Configured sources are merged, so one pick draws on all of them.
+shot. Configured sources are merged, so one pick draws on all of them — and a
+book you've read or are reading in any source is dropped from the pool, even
+if another source still lists it as to-read.
 
 ![NextLeaf recommending a book in light mode](docs/screenshots/light.png)
 *A variety-weighted pick, and why it was chosen.*
