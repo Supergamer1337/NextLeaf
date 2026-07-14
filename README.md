@@ -1,11 +1,13 @@
 # NextLeaf
 
 A small self-hosted service that picks your next read from your
-[Hardcover](https://hardcover.app) *Want to Read* list. The twist is that it
-optimises for variety rather than similarity: it looks at what you've read
-recently and weights the pick toward genres, authors and formats you've been
-neglecting, so you don't end up reading the same kind of book five times in a
-row. A series you're in the middle of still gets a fair shot.
+[Hardcover](https://hardcover.app) *Want to Read* list and/or the unread
+books in your [Grimmory](https://github.com/grimmory-tools/grimmory) library.
+The twist is that it optimises for variety rather than similarity: it looks at
+what you've read recently and weights the pick toward genres, authors and
+formats you've been neglecting, so you don't end up reading the same kind of
+book five times in a row. A series you're in the middle of still gets a fair
+shot. Configured sources are merged, so one pick draws on all of them.
 
 ![NextLeaf recommending a book in light mode](docs/screenshots/light.png)
 *A variety-weighted pick, and why it was chosen.*
@@ -18,13 +20,21 @@ row. A series you're in the middle of still gets a fair shot.
 Everything is configured through environment variables. In development a local
 `.env` file is loaded automatically.
 
-| Variable          | Default      | Description                        |
-| ----------------- | ------------ | ---------------------------------- |
-| `HARDCOVER_TOKEN` | *(required)* | Hardcover API token.               |
-| `ADDR`            | `:8080`      | Address the server listens on.     |
+| Variable            | Default      | Description                                     |
+| ------------------- | ------------ | ----------------------------------------------- |
+| `HARDCOVER_TOKEN`   | *(optional)* | Hardcover API token.                            |
+| `GRIMMORY_URL`      | *(optional)* | Base URL of a Grimmory instance.                |
+| `GRIMMORY_USERNAME` | *(optional)* | Grimmory account username.                      |
+| `GRIMMORY_PASSWORD` | *(optional)* | Grimmory account password (local login).        |
+| `ADDR`              | `:8080`      | Address the server listens on.                  |
 
-Without a token the app still starts; the home page shows a setup hint instead
-of a recommendation.
+At least one source is needed for recommendations; without any the app still
+starts and the home page shows a setup hint instead. Grimmory needs all three
+of its variables. Books you haven't touched in Grimmory count as unread, your
+reading and read statuses feed the variety profile, and read status is
+per-user — so use your own account. If you normally sign in through OIDC, set
+a local password on that same account for NextLeaf to use (Grimmory has no
+long-lived API keys; NextLeaf logs in and refreshes its session by itself).
 
 ## Deployment
 
@@ -41,6 +51,10 @@ services:
       - "8080:8080"
     environment:
       HARDCOVER_TOKEN: your-token
+      # Or (also works alongside Hardcover):
+      # GRIMMORY_URL: https://grimmory.example.com
+      # GRIMMORY_USERNAME: your-user
+      # GRIMMORY_PASSWORD: your-password
 ```
 
 ```sh
