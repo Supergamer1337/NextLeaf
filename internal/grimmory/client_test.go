@@ -127,6 +127,47 @@ func TestLoginFailure(t *testing.T) {
 	})
 }
 
+func TestVerify(t *testing.T) {
+	t.Run("logs in with valid credentials", func(t *testing.T) {
+		f := &fake{books: acceptLatest(`[]`)}
+		srv := f.server(t)
+
+		c := New(srv.URL, "user", "pass")
+		if err := c.Verify(context.Background()); err != nil {
+			t.Errorf("Verify() = %v, want nil for valid credentials", err)
+		}
+		if got := f.logins.Load(); got != 1 {
+			t.Errorf("logins = %d, want 1 (Verify should log in once)", got)
+		}
+	})
+
+	t.Run("reports bad credentials", func(t *testing.T) {
+		f := &fake{books: acceptLatest(`[]`)}
+		srv := f.server(t)
+
+		c := New(srv.URL, "user", "wrong")
+		if err := c.Verify(context.Background()); !errors.Is(err, ErrUnauthorized) {
+			t.Errorf("Verify() = %v, want ErrUnauthorized", err)
+		}
+	})
+
+	t.Run("token is reused by later fetches", func(t *testing.T) {
+		f := &fake{books: acceptLatest(`[]`)}
+		srv := f.server(t)
+
+		c := New(srv.URL, "user", "pass")
+		if err := c.Verify(context.Background()); err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if _, err := c.fetchBooks(context.Background()); err != nil {
+			t.Fatalf("fetchBooks: %v", err)
+		}
+		if got := f.logins.Load(); got != 1 {
+			t.Errorf("logins = %d, want 1 (fetch should reuse Verify's token)", got)
+		}
+	})
+}
+
 func TestTokenReuse(t *testing.T) {
 	f := &fake{books: acceptLatest(`[]`)}
 	srv := f.server(t)

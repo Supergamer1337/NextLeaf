@@ -11,15 +11,24 @@ import (
 )
 
 // Client is a reading Source that also serves cover images (they sit behind
-// the instance's auth). It is not a SeriesResolver: Grimmory has no
-// next-in-series lookup beyond the user's own shelves.
+// the instance's auth) and can verify its credentials. It is not a
+// SeriesResolver: Grimmory has no next-in-series lookup beyond the user's own
+// shelves.
 var (
 	_ library.Source        = (*Client)(nil)
 	_ library.CoverProvider = (*Client)(nil)
+	_ library.Verifier      = (*Client)(nil)
 )
 
 // Name identifies this Source.
 func (c *Client) Name() string { return "grimmory" }
+
+// Verify checks the username/password are accepted by logging in. The issued
+// token is held, so the first real fetch reuses it rather than logging in again.
+func (c *Client) Verify(ctx context.Context) error {
+	_, err := c.token(ctx)
+	return err
+}
 
 // CurrentlyReading returns the books being read (or re-read) right now.
 func (c *Client) CurrentlyReading(ctx context.Context) ([]library.Entry, error) {

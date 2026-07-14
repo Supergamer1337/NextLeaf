@@ -85,3 +85,29 @@ func TestExecuteGraphQLError(t *testing.T) {
 		t.Fatal("want error, got nil")
 	}
 }
+
+func TestVerify(t *testing.T) {
+	t.Run("accepts a valid token", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, `{"data":{"me":[{"id":42}]}}`)
+		}))
+		defer srv.Close()
+
+		c := New("tok", WithEndpoint(srv.URL))
+		if err := c.Verify(context.Background()); err != nil {
+			t.Errorf("Verify() = %v, want nil for a valid token", err)
+		}
+	})
+
+	t.Run("rejects a bad token", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer srv.Close()
+
+		c := New("bad", WithEndpoint(srv.URL))
+		if err := c.Verify(context.Background()); !errors.Is(err, ErrUnauthorized) {
+			t.Errorf("Verify() = %v, want ErrUnauthorized", err)
+		}
+	})
+}

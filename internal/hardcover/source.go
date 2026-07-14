@@ -11,14 +11,23 @@ import (
 	"nextleaf/internal/library"
 )
 
-// Client is both a reading Source and a SeriesResolver.
+// Client is a reading Source, a SeriesResolver, and a Verifier.
 var (
 	_ library.Source         = (*Client)(nil)
 	_ library.SeriesResolver = (*Client)(nil)
+	_ library.Verifier       = (*Client)(nil)
 )
 
 // Name identifies this Source.
 func (c *Client) Name() string { return "hardcover" }
+
+// Verify checks the token is accepted by resolving the current user, the
+// cheapest authenticated query. The looked-up id is cached, so the first real
+// fetch reuses it rather than paying for a second round-trip.
+func (c *Client) Verify(ctx context.Context) error {
+	_, err := c.currentUserID(ctx)
+	return err
+}
 
 // CurrentlyReading returns the in-progress books, most recently updated first.
 func (c *Client) CurrentlyReading(ctx context.Context) ([]library.Entry, error) {
