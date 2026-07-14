@@ -35,11 +35,11 @@ func (s stubSource) ToRead(_ context.Context) ([]library.Entry, error) {
 // resolverStub adds the optional SeriesResolver capability to stubSource.
 type resolverStub struct {
 	stubSource
-	next  library.Book
+	next  library.Entry
 	found bool
 }
 
-func (s resolverStub) NextInSeries(_ context.Context, _ library.Series) (library.Book, bool, error) {
+func (s resolverStub) NextInSeries(_ context.Context, _ library.Series) (library.Entry, bool, error) {
 	return s.next, s.found, nil
 }
 
@@ -190,7 +190,7 @@ func TestSelectorResolvesSeriesOffShelf(t *testing.T) {
 	// The next series book is on no shelf; the resolver supplies it.
 	src := resolverStub{
 		stubSource: stubSource{reads: []library.Entry{seriesEntry("The Fifth Season", "The Broken Earth", 1)}},
-		next:       library.Book{Title: "The Obelisk Gate", Series: &library.Series{Name: "The Broken Earth", Position: 2}},
+		next:       library.Entry{Book: library.Book{Title: "The Obelisk Gate", Series: &library.Series{Name: "The Broken Earth", Position: 2}}},
 		found:      true,
 	}
 	body := get(t, src, "/").Body.String()
@@ -332,6 +332,20 @@ func TestSelectorOmitsEmptyDescription(t *testing.T) {
 	}
 }
 
+func TestSelectorHasNoViewDetailsLink(t *testing.T) {
+	// Source chips are the canonical links now; the redundant button is gone.
+	src := stubSource{
+		toRead: []library.Entry{{
+			Book:    library.Book{Title: "Chipped", URL: "http://gm.local/book/7"},
+			Sources: []library.SourceRef{{Name: "grimmory", URL: "http://gm.local/book/7"}},
+		}},
+	}
+	body := get(t, src, "/?another=1").Body.String()
+	if strings.Contains(body, "View details") {
+		t.Errorf("View details should no longer render:\n%s", body)
+	}
+}
+
 func TestSelectorSourceChipLinksToSource(t *testing.T) {
 	src := stubSource{
 		toRead: []library.Entry{{
@@ -366,19 +380,26 @@ func TestSelectorSourceWithoutURLIsPlainText(t *testing.T) {
 	}
 }
 
-func TestSelectorResolverPickHasNoProvenance(t *testing.T) {
-	// The off-shelf resolver book is on none of the user's lists.
+func TestSelectorResolverPickShowsSourceWithoutBadge(t *testing.T) {
+	// The off-shelf resolver book is on none of the user's lists, but the
+	// resolving source still gets credited — and linked.
 	src := resolverStub{
 		stubSource: stubSource{
 			reads: []library.Entry{seriesEntry("Book One", "Saga", 1)},
 		},
-		next:  library.Book{Title: "Off-Shelf Two", Series: &library.Series{Name: "Saga", Position: 2}},
+		next: library.Entry{
+			Book:    library.Book{Title: "Off-Shelf Two", Series: &library.Series{Name: "Saga", Position: 2}},
+			Sources: []library.SourceRef{{Name: "hardcover", URL: "https://hardcover.app/books/two"}},
+		},
 		found: true,
 	}
 	body := get(t, src, "/").Body.String()
 
-	if strings.Contains(body, "On your shelf") || strings.Contains(body, `class="rec-origin"`) {
-		t.Errorf("an off-shelf book must not show provenance:\n%s", body)
+	if !strings.Contains(body, `href="https://hardcover.app/books/two"`) || !strings.Contains(body, "Hardcover") {
+		t.Errorf("the resolving source should show as a linked chip:\n%s", body)
+	}
+	if strings.Contains(body, "On your shelf") {
+		t.Errorf("an off-shelf book must not claim to be on the shelf:\n%s", body)
 	}
 }
 

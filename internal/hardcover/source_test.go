@@ -300,13 +300,14 @@ func TestNextInSeriesReturnsNextBook(t *testing.T) {
 	defer srv.Close()
 
 	c := New("tok", WithEndpoint(srv.URL))
-	book, found, err := c.NextInSeries(context.Background(), library.Series{Name: "The Broken Earth", Position: 1})
+	entry, found, err := c.NextInSeries(context.Background(), library.Series{Name: "The Broken Earth", Position: 1})
 	if err != nil {
 		t.Fatalf("NextInSeries: %v", err)
 	}
 	if !found {
 		t.Fatal("found = false, want true")
 	}
+	book := entry.Book
 	if book.Title != "The Obelisk Gate" {
 		t.Errorf("Title = %q, want The Obelisk Gate", book.Title)
 	}
@@ -316,6 +317,14 @@ func TestNextInSeriesReturnsNextBook(t *testing.T) {
 	if book.Series == nil || book.Series.Position != 2 {
 		t.Errorf("Series = %+v, want position 2", book.Series)
 	}
+	wantRef := library.SourceRef{Name: "hardcover", URL: "https://hardcover.app/books/the-obelisk-gate"}
+	if len(entry.Sources) != 1 || entry.Sources[0] != wantRef {
+		t.Errorf("Sources = %v, want [%v] (the resolver knows where it looked)", entry.Sources, wantRef)
+	}
+	if entry.Available {
+		t.Error("Available = true, want false: an off-shelf book is not owned")
+	}
+
 	// It must query the next position (>) of the named series, not by user.
 	if !strings.Contains(gotQuery, "position: {_gt: $after}") {
 		t.Errorf("query should fetch the next position:\n%s", gotQuery)
