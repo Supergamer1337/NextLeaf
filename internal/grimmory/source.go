@@ -102,13 +102,20 @@ func mapStatus(s string) library.Status {
 }
 
 func (c *Client) mapEntry(b book) library.Entry {
+	page := c.baseRaw + "/book/" + strconv.Itoa(b.ID)
+	bk := c.mapBook(b)
+	// An externalUrl is the user's chosen canonical page and wins; the
+	// instance's own book page is the fallback (and the per-source link).
+	if bk.URL == "" {
+		bk.URL = page
+	}
 	e := library.Entry{
-		Book:       c.mapBook(b),
+		Book:       bk,
 		Status:     mapStatus(b.ReadStatus),
 		Rating:     b.PersonalRating / 2, // Grimmory rates 0-10, the neutral model 0-5
 		DateAdded:  parseInstant(b.AddedOn),
 		FinishedAt: parseInstant(b.DateFinished),
-		Sources:    []string{c.Name()},
+		Sources:    []library.SourceRef{{Name: c.Name(), URL: page}},
 		Available:  true, // a Grimmory library holds the files themselves
 	}
 	return e
@@ -124,6 +131,7 @@ func (c *Client) mapBook(b book) library.Book {
 		out.Title = m.Title
 	}
 	out.Subtitle = m.Subtitle
+	out.Description = m.Description
 	out.Authors = cleanAuthors(m.Authors)
 	out.Genres = m.Categories
 	out.Moods = m.Moods

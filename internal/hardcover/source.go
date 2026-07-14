@@ -88,6 +88,7 @@ type userBook struct {
 type bookData struct {
 	Title       string          `json:"title"`
 	Subtitle    string          `json:"subtitle"`
+	Description string          `json:"description"`
 	Slug        string          `json:"slug"`
 	ReleaseYear int             `json:"release_year"`
 	Pages       int             `json:"pages"`
@@ -113,6 +114,7 @@ type bookData struct {
 const bookFields = `
       title
       subtitle
+      description
       slug
       release_year
       pages
@@ -171,12 +173,13 @@ func limitVar(limit int) string {
 }
 
 func mapEntry(ub userBook) library.Entry {
+	book := mapBook(ub.Book)
 	e := library.Entry{
-		Book:       mapBook(ub.Book),
+		Book:       book,
 		Status:     library.Status(ub.StatusID),
 		DateAdded:  parseDate(ub.DateAdded),
 		FinishedAt: parseDate(ub.LastReadDate),
-		Sources:    []string{"hardcover"},
+		Sources:    []library.SourceRef{{Name: "hardcover", URL: book.URL}},
 		Available:  ub.Owned,
 	}
 	if ub.Rating != nil {
@@ -190,6 +193,7 @@ func mapBook(b bookData) library.Book {
 	book := library.Book{
 		Title:       b.Title,
 		Subtitle:    b.Subtitle,
+		Description: b.Description,
 		ReleaseYear: b.ReleaseYear,
 		PageCount:   b.Pages,
 		Authors:     authors(b),

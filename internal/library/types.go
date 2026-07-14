@@ -31,6 +31,7 @@ type Series struct {
 type Book struct {
 	Title       string
 	Subtitle    string
+	Description string
 	Authors     []string
 	Genres      []string
 	Moods       []string // tone tags, e.g. "dark", "hopeful"; nil if unknown
@@ -42,14 +43,21 @@ type Book struct {
 	URL         string
 }
 
+// SourceRef names a backend holding an entry and links to the book's page
+// there. URL is empty when the source has no page for it.
+type SourceRef struct {
+	Name string
+	URL  string
+}
+
 // Entry is a book together with the user's relationship to it: where it sits in
 // their reading life and the dates that matter for recommendation.
 type Entry struct {
 	Book       Book
 	Status     Status
-	Rating     float64   // user rating, 0 if unrated
-	DateAdded  time.Time // when the book entered the user's library
-	FinishedAt time.Time // last completion date; zero unless read
-	Sources    []string  // names of the backends holding this entry, e.g. ["grimmory"]
-	Available  bool      // a source already holds a readable copy; nothing to acquire
+	Rating     float64     // user rating, 0 if unrated
+	DateAdded  time.Time   // when the book entered the user's library
+	FinishedAt time.Time   // last completion date; zero unless read
+	Sources    []SourceRef // backends holding this entry, e.g. [{grimmory, …/book/7}]
+	Available  bool        // a source already holds a readable copy; nothing to acquire
 }

@@ -85,6 +85,9 @@
       font-size: 0.72rem; font-weight: 600; color: var(--on-moss); background: var(--moss);
       border-radius: 999px; padding: 0.16rem 0.6rem;
     }
+    .rec-source { color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+    .rec-source:hover { color: var(--moss); }
+    .rec-source:focus-visible { outline: 2px solid var(--moss); outline-offset: 3px; }
 
     /* Cover */
     .cover {
@@ -95,6 +98,12 @@
       display: grid; place-items: center; padding: 0.6rem; text-align: center;
       background: var(--tint); color: var(--muted);
       font-family: var(--serif); font-size: 0.84rem; line-height: 1.3;
+    }
+
+    .rec-desc {
+      margin: 1.1rem 0 0; color: var(--muted); font-size: 0.92rem; line-height: 1.5;
+      display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;
+      line-clamp: 4; overflow: hidden;
     }
 
     /* Why this pick */
@@ -194,11 +203,13 @@
           {{if or .Entry.Available .Entry.Sources}}
             <p class="rec-origin">
               {{- if .Entry.Available}}<span class="shelf-badge">On your shelf</span>{{end -}}
-              {{- if .Entry.Sources}}<span class="rec-sources">{{range $i, $s := .Entry.Sources}}{{if $i}} · {{end}}{{ucfirst $s}}{{end}}</span>{{end -}}
+              {{- if .Entry.Sources}}<span class="rec-sources">{{range $i, $s := .Entry.Sources}}{{if $i}} · {{end}}{{if $s.URL}}<a class="rec-source" href="{{$s.URL}}" target="_blank" rel="noopener">{{ucfirst $s.Name}}</a>{{else}}{{ucfirst $s.Name}}{{end}}{{end}}</span>{{end -}}
             </p>
           {{end}}
         </div>
       </article>
+
+      {{with .Entry.Book.Description}}<p class="rec-desc">{{.}}</p>{{end}}
 
       <section class="why">
         {{if .Pros}}

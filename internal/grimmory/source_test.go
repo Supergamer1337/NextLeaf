@@ -137,6 +137,7 @@ func TestMapEntryFullMetadata(t *testing.T) {
 		Metadata: &metadata{
 			Title:         "Hyperion",
 			Subtitle:      "A Cantos",
+			Description:   "Seven pilgrims journey to the Time Tombs.",
 			PublishedDate: "1989-05-26",
 			SeriesName:    "Hyperion Cantos",
 			SeriesNumber:  1,
@@ -152,6 +153,9 @@ func TestMapEntryFullMetadata(t *testing.T) {
 	b := e.Book
 	if b.Title != "Hyperion" || b.Subtitle != "A Cantos" {
 		t.Errorf("title = %q / %q, want metadata title over top-level", b.Title, b.Subtitle)
+	}
+	if b.Description != "Seven pilgrims journey to the Time Tombs." {
+		t.Errorf("Description = %q, want mapped from metadata", b.Description)
 	}
 	if b.Series == nil || b.Series.Name != "Hyperion Cantos" || b.Series.Position != 1 {
 		t.Errorf("Series = %+v, want Hyperion Cantos #1", b.Series)
@@ -280,11 +284,31 @@ func TestMapEntryStampsProvenance(t *testing.T) {
 	c := New("http://gm.local", "u", "p")
 	e := c.mapEntry(book{ID: 7, Title: "Bare Book"})
 
-	if len(e.Sources) != 1 || e.Sources[0] != "grimmory" {
-		t.Errorf("Sources = %v, want [grimmory]", e.Sources)
+	want := library.SourceRef{Name: "grimmory", URL: "http://gm.local/book/7"}
+	if len(e.Sources) != 1 || e.Sources[0] != want {
+		t.Errorf("Sources = %v, want [%v]", e.Sources, want)
 	}
 	if !e.Available {
 		t.Error("Available = false, want true: a library book is on the shelf")
+	}
+}
+
+func TestMapEntryURLFallsBackToInstancePage(t *testing.T) {
+	c := New("http://gm.local", "u", "p")
+
+	// No metadata at all: still link to the instance's book page.
+	if got := c.mapEntry(book{ID: 8}).Book.URL; got != "http://gm.local/book/8" {
+		t.Errorf("URL = %q, want the instance page", got)
+	}
+	// Metadata without an externalUrl: same fallback.
+	e := c.mapEntry(book{ID: 9, Metadata: &metadata{Title: "T"}})
+	if e.Book.URL != "http://gm.local/book/9" {
+		t.Errorf("URL = %q, want the instance page", e.Book.URL)
+	}
+	// An externalUrl is the user's chosen canonical page and wins.
+	e = c.mapEntry(book{ID: 10, Metadata: &metadata{ExternalURL: "https://example.com/b"}})
+	if e.Book.URL != "https://example.com/b" {
+		t.Errorf("URL = %q, want the externalUrl kept", e.Book.URL)
 	}
 }
 

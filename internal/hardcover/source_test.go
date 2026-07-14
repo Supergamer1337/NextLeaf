@@ -23,6 +23,7 @@ const readsResponse = `{"data":{"user_books":[
     "book": {
       "title": "The Fifth Season",
       "subtitle": "",
+      "description": "A world ends in ash.",
       "slug": "the-fifth-season",
       "release_year": 2015,
       "pages": 512,
@@ -100,14 +101,21 @@ func TestRecentReadsMapsData(t *testing.T) {
 	if got := e.FinishedAt.Format("2006-01-02"); got != "2024-03-20" {
 		t.Errorf("FinishedAt = %q, want 2024-03-20", got)
 	}
-	if len(e.Sources) != 1 || e.Sources[0] != "hardcover" {
-		t.Errorf("Sources = %v, want [hardcover]", e.Sources)
+	wantRef := library.SourceRef{Name: "hardcover", URL: "https://hardcover.app/books/the-fifth-season"}
+	if len(e.Sources) != 1 || e.Sources[0] != wantRef {
+		t.Errorf("Sources = %v, want [%v]", e.Sources, wantRef)
 	}
 	if !e.Available {
 		t.Error("Available = false, want true for an owned book")
 	}
 	if !strings.Contains(api.lastQuery, "owned") {
 		t.Error("query does not request the owned field")
+	}
+	if b := e.Book; b.Description != "A world ends in ash." {
+		t.Errorf("Description = %q, want mapped", b.Description)
+	}
+	if !strings.Contains(api.lastQuery, "description") {
+		t.Error("query does not request the description field")
 	}
 
 	b := e.Book

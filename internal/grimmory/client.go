@@ -251,6 +251,7 @@ type book struct {
 type metadata struct {
 	Title          string   `json:"title"`
 	Subtitle       string   `json:"subtitle"`
+	Description    string   `json:"description"`
 	PublishedDate  string   `json:"publishedDate"` // "2006-01-02"
 	SeriesName     string   `json:"seriesName"`
 	SeriesNumber   float64  `json:"seriesNumber"`
@@ -268,7 +269,7 @@ type metadata struct {
 // scores on).
 func (c *Client) fetchBooks(ctx context.Context) ([]book, error) {
 	var books []book
-	if err := c.getJSON(ctx, "/api/v1/books?withDescription=false&stripForListView=false", &books); err != nil {
+	if err := c.getJSON(ctx, "/api/v1/books?withDescription=true&stripForListView=false", &books); err != nil {
 		return nil, err
 	}
 	return books, nil
