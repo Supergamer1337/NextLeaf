@@ -60,16 +60,18 @@ func NextOnShelves(series library.Series, toRead []library.Entry) (library.Entry
 	return next, found
 }
 
-// ContinueSeries builds the recommendation for the next series book b, noting
-// the rating of the last book read in the series when it's known.
-func ContinueSeries(b library.Book, lastRating float64) Recommendation {
-	r := Recommendation{Entry: library.Entry{Book: b, Status: library.StatusWantToRead}}
-	if b.Series == nil {
+// ContinueSeries builds the recommendation for the next series book, noting
+// the rating of the last book read in the series when it's known. e keeps its
+// provenance (Sources, Available) so the UI can say where the book came from.
+func ContinueSeries(e library.Entry, lastRating float64) Recommendation {
+	e.Status = library.StatusWantToRead
+	r := Recommendation{Entry: e}
+	if e.Book.Series == nil {
 		return r
 	}
-	pro := "Continues " + b.Series.Name
-	if b.Series.Position != 0 {
-		pro += " — book " + formatPos(b.Series.Position)
+	pro := "Continues " + e.Book.Series.Name
+	if e.Book.Series.Position != 0 {
+		pro += " — book " + formatPos(e.Book.Series.Position)
 	}
 	if lastRating > 0 {
 		pro += fmt.Sprintf(" (you rated the last one %s★)", formatRating(lastRating))
@@ -82,6 +84,7 @@ func ContinueSeries(b library.Book, lastRating float64) Recommendation {
 // the dimensions. rng is injected so callers and tests control determinism. ok
 // is false when there are no candidates.
 func Pick(rng *rand.Rand, candidates, recent, reading []library.Entry) (Recommendation, bool) {
+	candidates = collapseSeries(candidates)
 	if len(candidates) == 0 {
 		return Recommendation{}, false
 	}
@@ -108,6 +111,33 @@ func Pick(rng *rand.Rand, candidates, recent, reading []library.Entry) (Recommen
 
 	_, pros, cons := score(candidates[chosen], p)
 	return Recommendation{Entry: candidates[chosen], Pros: pros, Cons: cons}, true
+}
+
+// collapseSeries reduces each positioned series to its earliest unread volume,
+// so a series competes as one candidate — five unread volumes are one thing to
+// read next, not five lottery tickets. Entries without a series, or with an
+// unknown position, pass through untouched. Order is preserved, with each
+// series sitting where its first-seen volume was.
+func collapseSeries(candidates []library.Entry) []library.Entry {
+	out := make([]library.Entry, 0, len(candidates))
+	bySeries := make(map[string]int)
+	for _, e := range candidates {
+		s := e.Book.Series
+		if s == nil || s.Name == "" || s.Position <= 0 {
+			out = append(out, e)
+			continue
+		}
+		key := strings.ToLower(s.Name)
+		if i, ok := bySeries[key]; ok {
+			if s.Position < out[i].Book.Series.Position {
+				out[i] = e
+			}
+			continue
+		}
+		bySeries[key] = len(out)
+		out = append(out, e)
+	}
+	return out
 }
 
 // formatPos renders a series position without a trailing ".0" for whole numbers.

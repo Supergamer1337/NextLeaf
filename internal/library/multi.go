@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -67,7 +68,9 @@ func (m *Multi) RecentReads(ctx context.Context, limit int) ([]Entry, error) {
 	return all, nil
 }
 
-// ToRead merges every source's TBR list, oldest additions first.
+// ToRead merges every source's TBR list, oldest additions first. The same book
+// held by several sources becomes one entry so it doesn't get extra chances in
+// the pick; reads and in-progress lists are history and stay per-source.
 func (m *Multi) ToRead(ctx context.Context) ([]Entry, error) {
 	var all []Entry
 	for _, s := range m.sources {
@@ -77,8 +80,106 @@ func (m *Multi) ToRead(ctx context.Context) ([]Entry, error) {
 		}
 		all = append(all, entries...)
 	}
+	all = dedup(all)
 	sort.SliceStable(all, func(i, j int) bool {
 		return all[i].DateAdded.Before(all[j].DateAdded)
 	})
 	return all, nil
+}
+
+// dedup folds entries describing the same book (matched on normalized title
+// and first author) into one. Sources hand back retained slices, so merging
+// copies entries rather than writing through them.
+func dedup(all []Entry) []Entry {
+	out := make([]Entry, 0, len(all))
+	seen := make(map[string]int, len(all))
+	for _, e := range all {
+		key := dedupKey(e)
+		if key == "" {
+			out = append(out, e)
+			continue
+		}
+		if i, ok := seen[key]; ok {
+			out[i] = mergeEntry(out[i], e)
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, e)
+	}
+	return out
+}
+
+// dedupKey identifies a book for deduplication; empty means "never merge".
+func dedupKey(e Entry) string {
+	title := normalize(e.Book.Title)
+	if title == "" {
+		return ""
+	}
+	author := ""
+	if len(e.Book.Authors) > 0 {
+		author = normalize(e.Book.Authors[0])
+	}
+	return title + "\x00" + author
+}
+
+func normalize(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
+}
+
+// mergeEntry combines two entries for the same book: provenance is unioned,
+// the earliest addition date wins, and fields one source couldn't supply are
+// filled from the other. Slices are reallocated, never extended in place.
+func mergeEntry(base, dup Entry) Entry {
+	sources := make([]string, 0, len(base.Sources)+len(dup.Sources))
+	sources = append(sources, base.Sources...)
+	for _, s := range dup.Sources {
+		if !slices.Contains(sources, s) {
+			sources = append(sources, s)
+		}
+	}
+	base.Sources = sources
+
+	if base.DateAdded.IsZero() || (!dup.DateAdded.IsZero() && dup.DateAdded.Before(base.DateAdded)) {
+		base.DateAdded = dup.DateAdded
+	}
+	base.Available = base.Available || dup.Available
+	if base.Rating == 0 {
+		base.Rating = dup.Rating
+	}
+	if base.FinishedAt.IsZero() {
+		base.FinishedAt = dup.FinishedAt
+	}
+
+	b, d := &base.Book, dup.Book
+	if b.Subtitle == "" {
+		b.Subtitle = d.Subtitle
+	}
+	if b.Authors == nil {
+		b.Authors = d.Authors
+	}
+	if b.Genres == nil {
+		b.Genres = d.Genres
+	}
+	if b.Moods == nil {
+		b.Moods = d.Moods
+	}
+	if b.Series == nil {
+		b.Series = d.Series
+	}
+	if b.ReleaseYear == 0 {
+		b.ReleaseYear = d.ReleaseYear
+	}
+	if b.PageCount == 0 {
+		b.PageCount = d.PageCount
+	}
+	if b.Nonfiction == nil {
+		b.Nonfiction = d.Nonfiction
+	}
+	if b.CoverURL == "" {
+		b.CoverURL = d.CoverURL
+	}
+	if b.URL == "" {
+		b.URL = d.URL
+	}
+	return base
 }

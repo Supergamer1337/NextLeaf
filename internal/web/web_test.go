@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -55,6 +56,80 @@ func get(t *testing.T, src library.Source, target string) *httptest.ResponseReco
 		t.Fatalf("GET %s: status = %d, want %d", target, rec.Code, http.StatusOK)
 	}
 	return rec
+}
+
+// coverStub adds the optional CoverProvider capability to stubSource.
+type coverStub struct {
+	stubSource
+	lastID string
+	body   string
+	ct     string
+	err    error
+}
+
+func (s *coverStub) Name() string { return "grimmory" }
+func (s *coverStub) CoverImage(_ context.Context, id string) (io.ReadCloser, string, error) {
+	s.lastID = id
+	if s.err != nil {
+		return nil, "", s.err
+	}
+	body, ct := s.body, s.ct
+	if body == "" {
+		body, ct = "jpeg-bytes", "image/jpeg"
+	}
+	return io.NopCloser(strings.NewReader(body)), ct, nil
+}
+
+func TestCoverRouteStreamsImage(t *testing.T) {
+	src := &coverStub{}
+	rec := get(t, src, "/cover/grimmory/7")
+
+	if body := rec.Body.String(); body != "jpeg-bytes" {
+		t.Errorf("body = %q, want the provider's bytes", body)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/jpeg" {
+		t.Errorf("Content-Type = %q, want image/jpeg", ct)
+	}
+	if cc := rec.Header().Get("Cache-Control"); !strings.Contains(cc, "max-age") {
+		t.Errorf("Cache-Control = %q, want a max-age so browsers cache covers", cc)
+	}
+	if src.lastID != "7" {
+		t.Errorf("provider saw id %q, want 7", src.lastID)
+	}
+}
+
+func TestCoverRouteSniffsMislabeledImages(t *testing.T) {
+	// Grimmory labels cover bytes application/json; only trust image/* types
+	// and let the response writer sniff the rest.
+	jpegMagic := "\xff\xd8\xff\xe0\x00\x10JFIFrest-of-image"
+	src := &coverStub{body: jpegMagic, ct: "application/json"}
+	rec := get(t, src, "/cover/grimmory/7")
+
+	if ct := rec.Header().Get("Content-Type"); ct != "image/jpeg" {
+		t.Errorf("Content-Type = %q, want sniffed image/jpeg", ct)
+	}
+}
+
+func TestCoverRouteNotFoundCases(t *testing.T) {
+	cases := map[string]struct {
+		src    library.Source
+		target string
+	}{
+		"unknown source name":  {&coverStub{}, "/cover/nope/7"},
+		"source has no covers": {stubSource{}, "/cover/stub/7"},
+		"unconfigured app":     {nil, "/cover/grimmory/7"},
+		"provider error":       {&coverStub{err: errors.New("boom")}, "/cover/grimmory/7"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.target, nil)
+			rec := httptest.NewRecorder()
+			NewHandler(tc.src).ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("status = %d, want 404", rec.Code)
+			}
+		})
+	}
 }
 
 func TestHealthcheck(t *testing.T) {
@@ -184,6 +259,89 @@ func TestSelectorSkipsUnknownSeriesPosition(t *testing.T) {
 	body := get(t, src, "/").Body.String()
 	if strings.Contains(body, "Continues") {
 		t.Errorf("an unknown anchor position should not continue a series:\n%s", body)
+	}
+}
+
+func TestSelectorShowsShelfBadgeAndSources(t *testing.T) {
+	src := stubSource{
+		toRead: []library.Entry{{
+			Book:      library.Book{Title: "Shelf Book"},
+			Sources:   []string{"grimmory"},
+			Available: true,
+		}},
+	}
+	body := get(t, src, "/?another=1").Body.String()
+
+	if !strings.Contains(body, "On your shelf") {
+		t.Errorf("an available book should carry the shelf badge:\n%s", body)
+	}
+	if !strings.Contains(body, "Grimmory") {
+		t.Errorf("the source name should be shown, capitalized:\n%s", body)
+	}
+}
+
+func TestSelectorShowsSourcesWithoutBadge(t *testing.T) {
+	src := stubSource{
+		toRead: []library.Entry{{
+			Book:    library.Book{Title: "Wishlist Book"},
+			Sources: []string{"hardcover"},
+		}},
+	}
+	body := get(t, src, "/?another=1").Body.String()
+
+	if !strings.Contains(body, "Hardcover") {
+		t.Errorf("the source name should be shown:\n%s", body)
+	}
+	if strings.Contains(body, "On your shelf") {
+		t.Errorf("a non-available book must not claim to be on the shelf:\n%s", body)
+	}
+}
+
+func TestSelectorJoinsMergedSources(t *testing.T) {
+	src := stubSource{
+		toRead: []library.Entry{{
+			Book:      library.Book{Title: "Both Places"},
+			Sources:   []string{"grimmory", "hardcover"},
+			Available: true,
+		}},
+	}
+	body := get(t, src, "/?another=1").Body.String()
+
+	if !strings.Contains(body, "Grimmory · Hardcover") {
+		t.Errorf("merged sources should be joined:\n%s", body)
+	}
+}
+func TestSelectorResolverPickHasNoProvenance(t *testing.T) {
+	// The off-shelf resolver book is on none of the user's lists.
+	src := resolverStub{
+		stubSource: stubSource{
+			reads: []library.Entry{seriesEntry("Book One", "Saga", 1)},
+		},
+		next:  library.Book{Title: "Off-Shelf Two", Series: &library.Series{Name: "Saga", Position: 2}},
+		found: true,
+	}
+	body := get(t, src, "/").Body.String()
+
+	if strings.Contains(body, "On your shelf") || strings.Contains(body, `class="rec-origin"`) {
+		t.Errorf("an off-shelf book must not show provenance:\n%s", body)
+	}
+}
+
+func TestSelectorContinuationKeepsProvenance(t *testing.T) {
+	next := seriesEntry("Book Two", "Saga", 2)
+	next.Sources = []string{"grimmory"}
+	next.Available = true
+	src := stubSource{
+		reads:  []library.Entry{seriesEntry("Book One", "Saga", 1)},
+		toRead: []library.Entry{next},
+	}
+	body := get(t, src, "/").Body.String()
+
+	if !strings.Contains(body, "Continues") {
+		t.Fatalf("expected a series continuation:\n%s", body)
+	}
+	if !strings.Contains(body, "On your shelf") || !strings.Contains(body, "Grimmory") {
+		t.Errorf("an on-shelf continuation should keep badge and source:\n%s", body)
 	}
 }
 

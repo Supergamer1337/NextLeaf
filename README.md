@@ -35,6 +35,9 @@ reading and read statuses feed the variety profile, and read status is
 per-user — so use your own account. If you normally sign in through OIDC, set
 a local password on that same account for NextLeaf to use (Grimmory has no
 long-lived API keys; NextLeaf logs in and refreshes its session by itself).
+Grimmory covers sit behind its login, so NextLeaf relays them at
+`/cover/grimmory/{id}` — credentials stay server-side and browsers cache the
+images for a day.
 
 ## Deployment
 

@@ -10,9 +10,13 @@ import (
 	"nextleaf/internal/library"
 )
 
-// Client is a reading Source. It is not a SeriesResolver: Grimmory has no
+// Client is a reading Source that also serves cover images (they sit behind
+// the instance's auth). It is not a SeriesResolver: Grimmory has no
 // next-in-series lookup beyond the user's own shelves.
-var _ library.Source = (*Client)(nil)
+var (
+	_ library.Source        = (*Client)(nil)
+	_ library.CoverProvider = (*Client)(nil)
+)
 
 // Name identifies this Source.
 func (c *Client) Name() string { return "grimmory" }
@@ -104,6 +108,8 @@ func (c *Client) mapEntry(b book) library.Entry {
 		Rating:     b.PersonalRating / 2, // Grimmory rates 0-10, the neutral model 0-5
 		DateAdded:  parseInstant(b.AddedOn),
 		FinishedAt: parseInstant(b.DateFinished),
+		Sources:    []string{c.Name()},
+		Available:  true, // a Grimmory library holds the files themselves
 	}
 	return e
 }
@@ -124,11 +130,30 @@ func (c *Client) mapBook(b book) library.Book {
 	out.ReleaseYear = parseYear(m.PublishedDate)
 	out.PageCount = m.PageCount
 	out.URL = m.ExternalURL
-	out.CoverURL = c.resolveCover(m.ThumbnailURL)
+	out.CoverURL = c.coverURL(b.ID, m)
 	if m.SeriesName != "" {
 		out.Series = &library.Series{Name: m.SeriesName, Position: m.SeriesNumber}
 	}
 	return out
+}
+
+// coverURL picks the best cover reference for a book. An external thumbnail
+// is publicly reachable and used as-is. Covers stored on the instance sit
+// behind auth, so they go through the app's proxy route (see CoverImage) with
+// the cover's update time as a cache-buster. An instance-relative thumbnail
+// points at that same auth-gated endpoint, so the proxy takes precedence.
+func (c *Client) coverURL(id int, m *metadata) string {
+	if strings.Contains(m.ThumbnailURL, "://") {
+		return m.ThumbnailURL
+	}
+	if m.CoverUpdatedOn != "" {
+		u := "/cover/grimmory/" + strconv.Itoa(id)
+		if t := parseInstant(m.CoverUpdatedOn); !t.IsZero() {
+			u += "?v=" + strconv.FormatInt(t.Unix(), 10)
+		}
+		return u
+	}
+	return c.resolveCover(m.ThumbnailURL)
 }
 
 // resolveCover turns a thumbnail reference into an absolute URL. Grimmory

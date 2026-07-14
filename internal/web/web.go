@@ -6,8 +6,10 @@ import (
 	"context"
 	"embed"
 	"html/template"
+	"io"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 	"unicode"
 
@@ -55,8 +57,37 @@ func NewHandler(src library.Source) http.Handler {
 	// {$} matches "/" exactly, so unknown paths fall through to 404 instead of
 	// being swallowed by a catch-all root pattern.
 	mux.HandleFunc("GET /{$}", s.handleSelect)
+	mux.HandleFunc("GET /cover/{source}/{id}", s.handleCover)
 	mux.HandleFunc("GET /healthcheck", handleHealthcheck)
 	return mux
+}
+
+// handleCover relays a cover image from the source holding it, for providers
+// (like Grimmory) whose covers sit behind their own authentication. Browsers
+// cache the result, so repeats rarely reach the backend.
+func (s *server) handleCover(w http.ResponseWriter, r *http.Request) {
+	provider, ok := library.AsCoverProvider(s.src, r.PathValue("source"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	body, contentType, err := provider.CoverImage(ctx, r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer func() { _ = body.Close() }()
+
+	// Backends can mislabel image bytes (Grimmory says application/json);
+	// only pass through image types and let the response writer sniff the rest.
+	if strings.HasPrefix(contentType, "image/") {
+		w.Header().Set("Content-Type", contentType)
+	}
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = io.Copy(w, body)
 }
 
 // selectData is the selector page's view model.
@@ -146,7 +177,7 @@ func (s *server) continueSeries(ctx context.Context, reading, reads, toRead []li
 	}
 
 	if entry, ok := picker.NextOnShelves(series, toRead); ok {
-		return picker.ContinueSeries(entry.Book, anchor.Rating), true, nil
+		return picker.ContinueSeries(entry, anchor.Rating), true, nil
 	}
 
 	if resolver, ok := library.AsSeriesResolver(s.src); ok {
@@ -155,7 +186,8 @@ func (s *server) continueSeries(ctx context.Context, reading, reads, toRead []li
 			return picker.Recommendation{}, false, err
 		}
 		if found {
-			return picker.ContinueSeries(book, anchor.Rating), true, nil
+			// Off-shelf book: no provenance, it is on none of the user's lists.
+			return picker.ContinueSeries(library.Entry{Book: book}, anchor.Rating), true, nil
 		}
 	}
 

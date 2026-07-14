@@ -77,6 +77,14 @@
     .rec-meta { color: var(--muted); font-size: 0.8rem; margin: 0.5rem 0 0; }
     .tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.85rem; }
     .tag { font-size: 0.72rem; color: var(--muted); background: var(--tint); border-radius: 999px; padding: 0.16rem 0.6rem; }
+    .rec-origin {
+      display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+      margin: 0.85rem 0 0; font-size: 0.75rem; color: var(--muted);
+    }
+    .shelf-badge {
+      font-size: 0.72rem; font-weight: 600; color: var(--on-moss); background: var(--moss);
+      border-radius: 999px; padding: 0.16rem 0.6rem;
+    }
 
     /* Cover */
     .cover {
@@ -183,6 +191,12 @@
             </p>
           {{end}}
           {{if .Entry.Book.Genres}}<div class="tags">{{range firstN 4 .Entry.Book.Genres}}<span class="tag">{{.}}</span>{{end}}</div>{{end}}
+          {{if or .Entry.Available .Entry.Sources}}
+            <p class="rec-origin">
+              {{- if .Entry.Available}}<span class="shelf-badge">On your shelf</span>{{end -}}
+              {{- if .Entry.Sources}}<span class="rec-sources">{{range $i, $s := .Entry.Sources}}{{if $i}} · {{end}}{{ucfirst $s}}{{end}}</span>{{end -}}
+            </p>
+          {{end}}
         </div>
       </article>
 

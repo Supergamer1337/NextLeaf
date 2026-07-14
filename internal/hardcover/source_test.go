@@ -17,6 +17,7 @@ const readsResponse = `{"data":{"user_books":[
   {
     "status_id": 3,
     "rating": 4.5,
+    "owned": true,
     "date_added": "2022-01-15",
     "last_read_date": "2024-03-20",
     "book": {
@@ -98,6 +99,15 @@ func TestRecentReadsMapsData(t *testing.T) {
 	}
 	if got := e.FinishedAt.Format("2006-01-02"); got != "2024-03-20" {
 		t.Errorf("FinishedAt = %q, want 2024-03-20", got)
+	}
+	if len(e.Sources) != 1 || e.Sources[0] != "hardcover" {
+		t.Errorf("Sources = %v, want [hardcover]", e.Sources)
+	}
+	if !e.Available {
+		t.Error("Available = false, want true for an owned book")
+	}
+	if !strings.Contains(api.lastQuery, "owned") {
+		t.Error("query does not request the owned field")
 	}
 
 	b := e.Book
@@ -298,7 +308,6 @@ func TestNextInSeriesReturnsNextBook(t *testing.T) {
 	if book.Series == nil || book.Series.Position != 2 {
 		t.Errorf("Series = %+v, want position 2", book.Series)
 	}
-
 	// It must query the next position (>) of the named series, not by user.
 	if !strings.Contains(gotQuery, "position: {_gt: $after}") {
 		t.Errorf("query should fetch the next position:\n%s", gotQuery)
