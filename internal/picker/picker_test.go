@@ -17,14 +17,14 @@ func seriesBook(title, series string, pos float64) library.Book {
 }
 
 func TestPickEmptyCandidates(t *testing.T) {
-	if _, ok := Pick(rand.New(rand.NewSource(1)), nil, nil, nil); ok {
+	if _, ok := Pick(rand.New(rand.NewSource(1)), Prefs{IncludeNovellas: true}, nil, nil, nil); ok {
 		t.Error("Pick with no candidates should return ok == false")
 	}
 }
 
 func TestPickSingleCandidateAlwaysChosen(t *testing.T) {
 	cands := []library.Entry{{Book: book("Only", []string{"Sci-Fi"}, nil)}}
-	rec, ok := Pick(rand.New(rand.NewSource(7)), cands, nil, nil)
+	rec, ok := Pick(rand.New(rand.NewSource(7)), Prefs{IncludeNovellas: true}, cands, nil, nil)
 	if !ok || rec.Entry.Book.Title != "Only" {
 		t.Errorf("Pick = (%q, %v), want Only/true", rec.Entry.Book.Title, ok)
 	}
@@ -37,8 +37,8 @@ func TestPickReproducibleForSeed(t *testing.T) {
 		{Book: book("B", []string{"Romance"}, nil)},
 		{Book: book("C", []string{"Fantasy"}, nil)},
 	}
-	first, _ := Pick(rand.New(rand.NewSource(99)), cands, recent, nil)
-	second, _ := Pick(rand.New(rand.NewSource(99)), cands, recent, nil)
+	first, _ := Pick(rand.New(rand.NewSource(99)), Prefs{IncludeNovellas: true}, cands, recent, nil)
+	second, _ := Pick(rand.New(rand.NewSource(99)), Prefs{IncludeNovellas: true}, cands, recent, nil)
 	if first.Entry.Book.Title != second.Entry.Book.Title {
 		t.Errorf("same seed gave %q then %q", first.Entry.Book.Title, second.Entry.Book.Title)
 	}
@@ -49,7 +49,7 @@ func TestPickHandlesBooksWithoutMetadata(t *testing.T) {
 		{Book: book("Bare", nil, nil)},
 		{Book: book("AlsoBare", nil, nil)},
 	}
-	if _, ok := Pick(rand.New(rand.NewSource(3)), cands, nil, nil); !ok {
+	if _, ok := Pick(rand.New(rand.NewSource(3)), Prefs{IncludeNovellas: true}, cands, nil, nil); !ok {
 		t.Error("Pick should handle candidates with no metadata")
 	}
 }
@@ -64,7 +64,7 @@ func TestPickFavoursNovelGenreAcrossDraws(t *testing.T) {
 	novelWins := 0
 	const draws = 1000
 	for i := 0; i < draws; i++ {
-		rec, _ := Pick(rng, cands, recent, nil)
+		rec, _ := Pick(rng, Prefs{IncludeNovellas: true}, cands, recent, nil)
 		if rec.Entry.Book.Title == "Novel" {
 			novelWins++
 		}
@@ -82,13 +82,13 @@ func TestPickExposesProsAndCons(t *testing.T) {
 		{Book: book("R3", []string{"Fantasy"}, nil)},
 	}
 	conCand := []library.Entry{{Book: book("Fantasy Again", []string{"Fantasy"}, nil)}}
-	rec, _ := Pick(rand.New(rand.NewSource(1)), conCand, recent, nil)
+	rec, _ := Pick(rand.New(rand.NewSource(1)), Prefs{IncludeNovellas: true}, conCand, recent, nil)
 	if len(rec.Cons) == 0 || len(rec.Pros) != 0 {
 		t.Errorf("dominant-genre repeat should be a con-only pick, got pros=%v cons=%v", rec.Pros, rec.Cons)
 	}
 
 	proCand := []library.Entry{{Book: book("Fresh Genre", []string{"History"}, nil)}}
-	rec, _ = Pick(rand.New(rand.NewSource(1)), proCand, recent, nil)
+	rec, _ = Pick(rand.New(rand.NewSource(1)), Prefs{IncludeNovellas: true}, proCand, recent, nil)
 	if len(rec.Pros) == 0 || len(rec.Cons) != 0 {
 		t.Errorf("novel-genre pick should be a pro-only pick, got pros=%v cons=%v", rec.Pros, rec.Cons)
 	}
@@ -104,7 +104,7 @@ func TestCollapseSeries(t *testing.T) {
 		{Book: seriesBook("Other 2", "OTHER SAGA", 2)},
 	}
 
-	got := collapseSeries(entries)
+	got := collapseSeries(entries, Prefs{IncludeNovellas: true})
 
 	// Saga is one candidate (its earliest volume), position-0 and standalones
 	// pass through, and grouping is case-insensitive. Original order is kept.
@@ -124,7 +124,7 @@ func TestCollapseSeriesNoSeries(t *testing.T) {
 		{Book: book("A", nil, nil)},
 		{Book: book("B", nil, nil)},
 	}
-	if got := collapseSeries(entries); len(got) != 2 {
+	if got := collapseSeries(entries, Prefs{IncludeNovellas: true}); len(got) != 2 {
 		t.Errorf("collapse of series-free pool changed it: %v", entryTitles(got))
 	}
 }
@@ -135,7 +135,7 @@ func TestPickNeverReturnsLaterVolume(t *testing.T) {
 		{Book: seriesBook("Vol 3", "Saga", 3)},
 	}
 	for seed := int64(0); seed < 50; seed++ {
-		rec, ok := Pick(rand.New(rand.NewSource(seed)), cands, nil, nil)
+		rec, ok := Pick(rand.New(rand.NewSource(seed)), Prefs{IncludeNovellas: true}, cands, nil, nil)
 		if !ok || rec.Entry.Book.Title != "Vol 3" {
 			t.Fatalf("seed %d picked %q, want the earliest unread volume", seed, rec.Entry.Book.Title)
 		}
@@ -155,7 +155,7 @@ func TestPickSeriesCompetesAsOneCandidate(t *testing.T) {
 	seriesWins := 0
 	const draws = 1000
 	for i := 0; i < draws; i++ {
-		rec, _ := Pick(rng, cands, nil, nil)
+		rec, _ := Pick(rng, Prefs{IncludeNovellas: true}, cands, nil, nil)
 		if rec.Entry.Book.Title == "Vol 1" {
 			seriesWins++
 		}
@@ -175,39 +175,13 @@ func entryTitles(entries []library.Entry) []string {
 	return out
 }
 
-func TestActiveSeriesPrefersMostRecentFinish(t *testing.T) {
-	recent := []library.Entry{
-		{Book: seriesBook("Book 2", "Broken Earth", 2), Rating: 5},
-		{Book: seriesBook("Prev", "Old Series", 1)},
-	}
-	got, ok := ActiveSeries(nil, recent)
-	if !ok || got.Book.Series.Name != "Broken Earth" || got.Book.Series.Position != 2 || got.Rating != 5 {
-		t.Errorf("ActiveSeries = (%+v, %v), want Broken Earth #2 rated 5", got.Book.Series, ok)
-	}
-}
-
-func TestActiveSeriesFallsBackToReading(t *testing.T) {
-	reading := []library.Entry{{Book: seriesBook("In Progress", "Mistborn", 1)}}
-	recent := []library.Entry{{Book: book("Standalone", nil, nil)}}
-	got, ok := ActiveSeries(reading, recent)
-	if !ok || got.Book.Series.Name != "Mistborn" {
-		t.Errorf("ActiveSeries = (%+v, %v), want Mistborn", got.Book.Series, ok)
-	}
-}
-
-func TestActiveSeriesNoneInProgress(t *testing.T) {
-	if _, ok := ActiveSeries(nil, []library.Entry{{Book: book("Solo", nil, nil)}}); ok {
-		t.Error("ActiveSeries should be false when nothing is in a series")
-	}
-}
-
 func TestNextOnShelvesFindsEarliestLaterBook(t *testing.T) {
 	toRead := []library.Entry{
 		{Book: seriesBook("Book 4", "Broken Earth", 4)},
 		{Book: seriesBook("Book 3", "Broken Earth", 3)},
 		{Book: seriesBook("Other", "Different", 1)},
 	}
-	got, ok := NextOnShelves(library.Series{Name: "Broken Earth", Position: 2}, toRead)
+	got, ok := NextOnShelves(library.Series{Name: "Broken Earth", Position: 2}, toRead, Prefs{IncludeNovellas: true})
 	if !ok || got.Book.Title != "Book 3" {
 		t.Errorf("NextOnShelves = (%q, %v), want Book 3", got.Book.Title, ok)
 	}
@@ -215,7 +189,7 @@ func TestNextOnShelvesFindsEarliestLaterBook(t *testing.T) {
 
 func TestNextOnShelvesAbsent(t *testing.T) {
 	toRead := []library.Entry{{Book: seriesBook("Book 1", "Broken Earth", 1)}}
-	if _, ok := NextOnShelves(library.Series{Name: "Broken Earth", Position: 2}, toRead); ok {
+	if _, ok := NextOnShelves(library.Series{Name: "Broken Earth", Position: 2}, toRead, Prefs{IncludeNovellas: true}); ok {
 		t.Error("NextOnShelves should be false when no later book is on the shelf")
 	}
 }

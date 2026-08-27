@@ -25,6 +25,8 @@ var migrations = []string{
 		parked_after    INTEGER NOT NULL DEFAULT 0,
 		pinned_position REAL NOT NULL DEFAULT 0
 	)`,
+	`ALTER TABLE tracked_series ADD COLUMN slug TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tracked_series ADD COLUMN completed INTEGER NOT NULL DEFAULT 0`,
 }
 
 // Store is the durable record of tracked series and standing decisions.
@@ -129,12 +131,15 @@ func (s *Store) Reconcile(ctx context.Context, snap Snapshot) error {
 // backwards: rereading book 2 of a series finished at book 5 is not a regression.
 func observe(ctx context.Context, tx *sql.Tx, s library.Series) error {
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO tracked_series (name, display_name, position)
-		VALUES (?, ?, ?)
+		INSERT INTO tracked_series (name, display_name, position, slug, completed)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			display_name = excluded.display_name,
-			position = MAX(position, excluded.position)`,
-		key(s.Name), s.Name, s.Position)
+			position = MAX(position, excluded.position),
+			-- A source that knows no slug must not blank one another supplied.
+			slug = CASE WHEN excluded.slug != '' THEN excluded.slug ELSE slug END,
+			completed = MAX(completed, excluded.completed)`,
+		key(s.Name), s.Name, s.Position, s.Slug, boolToInt(s.Completed))
 	if err != nil {
 		return fmt.Errorf("tracking series %q: %w", s.Name, err)
 	}
@@ -145,7 +150,7 @@ func observe(ctx context.Context, tx *sql.Tx, s library.Series) error {
 // stable order.
 func (s *Store) List(ctx context.Context) ([]Tracked, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT display_name, position, decision, decided_at, parked_after, pinned_position
+		SELECT display_name, position, decision, decided_at, parked_after, pinned_position, slug, completed
 		FROM tracked_series ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -159,7 +164,7 @@ func (s *Store) List(ctx context.Context) ([]Tracked, error) {
 			decision               string
 			decidedAt, parkedAfter int64
 		)
-		if err := rows.Scan(&t.Name, &t.Position, &decision, &decidedAt, &parkedAfter, &t.PinnedPosition); err != nil {
+		if err := rows.Scan(&t.Name, &t.Position, &decision, &decidedAt, &parkedAfter, &t.PinnedPosition, &t.Slug, &t.Completed); err != nil {
 			return nil, err
 		}
 		t.Decision = parseDecision(decision)
@@ -178,9 +183,9 @@ func (s *Store) Get(ctx context.Context, name string) (Tracked, bool, error) {
 		decidedAt, parkedAfter int64
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT display_name, position, decision, decided_at, parked_after, pinned_position
+		SELECT display_name, position, decision, decided_at, parked_after, pinned_position, slug, completed
 		FROM tracked_series WHERE name = ?`, key(name)).
-		Scan(&t.Name, &t.Position, &decision, &decidedAt, &parkedAfter, &t.PinnedPosition)
+		Scan(&t.Name, &t.Position, &decision, &decidedAt, &parkedAfter, &t.PinnedPosition, &t.Slug, &t.Completed)
 	switch {
 	case err == sql.ErrNoRows:
 		return Tracked{}, false, nil
@@ -247,6 +252,13 @@ func (s *Store) decide(ctx context.Context, name string, d Decision, at time.Tim
 		return fmt.Errorf("recording %s for series %q: %w", d, name, err)
 	}
 	return nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // unix converts stored seconds back to a time, mapping the zero sentinel to the

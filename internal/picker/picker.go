@@ -13,6 +13,18 @@ import (
 	"nextleaf/internal/library"
 )
 
+// Prefs are the reader's configurable recommendation settings.
+type Prefs struct {
+	// IncludeNovellas allows books at fractional series positions (3.5) to be
+	// offered, both as the next book in a series and as the volume that
+	// represents a series in the variety pool.
+	IncludeNovellas bool
+}
+
+// isNovella treats a fractional series position as side material rather than
+// the main sequence, which is how catalogues file novellas.
+func isNovella(pos float64) bool { return pos != float64(int64(pos)) }
+
 // Recommendation is a chosen book with the reasons for it (Pros) and the
 // trade-offs it carries (Cons), kept apart so the UI can show each plainly.
 type Recommendation struct {
@@ -21,28 +33,10 @@ type Recommendation struct {
 	Cons  []string
 }
 
-// ActiveSeries returns the entry anchoring the series to continue: the most
-// recently finished series book, else one in progress. The caller reads its
-// Series and Rating. ok is false when nothing is in a series. recent is
-// expected newest-first (as sources provide it).
-func ActiveSeries(reading, recent []library.Entry) (library.Entry, bool) {
-	for _, e := range recent {
-		if e.Book.Series != nil {
-			return e, true
-		}
-	}
-	for _, e := range reading {
-		if e.Book.Series != nil {
-			return e, true
-		}
-	}
-	return library.Entry{}, false
-}
-
 // NextOnShelves returns the earliest book in the TBR that continues series past
 // its last-read Position, so the caller can continue without hitting the
 // provider. ok is false when no later book is on the shelf.
-func NextOnShelves(series library.Series, toRead []library.Entry) (library.Entry, bool) {
+func NextOnShelves(series library.Series, toRead []library.Entry, prefs Prefs) (library.Entry, bool) {
 	var next library.Entry
 	found := false
 	for _, e := range toRead {
@@ -51,6 +45,9 @@ func NextOnShelves(series library.Series, toRead []library.Entry) (library.Entry
 			continue
 		}
 		if s.Position <= series.Position {
+			continue
+		}
+		if !prefs.IncludeNovellas && isNovella(s.Position) {
 			continue
 		}
 		if !found || s.Position < next.Book.Series.Position {
@@ -83,8 +80,8 @@ func ContinueSeries(e library.Entry, lastRating float64) Recommendation {
 // Pick is the variety path: a weighted-random choice over candidates scored by
 // the dimensions. rng is injected so callers and tests control determinism. ok
 // is false when there are no candidates.
-func Pick(rng *rand.Rand, candidates, recent, reading []library.Entry) (Recommendation, bool) {
-	candidates = collapseSeries(candidates)
+func Pick(rng *rand.Rand, prefs Prefs, candidates, recent, reading []library.Entry) (Recommendation, bool) {
+	candidates = collapseSeries(candidates, prefs)
 	if len(candidates) == 0 {
 		return Recommendation{}, false
 	}
@@ -118,13 +115,16 @@ func Pick(rng *rand.Rand, candidates, recent, reading []library.Entry) (Recommen
 // read next, not five lottery tickets. Entries without a series, or with an
 // unknown position, pass through untouched. Order is preserved, with each
 // series sitting where its first-seen volume was.
-func collapseSeries(candidates []library.Entry) []library.Entry {
+func collapseSeries(candidates []library.Entry, prefs Prefs) []library.Entry {
 	out := make([]library.Entry, 0, len(candidates))
 	bySeries := make(map[string]int)
 	for _, e := range candidates {
 		s := e.Book.Series
 		if s == nil || s.Name == "" || s.Position <= 0 {
 			out = append(out, e)
+			continue
+		}
+		if !prefs.IncludeNovellas && isNovella(s.Position) {
 			continue
 		}
 		key := strings.ToLower(s.Name)

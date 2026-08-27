@@ -69,6 +69,12 @@ type Tracked struct {
 	// PinnedPosition is the position of the book the pin refers to; reading it
 	// clears the pin.
 	PinnedPosition float64
+	// Slug is the richer source's own identifier for the series, kept as a
+	// diagnostic and migration hint rather than something matched on.
+	Slug string
+	// Completed marks a series that can never gain another book, so it is
+	// worth no new-release lookup.
+	Completed bool
 }
 
 // key normalises a series name into its storage key. Names are the only

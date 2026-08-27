@@ -132,3 +132,49 @@ func TestSeriesNamesMatchCaseInsensitively(t *testing.T) {
 		t.Errorf("Position = %v, want 2", tracked[0].Position)
 	}
 }
+
+func TestReconcileRecordsSeriesIdentityHints(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	e := readEntry("Mistborn", 3)
+	e.Book.Series.Slug = "mistborn"
+	e.Book.Series.Completed = true
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{e}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	tracked, ok, err := st.Get(ctx, "Mistborn")
+	if err != nil || !ok {
+		t.Fatalf("Get = (%v, %v)", ok, err)
+	}
+	if tracked.Slug != "mistborn" {
+		t.Errorf("Slug = %q, want mistborn", tracked.Slug)
+	}
+	if !tracked.Completed {
+		t.Error("Completed = false; a finished series should be recorded as such")
+	}
+}
+
+func TestSeriesIdentityHintsAreNotErasedBySourcesThatLackThem(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	rich := readEntry("Mistborn", 3)
+	rich.Book.Series.Slug = "mistborn"
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{rich}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	// Grimmory knows the same series by name alone; it must not blank the hint.
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 4)}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	tracked, _, err := st.Get(ctx, "Mistborn")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if tracked.Slug != "mistborn" {
+		t.Errorf("Slug = %q, want it kept from the source that knew it", tracked.Slug)
+	}
+}
