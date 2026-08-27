@@ -39,7 +39,9 @@ func clearSpentDecisions(ctx context.Context, tx *sql.Tx, snap Snapshot) error {
 		}
 	}
 
-	// A pin says "this book is next", so reaching that book spends it.
+	// A pin says "this book is next", so reaching that book spends it. A pin
+	// with no known position names no book to reach, so only the panel clears
+	// it — better than spending it on the read that made the series tracked.
 	for _, group := range [][]library.Entry{snap.Reads, snap.Reading} {
 		for _, e := range group {
 			if e.Book.Series == nil {
@@ -47,7 +49,8 @@ func clearSpentDecisions(ctx context.Context, tx *sql.Tx, snap Snapshot) error {
 			}
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE tracked_series SET decision = 'active', decided_at = 0, pinned_position = 0
-				 WHERE name = ? AND decision = 'pinned' AND pinned_position <= ?`,
+				 WHERE name = ? AND decision = 'pinned'
+				   AND pinned_position > 0 AND pinned_position <= ?`,
 				key(e.Book.Series.Name), e.Book.Series.Position); err != nil {
 				return err
 			}

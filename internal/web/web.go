@@ -7,6 +7,7 @@ import (
 	"embed"
 	"html/template"
 	"io"
+	"log"
 	"math/rand"
 	"mime"
 	"net/http"
@@ -99,6 +100,13 @@ type server struct {
 // published at most once a day, so asking more often only burns rate limit.
 const lookaheadTTL = 24 * time.Hour
 
+// maxSeriesLookups caps how many series a single page load will ask the source
+// about. A long-time reader is tracked in hundreds of series, nearly all of
+// them finished with nothing shelved, and asking about every one on a cold
+// cache would spend the request's whole deadline. The ranking puts the series
+// most likely to have something to offer first, so a small cap loses little.
+const maxSeriesLookups = 4
+
 // NewHandler returns the application's HTTP handler. d.Source may be nil, in
 // which case the selector explains that no source is configured.
 func NewHandler(d Deps) http.Handler {
@@ -140,12 +148,18 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 	case "park":
 		// The park is spent by the next book finished after this moment, so it
 		// is anchored to the newest finish the sources currently report.
+		// Without that anchor the park would be cleared by the very next
+		// reconcile, so a failure here refuses the park rather than recording
+		// one that silently does nothing.
+		reads, readErr := s.src.RecentReads(ctx, picker.RecentWindow)
+		if readErr != nil {
+			http.Error(w, "could not reach your library to park that series", http.StatusBadGateway)
+			return
+		}
 		var newest time.Time
-		if reads, readErr := s.src.RecentReads(ctx, picker.RecentWindow); readErr == nil {
-			for _, e := range reads {
-				if e.FinishedAt.After(newest) {
-					newest = e.FinishedAt
-				}
+		for _, e := range reads {
+			if e.FinishedAt.After(newest) {
+				newest = e.FinishedAt
 			}
 		}
 		err = s.store.Park(ctx, name, time.Now(), newest)
@@ -206,8 +220,10 @@ type selectData struct {
 	Importing bool
 	// Decidable is true when the recommended book belongs to a series the
 	// reader has actually read into, which is what makes park/drop/pin
-	// meaningful for it.
+	// meaningful for it. Decide names that series, which is not always the one
+	// the book itself is filed under.
 	Decidable bool
+	Decide    series.Tracked
 	Panel     panel
 }
 
@@ -254,7 +270,7 @@ func (s *server) handleSelect(w http.ResponseWriter, r *http.Request) {
 			data.Error = err.Error()
 		} else {
 			data.Rec, data.HasRec = rec.rec, rec.ok
-			data.Decidable = rec.decidable
+			data.Decidable, data.Decide = rec.decidable, rec.decide
 			data.Panel = group(tracked)
 		}
 	}
@@ -270,11 +286,14 @@ func (s *server) handleSelect(w http.ResponseWriter, r *http.Request) {
 	_, _ = buf.WriteTo(w)
 }
 
-// outcome is a recommendation together with whether the card should offer
-// standing decisions for it.
+// outcome is a recommendation together with the tracked series a decision on
+// the card would apply to, if any.
 type outcome struct {
-	rec       picker.Recommendation
-	ok        bool
+	rec    picker.Recommendation
+	ok     bool
+	decide series.Tracked
+	// decidable is false when the book belongs to no series the reader has
+	// read into, in which case the card offers no decisions.
 	decidable bool
 }
 
@@ -308,18 +327,22 @@ func (s *server) recommend(ctx context.Context, reroll bool) (outcome, []series.
 	candidates := withoutDropped(toRead, tracked)
 
 	if !reroll {
-		rec, ok, err := s.continueSeries(ctx, tracked, reads, reading, toRead)
+		rec, anchor, ok, err := s.continueSeries(ctx, tracked, reads, reading, toRead)
 		if err != nil {
 			return outcome{}, nil, err
 		}
 		if ok {
-			return outcome{rec: rec, ok: true, decidable: true}, tracked, nil
+			// The decision applies to the series that produced the pick, which
+			// is not always the series the book itself is filed under: a
+			// catalogue may label the volume with an omnibus or sub-series.
+			return outcome{rec: rec, ok: true, decide: anchor, decidable: true}, tracked, nil
 		}
 	}
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	rec, ok := picker.Pick(rng, s.prefs, candidates, reads, reading)
-	return outcome{rec: rec, ok: ok, decidable: isTracked(rec, tracked)}, tracked, nil
+	decide, decidable := trackedFor(rec, tracked)
+	return outcome{rec: rec, ok: ok, decide: decide, decidable: decidable}, tracked, nil
 }
 
 // syncTracked folds the current library state into the store and reads back
@@ -342,11 +365,12 @@ func (s *server) syncTracked(ctx context.Context, reads, reading, toRead []libra
 //
 // It stays silent until the history import has finished, since before then the
 // store knows only the recent window and would rank series wrongly.
-func (s *server) continueSeries(ctx context.Context, tracked []series.Tracked, reads, reading, toRead []library.Entry) (picker.Recommendation, bool, error) {
+func (s *server) continueSeries(ctx context.Context, tracked []series.Tracked, reads, reading, toRead []library.Entry) (picker.Recommendation, series.Tracked, bool, error) {
 	if s.store == nil || s.backfill == nil || !s.backfill.Status().Done {
-		return picker.Recommendation{}, false, nil
+		return picker.Recommendation{}, series.Tracked{}, false, nil
 	}
 
+	lookups := 0
 	for _, t := range series.Order(tracked, reads, reading) {
 		// Without a known position there is no well-defined "next".
 		if t.Position == 0 {
@@ -355,30 +379,34 @@ func (s *server) continueSeries(ctx context.Context, tracked []series.Tracked, r
 		target := library.Series{Name: t.Name, Position: t.Position, Slug: t.Slug, Completed: t.Completed}
 
 		if entry, ok := picker.NextOnShelves(target, toRead, s.prefs); ok {
-			return picker.ContinueSeries(entry, lastRating(t.Name, reads)), true, nil
+			return picker.ContinueSeries(entry, lastRating(t.Name, reads)), t, true, nil
 		}
 
 		// A finished series can never gain a book, so it is worth no lookup.
-		if s.lookahead == nil || t.Completed {
+		if s.lookahead == nil || t.Completed || lookups >= maxSeriesLookups {
 			continue
 		}
+		lookups++
 		q := library.SeriesQuery{Series: target, IncludeNovellas: s.prefs.IncludeNovellas}
 		entry, found, err := s.lookahead.Next(ctx, q)
 		if err != nil {
-			return picker.Recommendation{}, false, err
+			// A throttled or unreachable backend costs the continuation, not
+			// the page: fall through to a variety pick.
+			log.Printf("looking up the next book in %q: %v", t.Name, err)
+			return picker.Recommendation{}, series.Tracked{}, false, nil
 		}
 		if found {
-			return picker.ContinueSeries(entry, lastRating(t.Name, reads)), true, nil
+			return picker.ContinueSeries(entry, lastRating(t.Name, reads)), t, true, nil
 		}
 	}
-	return picker.Recommendation{}, false, nil
+	return picker.Recommendation{}, series.Tracked{}, false, nil
 }
 
 // lastRating is how the reader rated the most recent book they finished in the
 // named series, or 0 when they left it unrated.
 func lastRating(name string, reads []library.Entry) float64 {
 	for _, e := range reads {
-		if e.Book.Series != nil && strings.EqualFold(e.Book.Series.Name, name) {
+		if e.Book.Series != nil && series.Key(e.Book.Series.Name) == series.Key(name) {
 			return e.Rating
 		}
 	}
@@ -390,7 +418,7 @@ func withoutDropped(toRead []library.Entry, tracked []series.Tracked) []library.
 	dropped := make(map[string]bool)
 	for _, t := range tracked {
 		if t.Decision == series.Dropped {
-			dropped[strings.ToLower(t.Name)] = true
+			dropped[series.Key(t.Name)] = true
 		}
 	}
 	if len(dropped) == 0 {
@@ -398,7 +426,7 @@ func withoutDropped(toRead []library.Entry, tracked []series.Tracked) []library.
 	}
 	kept := make([]library.Entry, 0, len(toRead))
 	for _, e := range toRead {
-		if e.Book.Series != nil && dropped[strings.ToLower(e.Book.Series.Name)] {
+		if e.Book.Series != nil && dropped[series.Key(e.Book.Series.Name)] {
 			continue
 		}
 		kept = append(kept, e)
@@ -406,19 +434,19 @@ func withoutDropped(toRead []library.Entry, tracked []series.Tracked) []library.
 	return kept
 }
 
-// isTracked reports whether a recommendation belongs to a series the reader has
-// read into. Standing decisions are offered only for those: a series they have
-// never started is refused by taking its book off the reading list instead.
-func isTracked(rec picker.Recommendation, tracked []series.Tracked) bool {
+// trackedFor finds the tracked series a recommendation belongs to. Standing
+// decisions are offered only for those: a series the reader has never started
+// is refused by taking its book off the reading list instead.
+func trackedFor(rec picker.Recommendation, tracked []series.Tracked) (series.Tracked, bool) {
 	if rec.Entry.Book.Series == nil {
-		return false
+		return series.Tracked{}, false
 	}
 	for _, t := range tracked {
-		if strings.EqualFold(t.Name, rec.Entry.Book.Series.Name) && t.Position > 0 {
-			return true
+		if series.Key(t.Name) == series.Key(rec.Entry.Book.Series.Name) && t.Position > 0 {
+			return t, true
 		}
 	}
-	return false
+	return series.Tracked{}, false
 }
 
 func handleHealthcheck(w http.ResponseWriter, _ *http.Request) {

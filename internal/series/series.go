@@ -77,6 +77,10 @@ type Tracked struct {
 	Completed bool
 }
 
+// Key normalises a series name the way the store matches on it, so callers
+// comparing names against tracked series agree with the database.
+func Key(name string) string { return key(name) }
+
 // key normalises a series name into its storage key. Names are the only
 // identifier Hardcover and Grimmory share, so matching is case- and
 // whitespace-insensitive (see ADR 0001 and CONTEXT.md).

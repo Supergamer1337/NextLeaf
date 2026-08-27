@@ -279,19 +279,19 @@
 
       <div class="actions">
         <a class="btn" href="/?another=1">Pick another</a>
-        {{if and $.Decidable .Entry.Book.Series}}
-        {{$series := .Entry.Book.Series}}
+        {{if $.Decidable}}
+        {{$name := $.Decide.Name}}
         <form class="decide" method="post" action="/series/pin">
-          <input type="hidden" name="name" value="{{$series.Name}}">
-          <input type="hidden" name="position" value="{{$series.Position}}">
+          <input type="hidden" name="name" value="{{$name}}">
+          {{with .Entry.Book.Series}}<input type="hidden" name="position" value="{{.Position}}">{{end}}
           <button class="btn btn--quiet" type="submit">Reading this next</button>
         </form>
         <form class="decide" method="post" action="/series/park">
-          <input type="hidden" name="name" value="{{$series.Name}}">
+          <input type="hidden" name="name" value="{{$name}}">
           <button class="btn btn--quiet" type="submit">Park for one book</button>
         </form>
         <form class="decide" method="post" action="/series/drop">
-          <input type="hidden" name="name" value="{{$series.Name}}">
+          <input type="hidden" name="name" value="{{$name}}">
           <button class="btn btn--quiet" type="submit">Drop this series</button>
         </form>
         {{end}}

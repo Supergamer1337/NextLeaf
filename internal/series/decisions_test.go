@@ -153,3 +153,21 @@ func TestPinningASecondSeriesReplacesTheFirst(t *testing.T) {
 		t.Errorf("Wheel of Time Decision = %v, want Pinned", got)
 	}
 }
+
+func TestPinWithoutAKnownPositionIsNotClearedImmediately(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	// Some catalogues give a series name but no position. The pin still means
+	// "this series next", and must survive the reconcile that follows it.
+	if err := st.Pin(ctx, "Mistborn", day0, 0); err != nil {
+		t.Fatalf("Pin: %v", err)
+	}
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{finished("Mistborn", 3, day0)}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if got := decisionOf(t, st, "Mistborn"); got != Pinned {
+		t.Errorf("Decision = %v, want Pinned: a positionless pin was spent before it was ever shown", got)
+	}
+}

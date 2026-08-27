@@ -2,10 +2,12 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -198,4 +200,127 @@ type historyStub struct{}
 func (historyStub) Name() string { return "stub" }
 func (historyStub) ReadHistory(_ context.Context) ([]library.Entry, error) {
 	return nil, nil
+}
+
+// flakySource fails on RecentReads, as a throttled backend would.
+type flakySource struct{ stubSource }
+
+func (flakySource) RecentReads(_ context.Context, _ int) ([]library.Entry, error) {
+	return nil, errors.New("rate limited")
+}
+
+func TestParkIsRefusedWhenTheReadingHistoryCannotBeRead(t *testing.T) {
+	st := testStore(t)
+	h := ready(t, flakySource{}, st)
+
+	// Anchoring a park to an unknown "newest finish" would record a park that
+	// the very next reconcile throws away, so it must not be recorded at all.
+	rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}})
+	if rec.Code == http.StatusSeeOther {
+		t.Fatal("park was accepted despite an unreadable reading history")
+	}
+
+	tracked, ok, err := st.Get(context.Background(), "Mistborn")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if ok && tracked.Decision == series.Parked {
+		t.Error("a park was recorded that could not be anchored")
+	}
+}
+
+// omnibusResolver resolves an off-shelf next book that the catalogue files
+// under a differently named omnibus series, as Hardcover's sub-series do.
+type omnibusResolver struct{ stubSource }
+
+func (omnibusResolver) NextInSeries(_ context.Context, _ library.SeriesQuery) (library.Entry, bool, error) {
+	e := seriesEntry("Book 4", "The Mistborn Saga: The Original Trilogy", 4)
+	return e, true, nil
+}
+
+func TestDecisionsAreRecordedAgainstTheTrackedSeriesNotTheBooksOwnLabel(t *testing.T) {
+	read := seriesEntry("Book 3", "Mistborn", 3)
+	read.FinishedAt = time.Now().Add(-24 * time.Hour)
+	src := omnibusResolver{stubSource: stubSource{reads: []library.Entry{read}}}
+
+	st := testStore(t)
+	h := ready(t, src, st)
+	body := getBody(t, h, "/")
+
+	if !strings.Contains(body, "Book 4") {
+		t.Fatalf("expected the resolved continuation:\n%s", body)
+	}
+	// Parking from this card must park Mistborn, the series being continued,
+	// not the omnibus the volume happens to be labelled with.
+	if !strings.Contains(body, `value="Mistborn"`) {
+		t.Errorf("decision forms should carry the tracked series name:\n%s", formValues(body))
+	}
+
+	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /series/drop: status = %d, want 303", rec.Code)
+	}
+	tracked, ok, err := st.Get(context.Background(), "Mistborn")
+	if err != nil || !ok {
+		t.Fatalf("Get = (%v, %v)", ok, err)
+	}
+	if tracked.Decision != series.Dropped {
+		t.Errorf("Decision = %v, want Dropped", tracked.Decision)
+	}
+}
+
+// manySeries reports a reader tracked in many series, none with a book shelved.
+func manySeries(n int) stubSource {
+	var reads []library.Entry
+	for i := 0; i < n; i++ {
+		e := seriesEntry("Book", "Series "+strconv.Itoa(i), 1)
+		e.FinishedAt = time.Now().Add(-time.Duration(i) * time.Hour)
+		reads = append(reads, e)
+	}
+	return stubSource{reads: reads, toRead: []library.Entry{{Book: library.Book{Title: "Standalone"}}}}
+}
+
+// countingResolver records how many next-in-series lookups a page load makes.
+type countingResolver struct {
+	stubSource
+	calls int
+	err   error
+}
+
+func (c *countingResolver) NextInSeries(_ context.Context, _ library.SeriesQuery) (library.Entry, bool, error) {
+	c.calls++
+	return library.Entry{}, false, c.err
+}
+
+func TestAPageLoadDoesNotAskAboutEverySeriesTheReaderHasEverFinished(t *testing.T) {
+	src := &countingResolver{stubSource: manySeries(40)}
+	h := ready(t, src, testStore(t))
+
+	if body := getBody(t, h, "/"); !strings.Contains(body, "Standalone") {
+		t.Error("no recommendation was served")
+	}
+	if src.calls > maxSeriesLookups {
+		t.Errorf("made %d lookups for one page load, want at most %d", src.calls, maxSeriesLookups)
+	}
+}
+
+func TestAThrottledResolverStillYieldsARecommendation(t *testing.T) {
+	// One backend refusing must degrade to a variety pick, not blank the page.
+	src := &countingResolver{stubSource: manySeries(3), err: errors.New("rate limited")}
+	h := ready(t, src, testStore(t))
+
+	body := getBody(t, h, "/")
+	if !strings.Contains(body, "Standalone") {
+		t.Errorf("a throttled resolver blanked the page instead of falling back:\n%s", body)
+	}
+}
+
+// formValues extracts the decision forms' hidden values for failure messages.
+func formValues(body string) string {
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, `name="name"`) {
+			out = append(out, strings.TrimSpace(line))
+		}
+	}
+	return strings.Join(out, "\n")
 }

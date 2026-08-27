@@ -215,7 +215,6 @@ func parseInstant(s string) time.Time {
 	return t
 }
 
-// parseYear extracts the four-digit year from a date string, returning zero when the string is too short or does not start with a valid year.
 // parseDay reads Grimmory's full publication date. Many books carry only a
 // year or a year-month, which yields the zero time so callers fall back to
 // ReleaseYear rather than assuming the 1st of January.
@@ -227,6 +226,7 @@ func parseDay(s string) time.Time {
 	return t
 }
 
+// parseYear extracts the four-digit year from a date string, returning zero when the string is too short or does not start with a valid year.
 func parseYear(s string) int {
 	if len(s) < 4 {
 		return 0
