@@ -13,7 +13,7 @@ type resolverSource struct {
 	found bool
 }
 
-func (s resolverSource) NextInSeries(_ context.Context, _ Series) (Entry, bool, error) {
+func (s resolverSource) NextInSeries(_ context.Context, _ SeriesQuery) (Entry, bool, error) {
 	return s.next, s.found, nil
 }
 
@@ -38,7 +38,7 @@ func TestAsSeriesResolverSeesThroughCache(t *testing.T) {
 	if !ok {
 		t.Fatal("AsSeriesResolver should see through Cached to a capable source")
 	}
-	entry, found, err := r.NextInSeries(context.Background(), Series{Name: "S", Position: 1})
+	entry, found, err := r.NextInSeries(context.Background(), SeriesQuery{Series: Series{Name: "S", Position: 1}})
 	if err != nil || !found || entry.Book.Title != "Book 2" {
 		t.Errorf("NextInSeries = (%+v, %v, %v), want Book 2/true/nil", entry, found, err)
 	}
@@ -66,7 +66,7 @@ func TestMultiResolvesSeriesFromCapableSource(t *testing.T) {
 	if !ok {
 		t.Fatal("Multi should resolve series when one source is capable")
 	}
-	entry, found, err := r.NextInSeries(context.Background(), Series{Name: "S"})
+	entry, found, err := r.NextInSeries(context.Background(), SeriesQuery{Series: Series{Name: "S"}})
 	if err != nil || !found || entry.Book.Title != "Next" {
 		t.Errorf("NextInSeries = (%+v, %v, %v), want Next/true/nil", entry, found, err)
 	}

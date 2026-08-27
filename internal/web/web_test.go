@@ -39,7 +39,7 @@ type resolverStub struct {
 	found bool
 }
 
-func (s resolverStub) NextInSeries(_ context.Context, _ library.Series) (library.Entry, bool, error) {
+func (s resolverStub) NextInSeries(_ context.Context, _ library.SeriesQuery) (library.Entry, bool, error) {
 	return s.next, s.found, nil
 }
 
@@ -47,11 +47,13 @@ func seriesEntry(title, series string, pos float64) library.Entry {
 	return library.Entry{Book: library.Book{Title: title, Series: &library.Series{Name: series, Position: pos}}}
 }
 
+// get exercises a fully configured app: a source, a series store, and a
+// history import that has already finished.
 func get(t *testing.T, src library.Source, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	rec := httptest.NewRecorder()
-	NewHandler(src).ServeHTTP(rec, req)
+	ready(t, src, testStore(t)).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET %s: status = %d, want %d", target, rec.Code, http.StatusOK)
 	}
@@ -124,7 +126,7 @@ func TestCoverRouteNotFoundCases(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tc.target, nil)
 			rec := httptest.NewRecorder()
-			NewHandler(tc.src).ServeHTTP(rec, req)
+			NewHandler(Deps{Source: tc.src}).ServeHTTP(rec, req)
 			if rec.Code != http.StatusNotFound {
 				t.Errorf("status = %d, want 404", rec.Code)
 			}
@@ -142,7 +144,7 @@ func TestHealthcheck(t *testing.T) {
 func TestUnknownPathIsNotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/nope", nil)
 	rec := httptest.NewRecorder()
-	NewHandler(nil).ServeHTTP(rec, req)
+	NewHandler(Deps{}).ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d (root pattern must not be a catch-all)", rec.Code, http.StatusNotFound)
 	}
@@ -234,18 +236,6 @@ func TestSelectorShowsTradeOffs(t *testing.T) {
 	}
 	if !strings.Contains(body, "Leans into Fantasy") {
 		t.Errorf("trade-off reason should be present:\n%s", body)
-	}
-}
-
-func TestSelectorSkipsDislikedSeries(t *testing.T) {
-	// The most recent series book was rated low, so we shouldn't push its sequel.
-	src := stubSource{
-		reads:  []library.Entry{{Book: library.Book{Title: "Meh 1", Series: &library.Series{Name: "Meh", Position: 1}}, Rating: 1}},
-		toRead: []library.Entry{{Book: library.Book{Title: "Better Pick"}}, {Book: library.Book{Title: "Meh 2", Series: &library.Series{Name: "Meh", Position: 2}}}},
-	}
-	body := get(t, src, "/").Body.String()
-	if strings.Contains(body, "Continues") {
-		t.Errorf("a series rated below the gate should not be continued:\n%s", body)
 	}
 }
 

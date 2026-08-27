@@ -100,10 +100,6 @@ const (
 	lengthShort      = 350
 	lengthShortBoost = 1.2
 	lengthLongDamp   = 0.85
-
-	// SeriesRatingGate is the lowest rating at which a rated in-progress series
-	// is still worth continuing; below it, the picker won't push the next book.
-	SeriesRatingGate = 3.0
 )
 
 // profile summarises recent reading so dimensions can judge each candidate

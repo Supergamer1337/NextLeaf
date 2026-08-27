@@ -142,6 +142,46 @@
     .btn:hover { transform: translateY(-1px); filter: brightness(1.07); }
     :is(.btn, .theme-toggle):focus-visible { outline: 2px solid var(--moss); outline-offset: 3px; }
 
+    /* Series decisions */
+    .btn--quiet {
+      color: var(--ink); background: transparent; border: 1px solid var(--line);
+      padding: 0.5rem 1rem; font-weight: 500;
+    }
+    .btn--quiet:hover { filter: none; border-color: var(--moss); color: var(--moss); }
+    .decide { display: contents; }
+
+    /* Series panel */
+    .panel { margin-top: 2.2rem; }
+    .panel > summary {
+      cursor: pointer; color: var(--muted); font-size: 0.82rem; letter-spacing: 0.04em;
+      text-transform: uppercase; list-style: none; padding: 0.4rem 0;
+    }
+    .panel > summary::-webkit-details-marker { display: none; }
+    .panel > summary::before { content: "▸ "; }
+    .panel[open] > summary::before { content: "▾ "; }
+    .panel > summary:hover { color: var(--moss); }
+    .panel-body {
+      margin-top: 0.5rem; background: var(--card); border: 1px solid var(--line);
+      border-radius: 12px; padding: 1rem 1.2rem;
+    }
+    .panel-group + .panel-group { margin-top: 1.1rem; }
+    .panel-label {
+      font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+    }
+    .panel-list { list-style: none; margin: 0.4rem 0 0; padding: 0; }
+    .panel-list li {
+      display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap;
+      padding: 0.32rem 0; font-size: 0.9rem; border-top: 1px solid var(--line);
+    }
+    .panel-list li:first-child { border-top: none; }
+    .panel-pos { color: var(--muted); font-size: 0.78rem; }
+    .panel-undo {
+      margin-left: auto; font: inherit; font-size: 0.78rem; color: var(--muted);
+      background: none; border: none; padding: 0; cursor: pointer;
+      text-decoration: underline; text-underline-offset: 3px;
+    }
+    .panel-undo:hover { color: var(--moss); }
+
     /* Notices */
     .notice {
       margin-top: 1.6rem; background: var(--card); border: 1px solid var(--line);
@@ -178,7 +218,11 @@
       <p class="notice">No reading source connected. Set <code>HARDCOVER_TOKEN</code> and restart to get a recommendation.</p>
     {{else if .Error}}
       <p class="notice notice--error">Couldn’t reach your library: {{.Error}}</p>
-    {{else if not .HasRec}}
+    {{else}}
+      {{if .Importing}}
+      <p class="notice">Series tracking is still importing your reading history. Until it finishes you’ll get variety picks only.</p>
+      {{end}}
+      {{if not .HasRec}}
       <p class="lede">Nothing to recommend yet.</p>
       <p class="notice">Your Want-to-Read list is empty — add a few books and come back.</p>
     {{else}}
@@ -235,7 +279,36 @@
 
       <div class="actions">
         <a class="btn" href="/?another=1">Pick another</a>
+        {{if and $.Decidable .Entry.Book.Series}}
+        {{$series := .Entry.Book.Series}}
+        <form class="decide" method="post" action="/series/pin">
+          <input type="hidden" name="name" value="{{$series.Name}}">
+          <input type="hidden" name="position" value="{{$series.Position}}">
+          <button class="btn btn--quiet" type="submit">Reading this next</button>
+        </form>
+        <form class="decide" method="post" action="/series/park">
+          <input type="hidden" name="name" value="{{$series.Name}}">
+          <button class="btn btn--quiet" type="submit">Park for one book</button>
+        </form>
+        <form class="decide" method="post" action="/series/drop">
+          <input type="hidden" name="name" value="{{$series.Name}}">
+          <button class="btn btn--quiet" type="submit">Drop this series</button>
+        </form>
+        {{end}}
       </div>
+      {{end}}
+      {{end}}
+
+      {{if .Panel.Any}}
+      <details class="panel">
+        <summary>Series you’re tracking</summary>
+        <div class="panel-body">
+          {{template "seriesGroup" dict "Label" "Reading next" "Items" .Panel.Pinned "Undo" "Unpin"}}
+          {{template "seriesGroup" dict "Label" "Active" "Items" .Panel.Active "Undo" ""}}
+          {{template "seriesGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now"}}
+          {{template "seriesGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
+        </div>
+      </details>
       {{end}}
     {{end}}
   </main>
@@ -274,3 +347,25 @@
 {{end}}
 
 {{define "authors"}}{{range $i, $a := .}}{{if $i}}, {{end}}{{$a}}{{end}}{{end}}
+
+{{define "seriesGroup"}}
+{{if .Items}}
+<div class="panel-group">
+  <span class="panel-label">{{.Label}}</span>
+  <ul class="panel-list">
+    {{range .Items}}
+    <li>
+      <span>{{.Name}}</span>
+      {{if .Position}}<span class="panel-pos">read to book {{.Position}}</span>{{end}}
+      {{if $.Undo}}
+      <form method="post" action="/series/clear">
+        <input type="hidden" name="name" value="{{.Name}}">
+        <button class="panel-undo" type="submit">{{$.Undo}}</button>
+      </form>
+      {{end}}
+    </li>
+    {{end}}
+  </ul>
+</div>
+{{end}}
+{{end}}
