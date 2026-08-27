@@ -324,3 +324,106 @@ func formValues(body string) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+// caughtUp is a reader tracked in two series, one of which has nothing left.
+func caughtUpStore(t *testing.T) *series.Store {
+	t.Helper()
+	st := testStore(t)
+	ctx := context.Background()
+	reads := []library.Entry{seriesEntry("Book 3", "Mistborn", 3), seriesEntry("Book 4", "Stormlight", 4)}
+	if err := st.Reconcile(ctx, series.Snapshot{Reads: reads}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	next := library.Entry{Book: library.Book{
+		Title:    "The Alloy of Law",
+		Series:   &library.Series{Name: "Mistborn", Position: 4},
+		CoverURL: "https://covers.example/alloy.jpg",
+	}}
+	if err := st.SetNext(ctx, "Mistborn", next, true, time.Now()); err != nil {
+		t.Fatalf("SetNext: %v", err)
+	}
+	if err := st.SetNext(ctx, "Stormlight", library.Entry{}, false, time.Now()); err != nil {
+		t.Fatalf("SetNext: %v", err)
+	}
+	return st
+}
+
+func TestDrawerFilesACaughtUpSeriesUnderFinished(t *testing.T) {
+	h := ready(t, stubSource{}, caughtUpStore(t))
+	body := getBody(t, h, "/")
+
+	finished := section(body, "Finished")
+	if !strings.Contains(finished, "Stormlight") {
+		t.Errorf("Stormlight is not in the Finished drawer:\n%s", finished)
+	}
+	if strings.Contains(section(body, "Active"), "Stormlight") {
+		t.Error("a caught-up series is still listed as active")
+	}
+}
+
+func TestDrawerShowsTheNextBookAndItsCover(t *testing.T) {
+	h := ready(t, stubSource{}, caughtUpStore(t))
+	body := getBody(t, h, "/")
+
+	if !strings.Contains(body, "The Alloy of Law") {
+		t.Error("the drawer does not name the next book")
+	}
+	if !strings.Contains(body, "https://covers.example/alloy.jpg") {
+		t.Error("the drawer does not show the next book's cover")
+	}
+}
+
+func TestDrawerRowsOfferDropAndPick(t *testing.T) {
+	st := caughtUpStore(t)
+	h := ready(t, stubSource{}, st)
+	body := getBody(t, h, "/")
+
+	if strings.Count(body, `action="/series/drop"`) < 2 {
+		t.Error("drawer rows do not offer Drop")
+	}
+
+	// Picking from a row pins the series to the book the drawer is showing.
+	form := url.Values{"name": {"Mistborn"}, "position": {"4"}}
+	if rec := post(t, h, "/series/pin", form); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /series/pin: status = %d, want 303", rec.Code)
+	}
+	tracked, _, err := st.Get(context.Background(), "Mistborn")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if tracked.Decision != series.Pinned || tracked.PinnedPosition != 4 {
+		t.Errorf("Decision = %v at %v, want Pinned at book 4", tracked.Decision, tracked.PinnedPosition)
+	}
+}
+
+// section returns the drawer group whose label is name, for readable failures.
+func section(body, name string) string {
+	marker := ">" + name + "<"
+	i := strings.Index(body, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := body[i:]
+	if end := strings.Index(rest, "drawer-group"); end > 0 {
+		return rest[:end]
+	}
+	return rest
+}
+
+func TestADroppedRowDoesNotAlsoOfferToPickIt(t *testing.T) {
+	st := caughtUpStore(t)
+	h := ready(t, stubSource{}, st)
+	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /series/drop: status = %d, want 303", rec.Code)
+	}
+
+	// Offering "Pick this" next to "Undrop" asks the reader to hold two
+	// contradictory intentions; undropping is the way back.
+	dropped := section(getBody(t, h, "/"), "Dropped")
+	if strings.Contains(dropped, "Pick this") {
+		t.Errorf("a dropped series still offers Pick this:\n%s", dropped)
+	}
+	if !strings.Contains(dropped, "Undrop") {
+		t.Errorf("a dropped series offers no way back:\n%s", dropped)
+	}
+}

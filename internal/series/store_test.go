@@ -178,3 +178,107 @@ func TestSeriesIdentityHintsAreNotErasedBySourcesThatLackThem(t *testing.T) {
 		t.Errorf("Slug = %q, want it kept from the source that knew it", tracked.Slug)
 	}
 }
+
+func nextBook(title string) library.Entry {
+	return library.Entry{Book: library.Book{
+		Title:    title,
+		Series:   &library.Series{Name: "Mistborn", Position: 4},
+		CoverURL: "https://covers.example/" + title + ".jpg",
+		URL:      "https://hardcover.app/books/" + title,
+	}}
+}
+
+func TestNextBookIsRememberedForTheDrawer(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := st.SetNext(ctx, "Mistborn", nextBook("alloy"), true, day0); err != nil {
+		t.Fatalf("SetNext: %v", err)
+	}
+
+	tracked, _, err := st.Get(ctx, "Mistborn")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if tracked.NextTitle != "alloy" {
+		t.Errorf("NextTitle = %q, want alloy", tracked.NextTitle)
+	}
+	if tracked.NextCoverURL == "" {
+		t.Error("NextCoverURL is empty; the drawer has no cover to show")
+	}
+	if tracked.CaughtUp {
+		t.Error("CaughtUp = true for a series with a next book")
+	}
+}
+
+func TestASeriesWithNoNextBookIsMarkedCaughtUp(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := st.SetNext(ctx, "Mistborn", library.Entry{}, false, day0); err != nil {
+		t.Fatalf("SetNext: %v", err)
+	}
+
+	tracked, _, err := st.Get(ctx, "Mistborn")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !tracked.CaughtUp {
+		t.Error("CaughtUp = false; a series with nothing left belongs in the Finished drawer")
+	}
+	if tracked.NextTitle != "" {
+		t.Errorf("NextTitle = %q, want it cleared", tracked.NextTitle)
+	}
+}
+
+func TestReadingTheRememberedNextBookClearsIt(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := st.SetNext(ctx, "Mistborn", nextBook("alloy"), true, day0); err != nil {
+		t.Fatalf("SetNext: %v", err)
+	}
+	// Reading book 4 makes the remembered "next" the book behind you; the
+	// drawer must not keep offering it until the next resync.
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 4)}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	tracked, _, err := st.Get(ctx, "Mistborn")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if tracked.NextTitle != "" {
+		t.Errorf("NextTitle = %q, want it cleared once that book was read", tracked.NextTitle)
+	}
+}
+
+func TestANewReleaseTakesASeriesBackOutOfFinished(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	if err := st.SetNext(ctx, "Mistborn", library.Entry{}, false, day0); err != nil {
+		t.Fatalf("SetNext: %v", err)
+	}
+	// A later resync finds a book that did not exist before.
+	if err := st.SetNext(ctx, "Mistborn", nextBook("lost-metal"), true, day2); err != nil {
+		t.Fatalf("SetNext: %v", err)
+	}
+
+	tracked, _, err := st.Get(ctx, "Mistborn")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if tracked.CaughtUp {
+		t.Error("CaughtUp = true; a new release should take the series back out of Finished")
+	}
+}

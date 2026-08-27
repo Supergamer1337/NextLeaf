@@ -53,6 +53,13 @@ change it or it clears itself: *parked*, *dropped* or *pinned*. A series with no
 standing decision is simply active.
 _Avoid_: series status, series state, flag
 
+**Caught up**:
+Having read everything published in a tracked series, so it offers nothing
+until a new volume appears. Distinct from the series itself being *completed*,
+which is a fact about the author having ended it. The drawer files these under
+"Finished".
+_Avoid_: finished, completed, done, exhausted
+
 **Backfill**:
 The one-time import of your complete read history from every source, run once so
 that series you finished long before installing NextLeaf are tracked. Until it

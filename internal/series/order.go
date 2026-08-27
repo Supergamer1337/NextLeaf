@@ -19,7 +19,8 @@ const (
 // Order ranks tracked series by which deserves a continuation first: the pinned
 // one, then whichever was most recently finished, then one merely in progress,
 // and last the series outside the recent window, where only a newly released
-// book would have anything to offer. Parked and dropped series are left out.
+// book would have anything to offer. Parked, dropped and caught-up series are
+// left out.
 //
 // It returns every eligible series rather than just the winner, so the caller
 // can move on to the next when a series turns out to have no next book.
@@ -50,6 +51,11 @@ func Order(tracked []Tracked, reads, reading []library.Entry) []Tracked {
 	var out []ranked
 	for _, t := range tracked {
 		if t.Decision == Parked || t.Decision == Dropped {
+			continue
+		}
+		// Nothing left to read is nothing to recommend; the drawer files these
+		// under Finished until a new volume appears.
+		if t.CaughtUp {
 			continue
 		}
 		k := key(t.Name)

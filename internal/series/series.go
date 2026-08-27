@@ -75,6 +75,19 @@ type Tracked struct {
 	// Completed marks a series that can never gain another book, so it is
 	// worth no new-release lookup.
 	Completed bool
+
+	// CaughtUp means the last lookup found nothing left to read. Distinct from
+	// Completed: a series the author is still writing can leave you caught up
+	// until the next volume appears. The UI files these under "Finished".
+	CaughtUp bool
+	// NextTitle, NextCoverURL, NextURL and NextPosition describe the book the
+	// last lookup found, so the drawer can show it without asking again.
+	NextTitle    string
+	NextCoverURL string
+	NextURL      string
+	NextPosition float64
+	// CheckedAt is when the next book was last looked up.
+	CheckedAt time.Time
 }
 
 // Key normalises a series name the way the store matches on it, so callers

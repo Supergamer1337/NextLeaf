@@ -27,6 +27,12 @@ var migrations = []string{
 	)`,
 	`ALTER TABLE tracked_series ADD COLUMN slug TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE tracked_series ADD COLUMN completed INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE tracked_series ADD COLUMN caught_up INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE tracked_series ADD COLUMN next_title TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tracked_series ADD COLUMN next_cover_url TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tracked_series ADD COLUMN next_url TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tracked_series ADD COLUMN next_position REAL NOT NULL DEFAULT 0`,
+	`ALTER TABLE tracked_series ADD COLUMN checked_at INTEGER NOT NULL DEFAULT 0`,
 }
 
 // Store is the durable record of tracked series and standing decisions.
@@ -138,10 +144,44 @@ func observe(ctx context.Context, tx *sql.Tx, s library.Series) error {
 			position = MAX(position, excluded.position),
 			-- A source that knows no slug must not blank one another supplied.
 			slug = CASE WHEN excluded.slug != '' THEN excluded.slug ELSE slug END,
-			completed = MAX(completed, excluded.completed)`,
+			completed = MAX(completed, excluded.completed),
+			-- Reaching the remembered next book makes it the book behind you.
+			next_title = CASE WHEN excluded.position >= next_position AND next_position > 0 THEN '' ELSE next_title END,
+			next_cover_url = CASE WHEN excluded.position >= next_position AND next_position > 0 THEN '' ELSE next_cover_url END,
+			next_url = CASE WHEN excluded.position >= next_position AND next_position > 0 THEN '' ELSE next_url END,
+			next_position = CASE WHEN excluded.position >= next_position THEN 0 ELSE next_position END`,
 		key(s.Name), s.Name, s.Position, s.Slug, boolToInt(s.Completed))
 	if err != nil {
 		return fmt.Errorf("tracking series %q: %w", s.Name, err)
+	}
+	return nil
+}
+
+// SetNext records the book a lookup found after a series' current position, or
+// marks the series caught up when there is nothing left. A later lookup finding
+// a newly published book takes the series back out of "caught up".
+func (s *Store) SetNext(ctx context.Context, name string, next library.Entry, found bool, at time.Time) error {
+	var title, cover, url string
+	var pos float64
+	if found {
+		title, cover, url = next.Book.Title, next.Book.CoverURL, next.Book.URL
+		if next.Book.Series != nil {
+			pos = next.Book.Series.Position
+		}
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO tracked_series (name, display_name, caught_up, next_title, next_cover_url, next_url, next_position, checked_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(name) DO UPDATE SET
+			caught_up = excluded.caught_up,
+			next_title = excluded.next_title,
+			next_cover_url = excluded.next_cover_url,
+			next_url = excluded.next_url,
+			next_position = excluded.next_position,
+			checked_at = excluded.checked_at`,
+		key(name), name, boolToInt(!found), title, cover, url, pos, at.Unix())
+	if err != nil {
+		return fmt.Errorf("recording the next book of series %q: %w", name, err)
 	}
 	return nil
 }
@@ -150,7 +190,7 @@ func observe(ctx context.Context, tx *sql.Tx, s library.Series) error {
 // stable order.
 func (s *Store) List(ctx context.Context) ([]Tracked, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT display_name, position, decision, decided_at, parked_after, pinned_position, slug, completed
+		SELECT display_name, position, decision, decided_at, parked_after, pinned_position, slug, completed, caught_up, next_title, next_cover_url, next_url, next_position, checked_at
 		FROM tracked_series ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -160,16 +200,17 @@ func (s *Store) List(ctx context.Context) ([]Tracked, error) {
 	var out []Tracked
 	for rows.Next() {
 		var (
-			t                      Tracked
-			decision               string
-			decidedAt, parkedAfter int64
+			t                                 Tracked
+			decision                          string
+			decidedAt, parkedAfter, checkedAt int64
 		)
-		if err := rows.Scan(&t.Name, &t.Position, &decision, &decidedAt, &parkedAfter, &t.PinnedPosition, &t.Slug, &t.Completed); err != nil {
+		if err := rows.Scan(&t.Name, &t.Position, &decision, &decidedAt, &parkedAfter, &t.PinnedPosition, &t.Slug, &t.Completed, &t.CaughtUp, &t.NextTitle, &t.NextCoverURL, &t.NextURL, &t.NextPosition, &checkedAt); err != nil {
 			return nil, err
 		}
 		t.Decision = parseDecision(decision)
 		t.DecidedAt = unix(decidedAt)
 		t.ParkedAfter = unix(parkedAfter)
+		t.CheckedAt = unix(checkedAt)
 		out = append(out, t)
 	}
 	return out, rows.Err()
@@ -178,14 +219,14 @@ func (s *Store) List(ctx context.Context) ([]Tracked, error) {
 // Get returns the tracked series by name. ok is false when it isn't tracked.
 func (s *Store) Get(ctx context.Context, name string) (Tracked, bool, error) {
 	var (
-		t                      Tracked
-		decision               string
-		decidedAt, parkedAfter int64
+		t                                 Tracked
+		decision                          string
+		decidedAt, parkedAfter, checkedAt int64
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT display_name, position, decision, decided_at, parked_after, pinned_position, slug, completed
+		SELECT display_name, position, decision, decided_at, parked_after, pinned_position, slug, completed, caught_up, next_title, next_cover_url, next_url, next_position, checked_at
 		FROM tracked_series WHERE name = ?`, key(name)).
-		Scan(&t.Name, &t.Position, &decision, &decidedAt, &parkedAfter, &t.PinnedPosition, &t.Slug, &t.Completed)
+		Scan(&t.Name, &t.Position, &decision, &decidedAt, &parkedAfter, &t.PinnedPosition, &t.Slug, &t.Completed, &t.CaughtUp, &t.NextTitle, &t.NextCoverURL, &t.NextURL, &t.NextPosition, &checkedAt)
 	switch {
 	case err == sql.ErrNoRows:
 		return Tracked{}, false, nil
@@ -195,6 +236,7 @@ func (s *Store) Get(ctx context.Context, name string) (Tracked, bool, error) {
 	t.Decision = parseDecision(decision)
 	t.DecidedAt = unix(decidedAt)
 	t.ParkedAfter = unix(parkedAfter)
+	t.CheckedAt = unix(checkedAt)
 	return t, true, nil
 }
 

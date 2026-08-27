@@ -101,11 +101,20 @@ func startSeriesTracking(source library.Source) (*series.Store, *series.Backfill
 	log.Printf("series tracking using %s", path)
 
 	backfill := series.NewBackfill(store, library.AsHistoryProviders(source))
+
+	// Resolving each series' next book is what fills the drawer and notices a
+	// new release, so it runs here in the background rather than on the
+	// request path, where a reader tracked in hundreds of series would pay for
+	// it on every page load.
+	var refresher *series.Refresher
+	if resolver, ok := library.AsSeriesResolver(source); ok {
+		refresher = series.NewRefresher(store, series.NewLookahead(resolver, resyncInterval), includeNovellas())
+	}
+
 	go func() {
 		for {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 			backfill.Run(ctx)
-			cancel()
 
 			status := backfill.Status()
 			if len(status.Failed) > 0 {
@@ -114,6 +123,13 @@ func startSeriesTracking(source library.Source) (*series.Store, *series.Backfill
 			} else {
 				log.Printf("series history imported (%d books)", status.Imported)
 			}
+
+			if refresher != nil {
+				refresher.Run(ctx)
+				log.Print("series next-book lookups refreshed")
+			}
+			cancel()
+
 			time.Sleep(resyncInterval)
 		}
 	}()

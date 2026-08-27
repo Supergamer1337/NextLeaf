@@ -27,9 +27,15 @@ decisions:
   the variety pool too. Adding one of its books back to your reading list undoes
   it.
 
-A folding panel under the recommendation lists everything tracked and is where
-you unpin, resume or undrop. Books that aren't out yet are never recommended,
-and novellas at half-positions (book 3.5) are offered unless you turn them off.
+A side drawer lists every series you're tracking with the cover of its next
+book, and carries **Pick this** and **Drop** on each row plus the undo that
+fits its state. Series you're caught up with sit in a **Finished** drawer at
+the bottom, and move back out on their own when a new book appears.
+
+Books that aren't out yet are never recommended, and novellas at half-positions
+(book 3.5) are offered unless you turn them off. Translations, split editions
+and omnibus bundles are filtered out: Hardcover files all of them at the same
+series position, so NextLeaf picks the one with an English edition.
 
 ![NextLeaf recommending a book in light mode](docs/screenshots/light.png)
 *A variety-weighted pick, and why it was chosen.*

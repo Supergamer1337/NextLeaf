@@ -227,31 +227,40 @@ type selectData struct {
 	Panel     panel
 }
 
-// panel is the series management surface: every tracked series, grouped by the
-// standing decision that applies to it.
+// panel is the series drawer: every tracked series, grouped by what applies to
+// it. Finished sits last because it is a record of what is done, not a list of
+// anything to act on.
 type panel struct {
-	Pinned  []series.Tracked
-	Active  []series.Tracked
-	Parked  []series.Tracked
-	Dropped []series.Tracked
+	Pinned   []series.Tracked
+	Active   []series.Tracked
+	Parked   []series.Tracked
+	Dropped  []series.Tracked
+	Finished []series.Tracked
 }
 
-// Any reports whether there is anything worth folding open.
-func (p panel) Any() bool {
-	return len(p.Pinned)+len(p.Active)+len(p.Parked)+len(p.Dropped) > 0
+// Count is how many series the drawer holds, for the toggle's label.
+func (p panel) Count() int {
+	return len(p.Pinned) + len(p.Active) + len(p.Parked) + len(p.Dropped) + len(p.Finished)
 }
 
-// group sorts tracked series into the panel's sections.
+// Any reports whether there is anything worth opening the drawer for.
+func (p panel) Any() bool { return p.Count() > 0 }
+
+// group sorts tracked series into the drawer's sections. Being caught up is a
+// fact about the series rather than a decision, so it only files a series under
+// Finished when the reader has made no decision of their own about it.
 func group(tracked []series.Tracked) panel {
 	var p panel
 	for _, t := range tracked {
-		switch t.Decision {
-		case series.Pinned:
+		switch {
+		case t.Decision == series.Pinned:
 			p.Pinned = append(p.Pinned, t)
-		case series.Parked:
+		case t.Decision == series.Parked:
 			p.Parked = append(p.Parked, t)
-		case series.Dropped:
+		case t.Decision == series.Dropped:
 			p.Dropped = append(p.Dropped, t)
+		case t.CaughtUp:
+			p.Finished = append(p.Finished, t)
 		default:
 			p.Active = append(p.Active, t)
 		}

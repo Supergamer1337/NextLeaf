@@ -150,37 +150,74 @@
     .btn--quiet:hover { filter: none; border-color: var(--moss); color: var(--moss); }
     .decide { display: contents; }
 
-    /* Series panel */
-    .panel { margin-top: 2.2rem; }
-    .panel > summary {
-      cursor: pointer; color: var(--muted); font-size: 0.82rem; letter-spacing: 0.04em;
-      text-transform: uppercase; list-style: none; padding: 0.4rem 0;
+    /* Series drawer */
+    .drawer-toggle {
+      position: fixed; top: 1.4rem; right: 1.4rem; z-index: 3;
+      display: inline-flex; align-items: center; gap: 0.45rem;
+      font: inherit; font-size: 0.82rem; font-weight: 600; color: var(--ink);
+      background: var(--card); border: 1px solid var(--line); border-radius: 999px;
+      padding: 0.5rem 1rem; cursor: pointer; text-decoration: none;
+      box-shadow: 0 10px 24px -18px var(--shadow-c);
     }
-    .panel > summary::-webkit-details-marker { display: none; }
-    .panel > summary::before { content: "▸ "; }
-    .panel[open] > summary::before { content: "▾ "; }
-    .panel > summary:hover { color: var(--moss); }
-    .panel-body {
-      margin-top: 0.5rem; background: var(--card); border: 1px solid var(--line);
-      border-radius: 12px; padding: 1rem 1.2rem;
+    .drawer-toggle:hover { border-color: var(--moss); color: var(--moss); }
+    .drawer-count {
+      font-size: 0.72rem; color: var(--muted); background: var(--tint);
+      border-radius: 999px; padding: 0.05rem 0.45rem;
     }
-    .panel-group + .panel-group { margin-top: 1.1rem; }
-    .panel-label {
-      font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+
+    /* The drawer is open when the URL carries #series, so it needs no script. */
+    .drawer {
+      position: fixed; top: 0; right: 0; z-index: 5;
+      width: min(23rem, 100vw); height: 100vh;
+      display: flex; flex-direction: column;
+      background: var(--card); border-left: 1px solid var(--line);
+      box-shadow: -24px 0 48px -32px var(--shadow-c);
+      transform: translateX(100%); visibility: hidden;
+      transition: transform 0.22s ease, visibility 0.22s;
     }
-    .panel-list { list-style: none; margin: 0.4rem 0 0; padding: 0; }
-    .panel-list li {
-      display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap;
-      padding: 0.32rem 0; font-size: 0.9rem; border-top: 1px solid var(--line);
+    .drawer:target { transform: translateX(0); visibility: visible; }
+    .drawer-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 1rem; padding: 1.3rem 1.4rem 0.9rem; border-bottom: 1px solid var(--line);
     }
-    .panel-list li:first-child { border-top: none; }
-    .panel-pos { color: var(--muted); font-size: 0.78rem; }
-    .panel-undo {
-      margin-left: auto; font: inherit; font-size: 0.78rem; color: var(--muted);
+    .drawer-title { margin: 0; font-family: var(--serif); font-size: 1.15rem; font-weight: 600; }
+    .drawer-close { color: var(--muted); text-decoration: none; font-size: 1.4rem; line-height: 1; }
+    .drawer-close:hover { color: var(--moss); }
+    .drawer-body { overflow-y: auto; padding: 1rem 1.4rem 2rem; }
+
+    .drawer-group + .drawer-group { margin-top: 1.4rem; }
+    .drawer-label {
+      font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+    }
+    .drawer-list { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+    .drawer-row {
+      display: grid; grid-template-columns: 2.6rem 1fr; gap: 0.7rem;
+      padding: 0.7rem 0; border-top: 1px solid var(--line);
+    }
+    .drawer-list li:first-child .drawer-row { border-top: none; }
+    .drawer-cover {
+      width: 2.6rem; height: 3.9rem; object-fit: cover; border-radius: 3px;
+      background: var(--tint);
+    }
+    .drawer-cover--blank { border: 1px dashed var(--line); }
+    .drawer-name { font-size: 0.88rem; font-weight: 600; }
+    .drawer-next, .drawer-pos { display: block; color: var(--muted); font-size: 0.75rem; margin-top: 0.1rem; }
+    .drawer-acts { display: flex; gap: 0.7rem; margin-top: 0.4rem; flex-wrap: wrap; }
+    .drawer-act {
+      font: inherit; font-size: 0.75rem; color: var(--muted);
       background: none; border: none; padding: 0; cursor: pointer;
       text-decoration: underline; text-underline-offset: 3px;
     }
-    .panel-undo:hover { color: var(--moss); }
+    .drawer-act:hover { color: var(--moss); }
+    .drawer-act--go { color: var(--moss); }
+
+    @media (max-width: 460px) {
+      .drawer { width: 100vw; }
+      .drawer-toggle { top: auto; bottom: 1rem; right: 1rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .drawer { transition: none; }
+    }
 
     /* Notices */
     .notice {
@@ -299,19 +336,25 @@
       {{end}}
       {{end}}
 
-      {{if .Panel.Any}}
-      <details class="panel">
-        <summary>Series you’re tracking</summary>
-        <div class="panel-body">
-          {{template "seriesGroup" dict "Label" "Reading next" "Items" .Panel.Pinned "Undo" "Unpin"}}
-          {{template "seriesGroup" dict "Label" "Active" "Items" .Panel.Active "Undo" ""}}
-          {{template "seriesGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now"}}
-          {{template "seriesGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
-        </div>
-      </details>
-      {{end}}
     {{end}}
   </main>
+
+  {{if .Panel.Any}}
+  <a class="drawer-toggle" href="#series">Series <span class="drawer-count">{{.Panel.Count}}</span></a>
+  <aside class="drawer" id="series" aria-label="Series you're tracking">
+    <div class="drawer-head">
+      <h2 class="drawer-title">Series</h2>
+      <a class="drawer-close" href="#" aria-label="Close">&times;</a>
+    </div>
+    <div class="drawer-body">
+      {{template "drawerGroup" dict "Label" "Reading next" "Items" .Panel.Pinned "Undo" "Unpin"}}
+      {{template "drawerGroup" dict "Label" "Active" "Items" .Panel.Active "Undo" ""}}
+      {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now"}}
+      {{template "drawerGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
+      {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "Undo" ""}}
+    </div>
+  </aside>
+  {{end}}
 
   <script>
     (function () {
@@ -348,21 +391,51 @@
 
 {{define "authors"}}{{range $i, $a := .}}{{if $i}}, {{end}}{{$a}}{{end}}{{end}}
 
-{{define "seriesGroup"}}
+{{define "drawerGroup"}}
 {{if .Items}}
-<div class="panel-group">
-  <span class="panel-label">{{.Label}}</span>
-  <ul class="panel-list">
+<div class="drawer-group">
+  <span class="drawer-label">{{.Label}}</span>
+  <ul class="drawer-list">
     {{range .Items}}
     <li>
-      <span>{{.Name}}</span>
-      {{if .Position}}<span class="panel-pos">read to book {{.Position}}</span>{{end}}
-      {{if $.Undo}}
-      <form method="post" action="/series/clear">
-        <input type="hidden" name="name" value="{{.Name}}">
-        <button class="panel-undo" type="submit">{{$.Undo}}</button>
-      </form>
-      {{end}}
+      <div class="drawer-row">
+        {{if .NextCoverURL}}
+        <img class="drawer-cover" src="{{.NextCoverURL}}" alt="" loading="lazy">
+        {{else}}
+        <span class="drawer-cover drawer-cover--blank" aria-hidden="true"></span>
+        {{end}}
+        <div>
+          <span class="drawer-name">{{.Name}}</span>
+          {{if .NextTitle}}
+            <span class="drawer-next">Next: {{.NextTitle}}</span>
+          {{else if .CaughtUp}}
+            <span class="drawer-next">Nothing left to read</span>
+          {{else if .Position}}
+            <span class="drawer-pos">Read to book {{.Position}}</span>
+          {{end}}
+          <div class="drawer-acts">
+            {{if and .NextTitle (and (ne $.Label "Reading next") (ne $.Label "Dropped"))}}
+            <form method="post" action="/series/pin">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <input type="hidden" name="position" value="{{.NextPosition}}">
+              <button class="drawer-act drawer-act--go" type="submit">Pick this</button>
+            </form>
+            {{end}}
+            {{if ne $.Label "Dropped"}}
+            <form method="post" action="/series/drop">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <button class="drawer-act" type="submit">Drop</button>
+            </form>
+            {{end}}
+            {{if $.Undo}}
+            <form method="post" action="/series/clear">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <button class="drawer-act" type="submit">{{$.Undo}}</button>
+            </form>
+            {{end}}
+          </div>
+        </div>
+      </div>
     </li>
     {{end}}
   </ul>

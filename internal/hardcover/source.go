@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 	"unicode"
@@ -55,10 +56,19 @@ func (c *Client) ReadHistory(ctx context.Context) ([]library.Entry, error) {
 	return c.RecentReads(ctx, 0)
 }
 
-// seriesLookahead is how many later books to consider at once. The first
-// candidate is usually the answer; the rest cover a run of novellas or
-// unreleased volumes without a second round-trip.
-const seriesLookahead = 10
+const (
+	// seriesLookahead is how many later rows to consider at once. A single
+	// position can hold a dozen rows — every translation of the book, plus
+	// bundles and split editions — so this is generous.
+	seriesLookahead = 30
+
+	// readingLanguage is the edition language a next book must exist in.
+	// Hardcover files every translation at the same series position with the
+	// same featured flag and the same title-less metadata, so whether a book
+	// has an edition in this language is the only reliable way to tell the
+	// original from a translation the reader cannot read.
+	readingLanguage = "eng"
+)
 
 // NextInSeries returns the first book after q's position that the reader could
 // actually go and read: it is out, and it is one they want offered. The book
@@ -75,35 +85,40 @@ func (c *Client) NextInSeries(ctx context.Context, q library.SeriesQuery) (libra
 	query := fmt.Sprintf(`
 query NextInSeries($name: String!, $after: float8!, $limit: Int!) {
   book_series(
-    where: {series: {name: {_eq: $name}}, position: {_gt: $after}}
+    where: {series: {name: {_eq: $name}}, position: {_gt: $after}, featured: {_eq: true}}
     order_by: {position: asc}
     limit: $limit
   ) {
     position
     book {%s}
   }
-}`, bookFields)
+}`, seriesBookFields)
 
 	var data struct {
-		BookSeries []struct {
-			Position *float64 `json:"position"`
-			Book     bookData `json:"book"`
-		} `json:"book_series"`
+		BookSeries []seriesRow `json:"book_series"`
 	}
 	vars := map[string]any{"name": s.Name, "after": s.Position, "limit": seriesLookahead}
 	if err := c.execute(ctx, query, vars, &data); err != nil {
 		return library.Entry{}, false, err
 	}
 
-	for _, candidate := range data.BookSeries {
-		pos := 0.0
-		if candidate.Position != nil {
-			pos = *candidate.Position
-		}
-		if !q.IncludeNovellas && isNovella(pos) {
+	for _, group := range byPosition(data.BookSeries) {
+		// Hardcover files a book split across two volumes at .1 and .2 of the
+		// position it already occupies, so those are halves of a book the
+		// reader has finished rather than anything new to read.
+		if isSplitEdition(group.position) {
 			continue
 		}
-		book := mapBook(candidate.Book)
+		if !q.IncludeNovellas && isNovella(group.position) {
+			continue
+		}
+		chosen, ok := best(group.rows)
+		if !ok {
+			// Nothing at this position exists in the reading language, so
+			// there is no honest answer here; the next position may have one.
+			continue
+		}
+		book := mapBook(chosen)
 		if !c.released(book) {
 			continue
 		}
@@ -115,9 +130,73 @@ query NextInSeries($name: String!, $after: float8!, $limit: Int!) {
 	return library.Entry{}, false, nil
 }
 
-// isNovella treats a fractional series position (3.5) as side material rather
-// than the main sequence, which is how Hardcover files novellas.
-func isNovella(pos float64) bool { return pos != float64(int64(pos)) }
+// seriesRow is one book at one position within a series.
+type seriesRow struct {
+	Position *float64 `json:"position"`
+	Book     bookData `json:"book"`
+}
+
+// positionGroup is every row a series files at the same position.
+type positionGroup struct {
+	position float64
+	rows     []bookData
+}
+
+// byPosition collects rows into one group per position, keeping the ascending
+// order the query returned.
+func byPosition(rows []seriesRow) []positionGroup {
+	var groups []positionGroup
+	for _, r := range rows {
+		pos := 0.0
+		if r.Position != nil {
+			pos = *r.Position
+		}
+		if n := len(groups); n > 0 && groups[n-1].position == pos {
+			groups[n-1].rows = append(groups[n-1].rows, r.Book)
+			continue
+		}
+		groups = append(groups, positionGroup{position: pos, rows: []bookData{r.Book}})
+	}
+	return groups
+}
+
+// best picks the row that actually represents a position: it must have an
+// edition the reader can read, and a single novel beats a bundle of several.
+// ok is false when nothing at the position qualifies, which happens when a
+// series files only translations at it. A book with no title is an unnamed
+// announcement rather than something to go and read.
+func best(rows []bookData) (bookData, bool) {
+	var chosen bookData
+	found := false
+	for _, b := range rows {
+		if len(b.Editions) == 0 || b.Title == "" {
+			continue
+		}
+		if !found || (chosen.Compilation && !b.Compilation) {
+			chosen, found = b, true
+		}
+	}
+	return chosen, found
+}
+
+// isNovella treats a half position (3.5) as side material sitting between two
+// novels, which is how catalogues file a novella.
+func isNovella(pos float64) bool { return fraction(pos) == 0.5 }
+
+// isSplitEdition spots the other fractional positions (1.1, 1.2), which
+// Hardcover uses for the parts of a single novel published in halves. They are
+// never a next read: the whole novel at that position is what counts.
+func isSplitEdition(pos float64) bool {
+	f := fraction(pos)
+	return f != 0 && f != 0.5
+}
+
+// fraction is the part of a series position after the decimal point, rounded to
+// two places so 1.1 does not arrive as 1.10000000000000009.
+func fraction(pos float64) float64 {
+	whole := float64(int64(pos))
+	return math.Round((pos-whole)*100) / 100
+}
 
 // released reports whether a book is out yet, so an announced sequel is never
 // recommended. A book with no date at all is assumed available: withholding
@@ -146,15 +225,21 @@ type userBook struct {
 // bookData mirrors the book fields we request (see bookFields). It is shared by
 // the user_books query and the series lookup so both map through mapBook.
 type bookData struct {
-	Title       string          `json:"title"`
-	Subtitle    string          `json:"subtitle"`
-	Description string          `json:"description"`
-	Slug        string          `json:"slug"`
-	ReleaseYear int             `json:"release_year"`
-	ReleaseDate string          `json:"release_date"`
-	Pages       int             `json:"pages"`
-	CachedTags  json.RawMessage `json:"cached_tags"`
-	Image       *struct {
+	Title       string `json:"title"`
+	Subtitle    string `json:"subtitle"`
+	Description string `json:"description"`
+	Slug        string `json:"slug"`
+	ReleaseYear int    `json:"release_year"`
+	ReleaseDate string `json:"release_date"`
+	Compilation bool   `json:"compilation"`
+	// Editions is requested only by the series lookup, filtered to the
+	// reading language, so a non-empty list means the reader can read it.
+	Editions []struct {
+		ID int `json:"id"`
+	} `json:"editions"`
+	Pages      int             `json:"pages"`
+	CachedTags json.RawMessage `json:"cached_tags"`
+	Image      *struct {
 		URL string `json:"url"`
 	} `json:"image"`
 	Contributions []struct {
@@ -181,11 +266,20 @@ const bookFields = `
       slug
       release_year
       release_date
+      compilation
+      default_physical_edition { language { code3 } }
       pages
       cached_tags
       image { url }
       contributions { author { name } }
       book_series { position featured series { name slug is_completed } }`
+
+// seriesBookFields adds the evidence the series lookup needs to tell an
+// original from its translations: whether the book has an edition in the
+// reading language at all. It is not requested for shelf entries, where the
+// reader's own library already settles the question.
+const seriesBookFields = bookFields + `
+      editions(limit: 1, where: {language: {code3: {_eq: "` + readingLanguage + `"}}}) { id }`
 
 func (c *Client) fetchEntries(ctx context.Context, statusID int, orderBy string, limit int) ([]library.Entry, error) {
 	userID, err := c.currentUserID(ctx)

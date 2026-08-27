@@ -272,7 +272,7 @@ func TestToReadOrdersByDateAddedNoLimit(t *testing.T) {
 const nextInSeriesResponse = `{"data":{"book_series":[
   {
     "book": {
-      "title": "The Obelisk Gate",
+      "title": "The Obelisk Gate", "editions": [{"id": 1}],
       "subtitle": "",
       "slug": "the-obelisk-gate",
       "release_year": 2016,
