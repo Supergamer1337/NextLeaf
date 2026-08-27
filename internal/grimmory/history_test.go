@@ -1,0 +1,49 @@
+package grimmory
+
+import (
+	"context"
+	"testing"
+)
+
+// historyFixture has three finished books, one dated to the day.
+const historyFixture = `[
+	{"id":1,"title":"Reading","readStatus":"READING"},
+	{"id":2,"readStatus":"READ","dateFinished":"2025-06-01T00:00:00Z","metadata":{"title":"Hyperion","publishedDate":"1989-05-26","seriesName":"Hyperion Cantos","seriesNumber":1}},
+	{"id":3,"readStatus":"READ","dateFinished":"2024-06-01T00:00:00Z","metadata":{"title":"Endymion"}},
+	{"id":4,"readStatus":"READ","dateFinished":"2023-06-01T00:00:00Z","metadata":{"title":"Ilium"}}
+]`
+
+func historyClient(t *testing.T) *Client {
+	t.Helper()
+	f := &fake{books: acceptLatest(historyFixture)}
+	return New(f.server(t).URL, "user", "pass")
+}
+
+func TestReadHistoryReturnsEveryFinishedBook(t *testing.T) {
+	c := historyClient(t)
+
+	history, err := c.ReadHistory(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+	if len(history) != 3 {
+		t.Fatalf("got %d entries, want the 3 finished books", len(history))
+	}
+	if history[0].Book.Title != "Hyperion" {
+		t.Errorf("first entry = %q, want the newest finish, Hyperion", history[0].Book.Title)
+	}
+}
+
+func TestPublishedDateBecomesAReleaseDate(t *testing.T) {
+	c := historyClient(t)
+
+	history, err := c.ReadHistory(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+	// Dating to the day is what decides whether a series' next book is out.
+	got := history[0].Book.ReleaseDate
+	if want := "1989-05-26"; got.Format("2006-01-02") != want {
+		t.Errorf("ReleaseDate = %v, want %s", got, want)
+	}
+}

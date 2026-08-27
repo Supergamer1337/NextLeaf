@@ -300,7 +300,7 @@ func TestNextInSeriesReturnsNextBook(t *testing.T) {
 	defer srv.Close()
 
 	c := New("tok", WithEndpoint(srv.URL))
-	entry, found, err := c.NextInSeries(context.Background(), library.Series{Name: "The Broken Earth", Position: 1})
+	entry, found, err := c.NextInSeries(context.Background(), library.SeriesQuery{Series: library.Series{Name: "The Broken Earth", Position: 1}})
 	if err != nil {
 		t.Fatalf("NextInSeries: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestNextInSeriesNoLaterBook(t *testing.T) {
 	defer srv.Close()
 
 	c := New("tok", WithEndpoint(srv.URL))
-	_, found, err := c.NextInSeries(context.Background(), library.Series{Name: "Ended", Position: 9})
+	_, found, err := c.NextInSeries(context.Background(), library.SeriesQuery{Series: library.Series{Name: "Ended", Position: 9}})
 	if err != nil {
 		t.Fatalf("NextInSeries: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestNextInSeriesSkipsQueryWhenUnresolvable(t *testing.T) {
 		{Name: "Known"}, // unknown position (0)
 	}
 	for _, s := range cases {
-		if _, found, err := c.NextInSeries(context.Background(), s); err != nil || found {
+		if _, found, err := c.NextInSeries(context.Background(), library.SeriesQuery{Series: s}); err != nil || found {
 			t.Errorf("NextInSeries(%+v) = (found %v, err %v), want (false, nil)", s, found, err)
 		}
 	}

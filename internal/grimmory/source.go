@@ -15,9 +15,10 @@ import (
 // SeriesResolver: Grimmory has no next-in-series lookup beyond the user's own
 // shelves.
 var (
-	_ library.Source        = (*Client)(nil)
-	_ library.CoverProvider = (*Client)(nil)
-	_ library.Verifier      = (*Client)(nil)
+	_ library.Source          = (*Client)(nil)
+	_ library.CoverProvider   = (*Client)(nil)
+	_ library.Verifier        = (*Client)(nil)
+	_ library.HistoryProvider = (*Client)(nil)
 )
 
 // Name identifies this Source.
@@ -54,6 +55,13 @@ func (c *Client) RecentReads(ctx context.Context, limit int) ([]library.Entry, e
 		entries = entries[:limit]
 	}
 	return entries, nil
+}
+
+// ReadHistory returns every finished book, newest first — the whole history
+// rather than RecentReads' window, for the one-time series backfill. It
+// satisfies library.HistoryProvider.
+func (c *Client) ReadHistory(ctx context.Context) ([]library.Entry, error) {
+	return c.RecentReads(ctx, 0)
 }
 
 // ToRead returns the unread books in the user's library, oldest additions
@@ -145,6 +153,7 @@ func (c *Client) mapBook(b book) library.Book {
 	out.Genres = m.Categories
 	out.Moods = m.Moods
 	out.ReleaseYear = parseYear(m.PublishedDate)
+	out.ReleaseDate = parseDay(m.PublishedDate)
 	out.PageCount = m.PageCount
 	out.URL = m.ExternalURL
 	out.CoverURL = c.coverURL(b.ID, m)
@@ -207,6 +216,17 @@ func parseInstant(s string) time.Time {
 }
 
 // parseYear extracts the four-digit year from a date string, returning zero when the string is too short or does not start with a valid year.
+// parseDay reads Grimmory's full publication date. Many books carry only a
+// year or a year-month, which yields the zero time so callers fall back to
+// ReleaseYear rather than assuming the 1st of January.
+func parseDay(s string) time.Time {
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
 func parseYear(s string) int {
 	if len(s) < 4 {
 		return 0

@@ -19,10 +19,23 @@ const (
 	StatusIgnored       Status = 6
 )
 
-// Series locates a book within a series.
+// Series locates a book within a series. Name is the only identifier every
+// source can supply, so it is what NextLeaf matches on; Slug and Completed are
+// hints a richer source may add (see CONTEXT.md).
 type Series struct {
-	Name     string
-	Position float64
+	Name      string
+	Position  float64
+	Slug      string // source-specific series identifier; "" if unknown
+	Completed bool   // the series is finished, so no later book can appear
+}
+
+// SeriesQuery asks a SeriesResolver for the book following a position, carrying
+// the reader's preferences so the resolver can honour them while it searches.
+type SeriesQuery struct {
+	Series Series
+	// IncludeNovellas allows books at fractional positions (3.5) to be
+	// offered as the next read.
+	IncludeNovellas bool
 }
 
 // Book is the provider-neutral description of a single title. Fields a given
@@ -37,8 +50,9 @@ type Book struct {
 	Moods       []string // tone tags, e.g. "dark", "hopeful"; nil if unknown
 	Series      *Series
 	ReleaseYear int
-	PageCount   int   // 0 if unknown
-	Nonfiction  *bool // nil if the source can't classify fiction vs nonfiction
+	ReleaseDate time.Time // zero when the source gives only a year, or nothing
+	PageCount   int       // 0 if unknown
+	Nonfiction  *bool     // nil if the source can't classify fiction vs nonfiction
 	CoverURL    string
 	URL         string
 }

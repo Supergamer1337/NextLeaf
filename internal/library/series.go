@@ -7,12 +7,12 @@ import "context"
 // added to any shelf. Sources that cannot look up series data simply do not
 // implement it; callers detect support with AsSeriesResolver.
 type SeriesResolver interface {
-	// NextInSeries returns the entry that follows the last position the user
-	// read in series (series carries its Name and that Position). The entry
-	// carries the resolving source's provenance but is not on any shelf, so
-	// Available stays false. found is false when there is no such next book,
-	// e.g. they are at the end of the series.
-	NextInSeries(ctx context.Context, series Series) (Entry, bool, error)
+	// NextInSeries returns the entry that follows the position in q.Series,
+	// honouring q's preferences and skipping books that are not out yet. The
+	// entry carries the resolving source's provenance but is not on any
+	// shelf, so Available stays false. found is false when there is no such
+	// next book, e.g. they are at the end of the series.
+	NextInSeries(ctx context.Context, q SeriesQuery) (Entry, bool, error)
 }
 
 // unwrapper is implemented by decorators (such as Cached) that wrap a single
@@ -62,9 +62,9 @@ func AsSeriesResolver(s Source) (SeriesResolver, bool) {
 // multiResolver tries each underlying resolver in turn, returning the first hit.
 type multiResolver []SeriesResolver
 
-func (mr multiResolver) NextInSeries(ctx context.Context, series Series) (Entry, bool, error) {
+func (mr multiResolver) NextInSeries(ctx context.Context, q SeriesQuery) (Entry, bool, error) {
 	for _, r := range mr {
-		entry, found, err := r.NextInSeries(ctx, series)
+		entry, found, err := r.NextInSeries(ctx, q)
 		if err != nil {
 			return Entry{}, false, err
 		}

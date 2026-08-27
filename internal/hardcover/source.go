@@ -13,9 +13,10 @@ import (
 
 // Client is a reading Source, a SeriesResolver, and a Verifier.
 var (
-	_ library.Source         = (*Client)(nil)
-	_ library.SeriesResolver = (*Client)(nil)
-	_ library.Verifier       = (*Client)(nil)
+	_ library.Source          = (*Client)(nil)
+	_ library.SeriesResolver  = (*Client)(nil)
+	_ library.Verifier        = (*Client)(nil)
+	_ library.HistoryProvider = (*Client)(nil)
 )
 
 // Name identifies this Source.
@@ -47,44 +48,89 @@ func (c *Client) ToRead(ctx context.Context) ([]library.Entry, error) {
 	return c.fetchEntries(ctx, int(library.StatusWantToRead), "date_added: asc", 0)
 }
 
-// NextInSeries returns the entry that follows s.Position in the named series,
-// even if it sits on none of the user's shelves — so it carries hardcover's
-// provenance but stays unavailable. found is false when the series has no
-// later book. It satisfies library.SeriesResolver.
-func (c *Client) NextInSeries(ctx context.Context, s library.Series) (library.Entry, bool, error) {
+// ReadHistory returns every finished book, newest first — the whole history
+// rather than RecentReads' window, for the one-time series backfill. It
+// satisfies library.HistoryProvider.
+func (c *Client) ReadHistory(ctx context.Context) ([]library.Entry, error) {
+	return c.RecentReads(ctx, 0)
+}
+
+// seriesLookahead is how many later books to consider at once. The first
+// candidate is usually the answer; the rest cover a run of novellas or
+// unreleased volumes without a second round-trip.
+const seriesLookahead = 10
+
+// NextInSeries returns the first book after q's position that the reader could
+// actually go and read: it is out, and it is one they want offered. The book
+// may sit on none of their shelves, so it carries hardcover's provenance but
+// stays unavailable. found is false when the series has nothing suitable left.
+// It satisfies library.SeriesResolver.
+func (c *Client) NextInSeries(ctx context.Context, q library.SeriesQuery) (library.Entry, bool, error) {
+	s := q.Series
 	// A missing name or unknown position (0) has no well-defined "next".
 	if s.Name == "" || s.Position == 0 {
 		return library.Entry{}, false, nil
 	}
 
 	query := fmt.Sprintf(`
-query NextInSeries($name: String!, $after: float8!) {
+query NextInSeries($name: String!, $after: float8!, $limit: Int!) {
   book_series(
     where: {series: {name: {_eq: $name}}, position: {_gt: $after}}
     order_by: {position: asc}
-    limit: 1
+    limit: $limit
   ) {
+    position
     book {%s}
   }
 }`, bookFields)
 
 	var data struct {
 		BookSeries []struct {
-			Book bookData `json:"book"`
+			Position *float64 `json:"position"`
+			Book     bookData `json:"book"`
 		} `json:"book_series"`
 	}
-	vars := map[string]any{"name": s.Name, "after": s.Position}
+	vars := map[string]any{"name": s.Name, "after": s.Position, "limit": seriesLookahead}
 	if err := c.execute(ctx, query, vars, &data); err != nil {
 		return library.Entry{}, false, err
 	}
-	if len(data.BookSeries) == 0 {
-		return library.Entry{}, false, nil
+
+	for _, candidate := range data.BookSeries {
+		pos := 0.0
+		if candidate.Position != nil {
+			pos = *candidate.Position
+		}
+		if !q.IncludeNovellas && isNovella(pos) {
+			continue
+		}
+		book := mapBook(candidate.Book)
+		if !c.released(book) {
+			continue
+		}
+		return library.Entry{
+			Book:    book,
+			Sources: []library.SourceRef{{Name: "hardcover", URL: book.URL}},
+		}, true, nil
 	}
-	book := mapBook(data.BookSeries[0].Book)
-	return library.Entry{
-		Book:    book,
-		Sources: []library.SourceRef{{Name: "hardcover", URL: book.URL}},
-	}, true, nil
+	return library.Entry{}, false, nil
+}
+
+// isNovella treats a fractional series position (3.5) as side material rather
+// than the main sequence, which is how Hardcover files novellas.
+func isNovella(pos float64) bool { return pos != float64(int64(pos)) }
+
+// released reports whether a book is out yet, so an announced sequel is never
+// recommended. A book with no date at all is assumed available: withholding
+// every book Hardcover has not dated would be worse than the rare early offer.
+func (c *Client) released(b library.Book) bool {
+	now := c.now()
+	if !b.ReleaseDate.IsZero() {
+		return !b.ReleaseDate.After(now)
+	}
+	if b.ReleaseYear != 0 {
+		return b.ReleaseYear <= now.Year()
+	}
+	return true
 }
 
 // userBook mirrors the fields we request from a user_books row.
@@ -105,6 +151,7 @@ type bookData struct {
 	Description string          `json:"description"`
 	Slug        string          `json:"slug"`
 	ReleaseYear int             `json:"release_year"`
+	ReleaseDate string          `json:"release_date"`
 	Pages       int             `json:"pages"`
 	CachedTags  json.RawMessage `json:"cached_tags"`
 	Image       *struct {
@@ -119,7 +166,9 @@ type bookData struct {
 		Position *float64 `json:"position"`
 		Featured bool     `json:"featured"`
 		Series   *struct {
-			Name string `json:"name"`
+			Name      string `json:"name"`
+			Slug      string `json:"slug"`
+			Completed bool   `json:"is_completed"`
 		} `json:"series"`
 	} `json:"book_series"`
 }
@@ -131,11 +180,12 @@ const bookFields = `
       description
       slug
       release_year
+      release_date
       pages
       cached_tags
       image { url }
       contributions { author { name } }
-      book_series { position featured series { name } }`
+      book_series { position featured series { name slug is_completed } }`
 
 func (c *Client) fetchEntries(ctx context.Context, statusID int, orderBy string, limit int) ([]library.Entry, error) {
 	userID, err := c.currentUserID(ctx)
@@ -209,6 +259,7 @@ func mapBook(b bookData) library.Book {
 		Subtitle:    b.Subtitle,
 		Description: b.Description,
 		ReleaseYear: b.ReleaseYear,
+		ReleaseDate: parseDate(b.ReleaseDate),
 		PageCount:   b.Pages,
 		Authors:     authors(b),
 		Genres:      cleanGenres(rawGenres),
@@ -267,7 +318,11 @@ func series(b bookData) *library.Series {
 	if chosen.Series == nil || chosen.Series.Name == "" {
 		return nil
 	}
-	s := &library.Series{Name: chosen.Series.Name}
+	s := &library.Series{
+		Name:      chosen.Series.Name,
+		Slug:      chosen.Series.Slug,
+		Completed: chosen.Series.Completed,
+	}
 	if chosen.Position != nil {
 		s.Position = *chosen.Position
 	}

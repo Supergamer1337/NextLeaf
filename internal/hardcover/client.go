@@ -35,6 +35,8 @@ type Client struct {
 	userAgent string
 	http      *http.Client
 
+	now func() time.Time // overridable in tests
+
 	userIDMu   sync.Mutex
 	userIDOnce bool
 	userID     int
@@ -49,6 +51,9 @@ func WithEndpoint(url string) Option { return func(c *Client) { c.endpoint = url
 // WithHTTPClient overrides the HTTP client.
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
 
+// withClock overrides the clock used to decide whether a book is out yet.
+func withClock(now func() time.Time) Option { return func(c *Client) { c.now = now } }
+
 // WithUserAgent overrides the User-Agent header.
 func WithUserAgent(ua string) Option { return func(c *Client) { c.userAgent = ua } }
 
@@ -60,6 +65,7 @@ func New(token string, opts ...Option) *Client {
 		endpoint:  defaultEndpoint,
 		userAgent: defaultUserAgent,
 		http:      &http.Client{Timeout: 35 * time.Second},
+		now:       time.Now,
 	}
 	for _, opt := range opts {
 		opt(c)
