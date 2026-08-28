@@ -365,3 +365,94 @@ func TestConcurrentPinsLeaveExactlyOneSeriesPinned(t *testing.T) {
 		t.Errorf("%d series pinned after concurrent pins, want exactly 1", pinned)
 	}
 }
+
+// readWithCover is a finished book that carries its cover art.
+func readWithCover(name string, pos float64, cover string) library.Entry {
+	e := readEntry(name, pos)
+	e.Book.CoverURL = cover
+	return e
+}
+
+func TestASeriesKeepsTheCoverOfTheFurthestBookRead(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	snap := Snapshot{Reads: []library.Entry{
+		readWithCover("Mistborn", 3, "https://covers.example/three.jpg"),
+		readWithCover("Mistborn", 1, "https://covers.example/one.jpg"),
+	}}
+	if err := st.Reconcile(ctx, snap); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	tracked, _, err := st.Get(ctx, "Mistborn")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	// Rereading book 1 should not roll the series' face back to book 1.
+	if tracked.CoverURL != "https://covers.example/three.jpg" {
+		t.Errorf("CoverURL = %q, want book 3's cover", tracked.CoverURL)
+	}
+}
+
+func TestReadingFurtherMovesTheSeriesCoverForward(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	first := Snapshot{Reads: []library.Entry{readWithCover("Mistborn", 3, "https://covers.example/three.jpg")}}
+	if err := st.Reconcile(ctx, first); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	later := Snapshot{Reads: []library.Entry{readWithCover("Mistborn", 4, "https://covers.example/four.jpg")}}
+	if err := st.Reconcile(ctx, later); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	tracked, _, err := st.Get(ctx, "Mistborn")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if tracked.CoverURL != "https://covers.example/four.jpg" {
+		t.Errorf("CoverURL = %q, want book 4's cover", tracked.CoverURL)
+	}
+}
+
+func TestASeriesWithNoKnownPositionStillGetsACover(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	// Some sources name a series without saying where the book sits in it.
+	snap := Snapshot{Reads: []library.Entry{readWithCover("The Lord of the Rings", 0, "https://covers.example/lotr.jpg")}}
+	if err := st.Reconcile(ctx, snap); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	tracked, _, err := st.Get(ctx, "The Lord of the Rings")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if tracked.CoverURL == "" {
+		t.Error("a series with no known position has no cover at all")
+	}
+}
+
+func TestBeingCaughtUpDoesNotEraseTheSeriesCover(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	snap := Snapshot{Reads: []library.Entry{readWithCover("Mistborn", 3, "https://covers.example/three.jpg")}}
+	if err := st.Reconcile(ctx, snap); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := st.SetNext(ctx, "Mistborn", 3, library.Entry{}, false, day0); err != nil {
+		t.Fatalf("SetNext: %v", err)
+	}
+
+	tracked, _, err := st.Get(ctx, "Mistborn")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if tracked.CoverURL == "" {
+		t.Error("a finished series lost the cover of the last book read")
+	}
+}

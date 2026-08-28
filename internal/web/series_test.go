@@ -522,3 +522,63 @@ func TestTheGroupsWorthActingOnAreNotCollapsed(t *testing.T) {
 		t.Error("Active is hidden behind a fold; only Finished should be")
 	}
 }
+
+func TestAFinishedSeriesShowsTheCoverOfTheLastBookRead(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	read := seriesEntry("Book 4", "Stormlight", 4)
+	read.Book.CoverURL = "https://covers.example/stormlight4.jpg"
+	if err := st.Reconcile(ctx, series.Snapshot{Reads: []library.Entry{read}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := st.SetNext(ctx, "Stormlight", 4, library.Entry{}, false, time.Now()); err != nil {
+		t.Fatalf("SetNext: %v", err)
+	}
+
+	// There is no next book to picture, so the series wears the last one read
+	// rather than a blank square.
+	if body := getBody(t, ready(t, stubSource{}, st), "/"); !strings.Contains(body, "stormlight4.jpg") {
+		t.Error("a finished series shows no cover at all")
+	}
+}
+
+func TestASeriesWithNoKnownPositionShowsACover(t *testing.T) {
+	st := testStore(t)
+	read := seriesEntry("The Fellowship", "The Lord of the Rings", 0)
+	read.Book.CoverURL = "https://covers.example/fellowship.jpg"
+	if err := st.Reconcile(context.Background(), series.Snapshot{Reads: []library.Entry{read}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	// Without a position there is never a next book, so this row would
+	// otherwise stay blank forever.
+	if body := getBody(t, ready(t, stubSource{}, st), "/"); !strings.Contains(body, "fellowship.jpg") {
+		t.Error("a series with no known position shows no cover at all")
+	}
+}
+
+func TestTheNextBooksCoverWinsOverTheSeriesOwn(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	read := seriesEntry("Book 3", "Mistborn", 3)
+	read.Book.CoverURL = "https://covers.example/read.jpg"
+	if err := st.Reconcile(ctx, series.Snapshot{Reads: []library.Entry{read}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	next := library.Entry{Book: library.Book{
+		Title:    "The Alloy of Law",
+		Series:   &library.Series{Name: "Mistborn", Position: 4},
+		CoverURL: "https://covers.example/next.jpg",
+	}}
+	if err := st.SetNext(ctx, "Mistborn", 3, next, true, time.Now()); err != nil {
+		t.Fatalf("SetNext: %v", err)
+	}
+
+	body := getBody(t, ready(t, stubSource{}, st), "/")
+	if !strings.Contains(body, "next.jpg") {
+		t.Error("the next book's cover is not shown")
+	}
+	if strings.Contains(body, "read.jpg") {
+		t.Error("the already-read cover is shown alongside the next book")
+	}
+}

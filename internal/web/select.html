@@ -424,8 +424,9 @@
   {{range .Items}}
   <li>
     <div class="drawer-row">
-      {{if .NextCoverURL}}
-      <img class="drawer-cover" src="{{.NextCoverURL}}" alt="" loading="lazy">
+      {{/* The next book when there is one, else the last book read. */}}
+      {{if or .NextCoverURL .CoverURL}}
+      <img class="drawer-cover" src="{{or .NextCoverURL .CoverURL}}" alt="" loading="lazy">
       {{else}}
       <span class="drawer-cover drawer-cover--blank" aria-hidden="true"></span>
       {{end}}

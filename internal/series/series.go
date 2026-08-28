@@ -86,6 +86,9 @@ type Tracked struct {
 	NextCoverURL string
 	NextURL      string
 	NextPosition float64
+	// CoverURL is the cover of the furthest book read in the series, which
+	// stands as the series' own face when there is no next book to show.
+	CoverURL string
 	// CheckedAt is when the next book was last looked up.
 	CheckedAt time.Time
 }

@@ -33,6 +33,7 @@ var migrations = []string{
 	`ALTER TABLE tracked_series ADD COLUMN next_url TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE tracked_series ADD COLUMN next_position REAL NOT NULL DEFAULT 0`,
 	`ALTER TABLE tracked_series ADD COLUMN checked_at INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE tracked_series ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''`,
 }
 
 // Store is the durable record of tracked series and standing decisions.
@@ -121,7 +122,7 @@ func (s *Store) Reconcile(ctx context.Context, snap Snapshot) error {
 			if e.Book.Series == nil || key(e.Book.Series.Name) == "" {
 				continue
 			}
-			if err := observe(ctx, tx, *e.Book.Series); err != nil {
+			if err := observe(ctx, tx, *e.Book.Series, e.Book.CoverURL); err != nil {
 				return err
 			}
 		}
@@ -135,10 +136,10 @@ func (s *Store) Reconcile(ctx context.Context, snap Snapshot) error {
 
 // observe records a series at the furthest position seen. A position never goes
 // backwards: rereading book 2 of a series finished at book 5 is not a regression.
-func observe(ctx context.Context, tx *sql.Tx, s library.Series) error {
+func observe(ctx context.Context, tx *sql.Tx, s library.Series, cover string) error {
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO tracked_series (name, display_name, position, slug, completed)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO tracked_series (name, display_name, position, slug, completed, cover_url)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			display_name = excluded.display_name,
 			position = MAX(position, excluded.position),
@@ -149,8 +150,13 @@ func observe(ctx context.Context, tx *sql.Tx, s library.Series) error {
 			next_title = CASE WHEN excluded.position >= next_position AND next_position > 0 THEN '' ELSE next_title END,
 			next_cover_url = CASE WHEN excluded.position >= next_position AND next_position > 0 THEN '' ELSE next_cover_url END,
 			next_url = CASE WHEN excluded.position >= next_position AND next_position > 0 THEN '' ELSE next_url END,
-			next_position = CASE WHEN excluded.position >= next_position THEN 0 ELSE next_position END`,
-		key(s.Name), s.Name, s.Position, s.Slug, boolToInt(s.Completed))
+			next_position = CASE WHEN excluded.position >= next_position THEN 0 ELSE next_position END,
+			-- The series wears the face of the furthest book read, so an
+			-- earlier reread does not roll it backwards.
+			cover_url = CASE
+				WHEN excluded.cover_url != '' AND excluded.position >= position THEN excluded.cover_url
+				ELSE cover_url END`,
+		key(s.Name), s.Name, s.Position, s.Slug, boolToInt(s.Completed), cover)
 	if err != nil {
 		return fmt.Errorf("tracking series %q: %w", s.Name, err)
 	}
@@ -194,7 +200,7 @@ func (s *Store) SetNext(ctx context.Context, name string, queried float64, next 
 // stable order.
 func (s *Store) List(ctx context.Context) ([]Tracked, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT display_name, position, decision, decided_at, parked_after, pinned_position, slug, completed, caught_up, next_title, next_cover_url, next_url, next_position, checked_at
+		SELECT display_name, position, decision, decided_at, parked_after, pinned_position, slug, completed, caught_up, next_title, next_cover_url, next_url, next_position, checked_at, cover_url
 		FROM tracked_series ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -208,7 +214,7 @@ func (s *Store) List(ctx context.Context) ([]Tracked, error) {
 			decision                          string
 			decidedAt, parkedAfter, checkedAt int64
 		)
-		if err := rows.Scan(&t.Name, &t.Position, &decision, &decidedAt, &parkedAfter, &t.PinnedPosition, &t.Slug, &t.Completed, &t.CaughtUp, &t.NextTitle, &t.NextCoverURL, &t.NextURL, &t.NextPosition, &checkedAt); err != nil {
+		if err := rows.Scan(&t.Name, &t.Position, &decision, &decidedAt, &parkedAfter, &t.PinnedPosition, &t.Slug, &t.Completed, &t.CaughtUp, &t.NextTitle, &t.NextCoverURL, &t.NextURL, &t.NextPosition, &checkedAt, &t.CoverURL); err != nil {
 			return nil, err
 		}
 		t.Decision = parseDecision(decision)
@@ -228,9 +234,9 @@ func (s *Store) Get(ctx context.Context, name string) (Tracked, bool, error) {
 		decidedAt, parkedAfter, checkedAt int64
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT display_name, position, decision, decided_at, parked_after, pinned_position, slug, completed, caught_up, next_title, next_cover_url, next_url, next_position, checked_at
+		SELECT display_name, position, decision, decided_at, parked_after, pinned_position, slug, completed, caught_up, next_title, next_cover_url, next_url, next_position, checked_at, cover_url
 		FROM tracked_series WHERE name = ?`, key(name)).
-		Scan(&t.Name, &t.Position, &decision, &decidedAt, &parkedAfter, &t.PinnedPosition, &t.Slug, &t.Completed, &t.CaughtUp, &t.NextTitle, &t.NextCoverURL, &t.NextURL, &t.NextPosition, &checkedAt)
+		Scan(&t.Name, &t.Position, &decision, &decidedAt, &parkedAfter, &t.PinnedPosition, &t.Slug, &t.Completed, &t.CaughtUp, &t.NextTitle, &t.NextCoverURL, &t.NextURL, &t.NextPosition, &checkedAt, &t.CoverURL)
 	switch {
 	case err == sql.ErrNoRows:
 		return Tracked{}, false, nil
