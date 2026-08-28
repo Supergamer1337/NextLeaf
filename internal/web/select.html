@@ -167,15 +167,19 @@
 
     /* The drawer is open when the URL carries #series, so it needs no script. */
     .drawer {
-      position: fixed; top: 0; right: 0; z-index: 5;
-      width: min(23rem, 100vw); height: 100vh;
+      --drawer-w: min(23rem, 100vw);
+      position: fixed; top: 0; right: calc(-1 * var(--drawer-w)); z-index: 5;
+      width: var(--drawer-w); height: 100vh;
       display: flex; flex-direction: column;
       background: var(--card); border-left: 1px solid var(--line);
       box-shadow: -24px 0 48px -32px var(--shadow-c);
-      transform: translateX(100%); visibility: hidden;
-      transition: transform 0.22s ease, visibility 0.22s;
+      visibility: hidden;
+      /* Position, not transform: a transform would become the containing
+         block for the fixed overlay below and trap it inside the drawer. */
+      transition: right 0.22s ease, visibility 0.22s;
     }
-    .drawer:target { transform: translateX(0); visibility: visible; }
+    .drawer:target,
+    .drawer:has(.switch-modal:target) { right: 0; visibility: visible; }
     .drawer-head {
       display: flex; align-items: baseline; justify-content: space-between;
       gap: 1rem; padding: 1.3rem 1.4rem 0.9rem; border-bottom: 1px solid var(--line);
@@ -256,8 +260,61 @@
       .drawer { width: 100vw; }
       .drawer-toggle { top: auto; bottom: 1rem; right: 1rem; }
     }
+    /* Switching which series a row is tracked under */
+    .switch-modal { position: fixed; inset: 0; z-index: 10; display: none; }
+    .switch-modal:target { display: grid; place-items: center; }
+    .switch-backdrop {
+      position: absolute; inset: 0;
+      background: light-dark(rgba(36,49,42,0.45), rgba(0,0,0,0.65));
+      backdrop-filter: blur(2px);
+    }
+    .switch-panel {
+      position: relative; width: min(30rem, calc(100vw - 2rem));
+      max-height: min(34rem, calc(100vh - 3rem)); overflow-y: auto;
+      background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+      box-shadow: 0 40px 80px -32px var(--shadow-c);
+      padding: 1.3rem 1.4rem 1.1rem;
+      animation: switch-in 0.16s ease-out;
+    }
+    @keyframes switch-in {
+      from { opacity: 0; transform: translateY(0.5rem) scale(0.98); }
+      to   { opacity: 1; transform: none; }
+    }
+    .switch-head { display: flex; align-items: flex-start; gap: 0.9rem; }
+    .switch-cover {
+      width: 3rem; height: 4.5rem; object-fit: cover; border-radius: 4px; background: var(--tint);
+    }
+    .switch-eyebrow {
+      font-size: 0.66rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+    }
+    .switch-title { margin: 0.1rem 0 0; font-family: var(--serif); font-size: 1.1rem; font-weight: 600; }
+    .switch-close { margin-left: auto; color: var(--muted); text-decoration: none; font-size: 1.5rem; line-height: 1; }
+    .switch-close:hover { color: var(--moss); }
+    .switch-lede { margin: 1rem 0 0.6rem; font-size: 0.78rem; color: var(--muted); }
+    .switch-options { display: grid; gap: 0.5rem; }
+    .switch-option {
+      display: grid; gap: 0.25rem; width: 100%; text-align: left; font: inherit; color: var(--ink);
+      background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+      padding: 0.7rem 0.85rem; cursor: pointer;
+      transition: transform 0.14s ease, border-color 0.14s ease;
+    }
+    .switch-option:hover { transform: translateY(-2px); border-color: var(--moss); }
+    .switch-option:focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; }
+    .switch-name { font-size: 0.92rem; font-weight: 600; }
+    .switch-meta { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+    .switch-source, .switch-pos {
+      font-size: 0.64rem; letter-spacing: 0.04em; text-transform: uppercase;
+      color: var(--muted); background: var(--tint); border-radius: 999px; padding: 0.05rem 0.45rem;
+    }
+    .switch-desc {
+      font-size: 0.75rem; color: var(--muted); line-height: 1.4;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    }
+
     @media (prefers-reduced-motion: reduce) {
       .drawer { transition: none; }
+      .switch-panel { animation: none; }
+      .switch-option:hover { transform: none; }
     }
 
     /* Notices */
@@ -450,7 +507,7 @@
 
 {{define "drawerRows"}}
 <ul class="drawer-list">
-  {{range .Items}}
+  {{range $i, $row := .Items}}
   {{$tracked := .Name}}
   <li>
     <div class="drawer-row">
@@ -493,27 +550,45 @@
         {{if .Alternatives}}
         {{/* The same books are filed under other series too — a franchise
              reordered, or two backends naming it differently — and the pick
-             between them is a guess the reader can correct. Folded away so a
-             long list costs the row nothing until asked for. */}}
-        <details class="switcher">
-          <summary class="switcher-toggle" title="Track under a different series">
-            <span class="switcher-icon" aria-hidden="true">⇄</span>
-            <span class="switcher-label">Switch series</span>
-          </summary>
-          <div class="switcher-menu">
-            {{range .Alternatives}}
-            <form method="post" action="/series/switch">
-              <input type="hidden" name="name" value="{{$tracked}}">
-              <input type="hidden" name="to" value="{{.Name}}">
-              <button class="switcher-option" type="submit">
-                <span class="switcher-name">{{.Name}}</span>
-                {{if .Source}}<span class="switcher-source">{{ucfirst .Source}}</span>{{end}}
-                {{if .Description}}<span class="switcher-desc">{{.Description}}</span>{{end}}
-              </button>
-            </form>
-            {{end}}
+             between them is a guess the reader can correct. :target opens the
+             overlay, so no script is needed. */}}
+        {{$id := anchorID $.Label $i}}
+        <a class="switcher-toggle" href="#{{$id}}" title="Track under a different series">
+          <span class="switcher-icon" aria-hidden="true">⇄</span>
+          <span class="switcher-label">Switch series</span>
+        </a>
+        <div class="switch-modal" id="{{$id}}" role="dialog" aria-label="Choose a series">
+          <a class="switch-backdrop" href="#series" aria-label="Close"></a>
+          <div class="switch-panel">
+            <div class="switch-head">
+              {{if or .NextCoverURL .CoverURL}}
+              <img class="switch-cover" src="{{or .NextCoverURL .CoverURL}}" alt="" loading="lazy">
+              {{end}}
+              <div>
+                <span class="switch-eyebrow">Tracked as</span>
+                <h3 class="switch-title">{{.Name}}</h3>
+              </div>
+              <a class="switch-close" href="#series" aria-label="Close">&times;</a>
+            </div>
+            <p class="switch-lede">The same books are filed under these too. Pick the one you mean.</p>
+            <div class="switch-options">
+              {{range .Alternatives}}
+              <form method="post" action="/series/switch">
+                <input type="hidden" name="name" value="{{$tracked}}">
+                <input type="hidden" name="to" value="{{.Name}}">
+                <button class="switch-option" type="submit">
+                  <span class="switch-name">{{.Name}}</span>
+                  <span class="switch-meta">
+                    {{if .Source}}<span class="switch-source">{{ucfirst .Source}}</span>{{end}}
+                    {{if .Position}}<span class="switch-pos">You're at book {{.Position}}</span>{{end}}
+                  </span>
+                  {{if .Description}}<span class="switch-desc">{{.Description}}</span>{{end}}
+                </button>
+              </form>
+              {{end}}
+            </div>
           </div>
-        </details>
+        </div>
         {{end}}
       </div>
     </div>

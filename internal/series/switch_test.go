@@ -164,3 +164,31 @@ func TestAlternativesCarryTheirBlurbAndSource(t *testing.T) {
 		t.Errorf("Source = %q, want grimmory", alt.Source)
 	}
 }
+
+func TestAnAlternativeRemembersWhereTheReaderWouldBeInIt(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	// The same book is book 2 chronologically and book 1 as published, which
+	// is the whole reason the reader might want the other ordering.
+	e := library.Entry{Book: library.Book{
+		Title:       "Leviathan Wakes",
+		Series:      &library.Series{Name: "The Expanse (Chronological)", Position: library.At(2)},
+		OtherSeries: []library.Series{{Name: "The Expanse", Position: library.At(1)}},
+	}}
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{e}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	tracked, _, err := st.Get(ctx, "The Expanse (Chronological)")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	alt := tracked.Alternatives[0]
+	if alt.Position == nil {
+		t.Fatal("the alternative does not say where the reader would be in it")
+	}
+	if *alt.Position != 1 {
+		t.Errorf("Position = %v, want 1, the slot in that ordering", *alt.Position)
+	}
+}

@@ -88,6 +88,7 @@ var migrations = [][]string{
 	// which backend claims them.
 	{`ALTER TABLE series_alternative ADD COLUMN description TEXT NOT NULL DEFAULT ''`},
 	{`ALTER TABLE series_alternative ADD COLUMN source TEXT NOT NULL DEFAULT ''`},
+	{`ALTER TABLE series_alternative ADD COLUMN position REAL`},
 }
 
 // Store is the durable record of tracked series and standing decisions.
@@ -302,14 +303,15 @@ func recordAlternatives(ctx context.Context, tx *sql.Tx, tracked library.Series,
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO series_alternative (name, alternative, display, description, source)
-			VALUES (?, ?, ?, ?, ?)
+			INSERT INTO series_alternative (name, alternative, display, description, source, position)
+			VALUES (?, ?, ?, ?, ?, ?)
 			ON CONFLICT(name, alternative) DO UPDATE SET
 				display = excluded.display,
 				-- A source that knows no blurb must not erase one another gave.
 				description = CASE WHEN excluded.description != '' THEN excluded.description ELSE description END,
-				source = CASE WHEN excluded.source != '' THEN excluded.source ELSE source END`,
-			key(tracked.Name), key(m.Name), m.Name, m.Description, m.Source); err != nil {
+				source = CASE WHEN excluded.source != '' THEN excluded.source ELSE source END,
+				position = CASE WHEN excluded.position IS NOT NULL THEN excluded.position ELSE position END`,
+			key(tracked.Name), key(m.Name), m.Name, m.Description, m.Source, m.Position); err != nil {
 			return fmt.Errorf("recording alternatives of %q: %w", tracked.Name, err)
 		}
 	}
@@ -319,7 +321,7 @@ func recordAlternatives(ctx context.Context, tx *sql.Tx, tracked library.Series,
 // alternatives lists the other series a tracked series' books belong to.
 func (s *Store) alternatives(ctx context.Context, name string) ([]Alternative, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT display, description, source FROM series_alternative WHERE name = ? ORDER BY display`,
+		`SELECT display, description, source, position FROM series_alternative WHERE name = ? ORDER BY display`,
 		key(name))
 	if err != nil {
 		return nil, err
@@ -329,7 +331,7 @@ func (s *Store) alternatives(ctx context.Context, name string) ([]Alternative, e
 	var out []Alternative
 	for rows.Next() {
 		var a Alternative
-		if err := rows.Scan(&a.Name, &a.Description, &a.Source); err != nil {
+		if err := rows.Scan(&a.Name, &a.Description, &a.Source, &a.Position); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

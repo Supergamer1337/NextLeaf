@@ -109,6 +109,10 @@ type Alternative struct {
 	Name        string
 	Description string
 	Source      string
+	// Position is where the reader sits in this ordering, which is the point
+	// of the choice: one book is number 2 chronologically and number 1 as
+	// published. nil when the book is unplaced in it.
+	Position *float64
 }
 
 // Placed reports whether the reader has read a numbered volume of the series,

@@ -760,26 +760,51 @@ func manyAlternativesStore(t *testing.T) *series.Store {
 	return st
 }
 
-func TestTheSwitcherStartsClosedAndHoldsEveryAlternative(t *testing.T) {
+func TestTheSwitcherOpensAnOverlayHoldingEveryAlternative(t *testing.T) {
 	body := getBody(t, ready(t, stubSource{}, manyAlternativesStore(t)), "/")
 
-	i := strings.Index(body, `<details class="switcher"`)
+	// The toggle points at an overlay that only :target reveals, so the row
+	// carries one small control however many series the books belong to.
+	i := strings.Index(body, `class="switcher-toggle" href="#`)
 	if i < 0 {
-		t.Fatal("no switcher on a row with alternatives")
+		t.Fatal("no switch control on a row with alternatives")
 	}
-	openTag, _, _ := strings.Cut(body[i:], ">")
-	if strings.Contains(openTag, "open") {
-		t.Errorf("the switcher starts open: %q", openTag)
+	rest := body[i+len(`class="switcher-toggle" href="#`):]
+	id, _, _ := strings.Cut(rest, `"`)
+	if id == "" {
+		t.Fatal("the switch control points nowhere")
 	}
-	// However many series the books belong to, they all have to be reachable.
-	menu := body[i:]
-	if end := strings.Index(menu, "</details>"); end > 0 {
-		menu = menu[:end]
+
+	j := strings.Index(body, `id="`+id+`"`)
+	if j < 0 {
+		t.Fatalf("no overlay with id %q for the control to open", id)
+	}
+	overlay := body[j:]
+	if end := strings.Index(overlay, "</div>\n        </div>"); end > 0 {
+		overlay = overlay[:end]
 	}
 	for _, want := range []string{"The Expanse", "Expanse Shorts", "The Expanse Saga"} {
-		if !strings.Contains(menu, `value="`+want+`"`) {
-			t.Errorf("the switcher does not offer %q", want)
+		if !strings.Contains(overlay, `value="`+want+`"`) {
+			t.Errorf("the overlay does not offer %q", want)
 		}
+	}
+	// It must be dismissable without choosing anything.
+	if !strings.Contains(overlay, "switch-backdrop") {
+		t.Error("the overlay cannot be dismissed")
+	}
+}
+
+func TestEachRowsOverlayHasItsOwnAddress(t *testing.T) {
+	// Two rows sharing an id would open each other's overlay.
+	body := getBody(t, ready(t, stubSource{}, manyAlternativesStore(t)), "/")
+
+	seen := map[string]bool{}
+	for _, chunk := range strings.Split(body, `class="switch-modal" id="`)[1:] {
+		id, _, _ := strings.Cut(chunk, `"`)
+		if seen[id] {
+			t.Errorf("overlay id %q is used twice", id)
+		}
+		seen[id] = true
 	}
 }
 
