@@ -259,11 +259,16 @@ func groupFor(entry library.Entry, groups []Group) (Group, bool) {
 
 // Decide records a statement about the named series. For "switch", to names
 // the alternative the reader wants the series tracked under.
+//
+// It works from the unenriched view: recording a statement needs the group
+// and its anchors, never the catalogue, so a slow backend cannot stretch the
+// POST the reader is waiting on.
 func (e *Engine) Decide(ctx context.Context, action, name, to string) error {
-	v, err := e.View(ctx)
+	in, err := e.input(ctx)
 	if err != nil {
 		return err
 	}
+	v := Compute(in)
 	var group *Group
 	for i := range v.Groups {
 		if key(v.Groups[i].Name) == key(name) {

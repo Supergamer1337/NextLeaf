@@ -56,3 +56,18 @@ func TestMergingTakesASeriesFromTheOnlySourceThatKnowsOne(t *testing.T) {
 		t.Errorf("OtherSeries = %+v, want none", merged.Book.OtherSeries)
 	}
 }
+
+func TestBookKeyIgnoresAuthorOrdering(t *testing.T) {
+	// Hardcover credits the illustrator first on some volumes; the book is
+	// the same book whichever collaborator leads the list.
+	a := Entry{Book: Book{Title: "Overlord, Vol. 9", Authors: []string{"Kugane Maruyama", "so-bin"}}}
+	b := Entry{Book: Book{Title: "Overlord, Vol. 9", Authors: []string{"so-bin", "Kugane Maruyama"}}}
+	if BookKey(a) != BookKey(b) {
+		t.Errorf("keys differ on author order:\n  %q\n  %q", BookKey(a), BookKey(b))
+	}
+	// Different authors are still different books.
+	c := Entry{Book: Book{Title: "Overlord, Vol. 9", Authors: []string{"Somebody Else"}}}
+	if BookKey(a) == BookKey(c) {
+		t.Error("same title by a different author must not share a key")
+	}
+}

@@ -323,6 +323,8 @@
       padding: 0.28rem 0.9rem; margin-left: auto;
     }
     .wheel-ok:hover { filter: brightness(1.07); }
+    .switching .wheel-ok { opacity: 0.7; cursor: wait; }
+    .switching .wheel-ghost { pointer-events: none; filter: brightness(0.75); }
     .wheel-cancel { margin-left: 0.1rem; }
 
     /* Notices */
@@ -541,8 +543,11 @@
           var to = cands[i].dataset.to;
           if (!to) { close(); return; } // kept the current identity
           form.querySelector("input[name=to]").value = to;
-          close(); // settle back down, then submit
-          setTimeout(function () { form.submit(); }, 170);
+          // Stay lifted and say what is happening: the reload is the settle.
+          row.classList.add("switching");
+          face.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+          face.querySelector(".wheel-ok").textContent = "Switching…";
+          form.submit();
         }
 
         btn.addEventListener("click", function () {

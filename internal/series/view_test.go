@@ -443,3 +443,73 @@ func TestFoldingSameNamedGroupsMergesTheirReadSets(t *testing.T) {
 		t.Errorf("NextTitle = %q, want nothing: the folded read-set covers it", g.NextTitle)
 	}
 }
+
+func TestASharedBookJoinsBothBackendsSameNamedSeries(t *testing.T) {
+	// Vol 8 is held by both backends (one merged book carrying both claims);
+	// vol 5 was read only on grimmory. The shared book is positive evidence
+	// the two same-named identities are one series, so vol 5's group joins it.
+	shared := library.Entry{Book: library.Book{
+		Title:       "Vol 8",
+		Series:      &library.Series{Name: "Overlord", Position: library.At(8), Source: "hardcover"},
+		OtherSeries: []library.Series{{Name: "Overlord", Position: library.At(8), Source: "grimmory"}},
+	}, Status: library.StatusRead}
+	shared.FinishedAt = day0
+	gmOnly := entry("Vol 5", "Overlord", 5, "grimmory")
+	gmOnly.Status, gmOnly.FinishedAt = library.StatusRead, day0
+
+	v := Compute(Input{Reads: []library.Entry{shared, gmOnly}, SourceOrder: []string{"hardcover", "grimmory"}})
+	if len(v.Groups) != 1 {
+		t.Fatalf("groups = %v, want one: a shared book proves the identities equal", groupNames(v))
+	}
+	if v.Groups[0].Position == nil || *v.Groups[0].Position != 8 {
+		t.Errorf("Position = %v, want 8 across the joined read-set", v.Groups[0].Position)
+	}
+}
+
+func TestASharedBookDoesNotJoinDifferentlyNamedSeries(t *testing.T) {
+	// One book in a franchise and its sub-series: real, distinct series.
+	shared := library.Entry{Book: library.Book{
+		Title:       "Wool",
+		Series:      &library.Series{Name: "Silo", Position: library.At(1), Source: "hardcover"},
+		OtherSeries: []library.Series{{Name: "Wool", Position: library.At(1), Source: "hardcover"}},
+	}, Status: library.StatusRead}
+	shared.FinishedAt = day0
+	other := entry("Shift", "Wool", 2, "hardcover")
+	other.Status, other.FinishedAt = library.StatusRead, day0
+
+	v := Compute(Input{Reads: []library.Entry{shared, other}, SourceOrder: []string{"hardcover"}})
+	if len(v.Groups) != 2 {
+		t.Errorf("groups = %v, want Silo and Wool kept apart", groupNames(v))
+	}
+}
+
+func TestDisagreeingPositionsBlockTheAutoJoin(t *testing.T) {
+	// Same name across backends but the shared book sits at different slots:
+	// the numbering schemes differ, so fusing would corrupt the read-set.
+	shared := library.Entry{Book: library.Book{
+		Title:       "Crossroads",
+		Series:      &library.Series{Name: "The Witcher", Position: library.At(0.1), Source: "hardcover"},
+		OtherSeries: []library.Series{{Name: "The Witcher", Position: library.At(9), Source: "grimmory"}},
+	}, Status: library.StatusRead}
+	shared.FinishedAt = day0
+	gmOnly := entry("Book 5", "The Witcher", 5, "grimmory")
+	gmOnly.Status, gmOnly.FinishedAt = library.StatusRead, day0
+
+	v := Compute(Input{Reads: []library.Entry{shared, gmOnly}, SourceOrder: []string{"hardcover", "grimmory"}})
+	if len(v.Groups) != 2 {
+		t.Errorf("groups = %v, want the disagreement kept visible for the reader to fold", groupNames(v))
+	}
+}
+
+func TestAStatementWithDeadAnchorsFallsBackToItsName(t *testing.T) {
+	// The book-key scheme changed underneath a stored statement, so none of
+	// its anchors exist any more. Its name still says what it was about.
+	reads := []library.Entry{read("Book 3", "Mistborn", 3, day0)}
+	drop := Statement{Kind: KindDrop, MadeAt: day1, Name: "Mistborn",
+		Anchors: []string{"stale-key-from-an-older-scheme"}}
+
+	v := Compute(Input{Reads: reads, Statements: []Statement{drop}})
+	if g := groupNamed(t, v, "Mistborn"); g.Decision != Dropped {
+		t.Errorf("Decision = %v, want the drop to survive via its name", g.Decision)
+	}
+}

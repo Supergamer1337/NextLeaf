@@ -192,14 +192,20 @@ func mergeSeries(base Book, dup Book) (*Series, []Series) {
 func BookKey(e Entry) string { return dedupKey(e) }
 
 // dedupKey identifies a book for deduplication; empty means "never merge".
+// The author component is the lexicographically smallest credit, not the
+// first: sources order collaborators differently (one credits the
+// illustrator first), and the book is the same book either way.
 func dedupKey(e Entry) string {
 	title := normalize(e.Book.Title)
 	if title == "" {
 		return ""
 	}
 	author := ""
-	if len(e.Book.Authors) > 0 {
-		author = normalize(e.Book.Authors[0])
+	for _, a := range e.Book.Authors {
+		n := normalize(a)
+		if n != "" && (author == "" || n < author) {
+			author = n
+		}
 	}
 	return title + "\x00" + author
 }

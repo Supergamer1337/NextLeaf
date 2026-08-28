@@ -143,7 +143,8 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not record that decision", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	// Back into the drawer: the reader was in it when they decided.
+	http.Redirect(w, r, "/#series", http.StatusSeeOther)
 }
 
 // handleCover relays a cover image from the source holding it, for providers

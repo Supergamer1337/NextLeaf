@@ -274,6 +274,29 @@ func buildGroups(books []*book, statements []Statement) map[string]*Group {
 		return g
 	}
 
+	// A shared book carrying the same series name from two backends, at the
+	// same slot, is positive evidence the two identities are one series —
+	// this is the one cross-source join made without the reader saying so.
+	// Same-source claims never join this way (a franchise and its sub-series
+	// are genuinely distinct), and a slot disagreement blocks it: differing
+	// numbering schemes fused would corrupt the read-set.
+	for _, b := range books {
+		for x := 0; x < len(b.memberships); x++ {
+			for y := x + 1; y < len(b.memberships); y++ {
+				mx, my := b.memberships[x], b.memberships[y]
+				if mx.Source == my.Source || key(mx.Name) != key(my.Name) {
+					continue
+				}
+				px, okx := mx.Slot()
+				py, oky := my.Slot()
+				if okx && oky && px != py {
+					continue
+				}
+				uf.union(groupKey(mx), groupKey(my))
+			}
+		}
+	}
+
 	// Union first, so books land in already-joined classes.
 	for _, st := range statements {
 		if st.Kind != KindPrefer {
@@ -354,6 +377,13 @@ func appendMemberships(have, more []library.Series) []library.Series {
 // statements predating anchors), with spent statements expiring by predicate
 // rather than by anyone editing them.
 func applyStatements(groups map[string]*Group, books []*book, statements []Statement, finished int) {
+	// Anchors that exist nowhere any more (books gone, or an older key
+	// scheme) cannot veto a statement: its name takes over as the matcher.
+	live := map[string]bool{}
+	for _, b := range books {
+		live[b.key] = true
+	}
+
 	var latestPin *Group
 	var latestPinAt time.Time
 	for _, st := range statements {
@@ -361,7 +391,7 @@ func applyStatements(groups map[string]*Group, books []*book, statements []State
 			continue
 		}
 		for _, g := range groups {
-			if !applies(st, g) {
+			if !applies(st, g, live) {
 				continue
 			}
 			switch st.Kind {
@@ -420,16 +450,21 @@ func applyStatements(groups map[string]*Group, books []*book, statements []State
 }
 
 // applies reports whether a statement is about this group: shared anchor
-// books first, display-name match as the fallback for pre-anchor statements.
-func applies(st Statement, g *Group) bool {
+// books first, display-name match as the fallback when the statement has no
+// anchors — or none of its anchors exist anywhere any more.
+func applies(st Statement, g *Group, live map[string]bool) bool {
+	anchorsAlive := false
 	for _, anchor := range st.Anchors {
+		if live[anchor] {
+			anchorsAlive = true
+		}
 		for _, k := range g.BookKeys {
 			if anchor == k {
 				return true
 			}
 		}
 	}
-	if len(st.Anchors) == 0 && st.Name != "" {
+	if !anchorsAlive && st.Name != "" {
 		if key(st.Name) == key(g.Name) {
 			return true
 		}

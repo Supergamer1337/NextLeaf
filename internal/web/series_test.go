@@ -494,3 +494,41 @@ func enclosingDetails(body, marker string) (string, bool) {
 	}
 	return body[start : start+end], true
 }
+
+func TestADecisionRedirectsBackIntoTheDrawer(t *testing.T) {
+	// The reader was in the drawer when they decided; landing them back on a
+	// closed drawer loses their place.
+	h := ready(t, midSeries(), testStore(t))
+	rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/#series" {
+		t.Errorf("Location = %q, want /#series so the drawer stays open", loc)
+	}
+}
+
+func TestDecidingNeverWaitsOnTheCatalogue(t *testing.T) {
+	// Recording a statement needs the group, not the next-book lookups; a
+	// slow catalogue must not stretch the POST.
+	src := &countingSlowResolver{stubSource: midSeries()}
+	h := ready(t, src, testStore(t))
+
+	if rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	if src.calls != 0 {
+		t.Errorf("the decision POST made %d catalogue lookups, want 0", src.calls)
+	}
+}
+
+// countingSlowResolver counts lookups so a test can prove none happened.
+type countingSlowResolver struct {
+	stubSource
+	calls int
+}
+
+func (c *countingSlowResolver) NextInSeries(_ context.Context, _ library.SeriesQuery) (library.Entry, bool, error) {
+	c.calls++
+	return library.Entry{}, false, nil
+}
