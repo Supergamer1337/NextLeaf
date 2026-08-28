@@ -181,7 +181,12 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 	// the group with no cached answer, which is the one case the re-render must
 	// be allowed to ask, or the row comes back with nothing next.
 	data := s.viewOf(ctx, false, uncached)
-	data.Done = doneFor(action, name, strings.TrimSpace(r.FormValue("to")))
+	// A decision made in the drawer shows its effect where the reader is
+	// standing — the row moves, undo alongside — so only card decisions get
+	// the confirmation banner.
+	if r.FormValue("from") != "drawer" {
+		data.Done = doneFor(action, name, strings.TrimSpace(r.FormValue("to")))
+	}
 	renderView(w, data, http.StatusOK)
 }
 

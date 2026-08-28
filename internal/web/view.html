@@ -73,8 +73,10 @@
       <div class="actions">
         <button class="btn" type="button" hx-get="/view?another=1" hx-trigger="click, keyup[key=='n'] from:body" hx-disabled-elt="this" title="Press n for another pick">Pick another</button>
         {{if $.Decidable}}
+        {{/* No pin here: pinning re-renders this same card, so the button
+             would look inert. It lives in the drawer, where the filing
+             visibly changes. */}}
         {{$vals := hxvals "name" $.Decide}}
-        <button class="btn btn--quiet" type="button" hx-post="/series/pin" hx-vals="{{$vals}}" hx-disabled-elt="this">Reading this next</button>
         <button class="btn btn--quiet" type="button" hx-post="/series/park" hx-vals="{{$vals}}" hx-disabled-elt="this">Park for one book</button>
         <button class="btn btn--quiet" type="button" hx-post="/series/drop" hx-vals="{{$vals}}" hx-disabled-elt="this">Drop this series</button>
         {{end}}
@@ -151,7 +153,9 @@
           {{else if .CaughtUp}}
             <span class="drawer-next">Nothing left to read</span>
           {{end}}
-          {{$vals := hxvals "name" .Name}}
+          {{/* "from" marks the decision as made in the drawer, where the row
+               moving is the feedback; the page raises no banner for it. */}}
+          {{$vals := hxvals "name" .Name "from" "drawer"}}
           <div class="drawer-acts">
             {{if and .NextTitle $.CanPick}}
             <button class="drawer-act drawer-act--go" type="button" hx-post="/series/pin" hx-vals="{{$vals}}" hx-disabled-elt="this">Pick this</button>
@@ -168,11 +172,14 @@
           </div>
         </div>
         {{if .Alternatives}}
-        {{/* The wheel the script spins in the row's own footprint. Every
+        {{/* The wheel: a card floated over the row and centered on it, so
+             opening, cycling, and closing never reflow the list. Every
              candidate arrives fully rendered — the current identity first,
              then each alternative — so the script only chooses which one
-             shows, never writes their content. Hidden until the row is spun. */}}
+             shows, never writes their content. Hidden until the row is spun.
+             The ghosts live inside it, anchored to the card's own edges. */}}
         <div class="wheel-face">
+          <img class="wheel-cover" alt="" hidden>
           {{template "wheelItem" dict "To" "" "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Desc" "Currently tracked." "Cover" (or .NextCoverURL .CoverURL)}}
           {{range .Alternatives}}
           {{template "wheelItem" dict "To" .Name "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Desc" .Description "Cover" .CoverURL}}
@@ -181,21 +188,19 @@
             <button type="button" class="wheel-ok">Use this</button>
             <button type="button" class="wheel-cancel" aria-label="Cancel">✕</button>
           </div>
+          <button type="button" class="wheel-ghost wheel-prev" aria-label="Previous series">{{template "wheelPeeks" .}}</button>
+          <button type="button" class="wheel-ghost wheel-next" aria-label="Next series">{{template "wheelPeeks" .}}</button>
         </div>
         {{end}}
       </div>
       {{if .Alternatives}}
-      {{/* The ghost cards the selection moves between: rendered above and
-           below the lifted card, smaller and darkened for depth. Each holds a
-           peek of every candidate; the script shows the two neighbours. */}}
-      <button type="button" class="wheel-ghost wheel-prev" aria-label="Previous series">{{template "wheelPeeks" .}}</button>
-      <button type="button" class="wheel-ghost wheel-next" aria-label="Next series">{{template "wheelPeeks" .}}</button>
       <button class="switcher-btn" type="button" title="Track under a different series" aria-label="Switch series">⇄</button>
       {{/* The wheel's button sits outside this form, so name it directly; only
            one row is ever spun at a time. */}}
       <form hx-post="/series/switch" hx-disabled-elt=".wheel-ok" class="wheel-form" hidden>
         <input type="hidden" name="name" value="{{$tracked}}">
         <input type="hidden" name="to" value="">
+        <input type="hidden" name="from" value="drawer">
       </form>
       {{end}}
     </div>
@@ -214,7 +219,10 @@
     {{if .Source}}<span class="switch-source">{{ucfirst .Source}}</span>{{end}}
     {{if .PosLabel}}<span class="switch-pos">{{.PosLabel}}</span>{{end}}
   </span>
-  {{if .Desc}}<span class="switch-desc">{{.Desc}}</span>{{end}}
+  {{/* Always present, its lines reserved in CSS, so candidates with and
+       without descriptions have the same height and cycling never resizes
+       the card. */}}
+  <span class="switch-desc">{{.Desc}}</span>
 </div>
 {{end}}
 

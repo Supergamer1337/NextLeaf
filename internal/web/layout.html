@@ -100,6 +100,11 @@
       display: block; width: 116px; flex: none; aspect-ratio: 2 / 3; object-fit: cover;
       border-radius: 6px; box-shadow: 0 8px 18px -10px var(--shadow-c);
     }
+    /* A morph swaps the card's text at once, but the cover file still has to
+       arrive; until then the img would keep painting the previous book. It
+       hides instead — the tinted box holds its place — and fades in loaded. */
+    img.cover { background: var(--tint); transition: opacity 0.18s ease; }
+    img.cover.cover--loading { opacity: 0; }
     .cover--blank {
       display: grid; place-items: center; padding: 0.6rem; text-align: center;
       background: var(--tint); color: var(--muted);
@@ -166,6 +171,15 @@
       font-size: 0.72rem; color: var(--muted); background: var(--tint);
       border-radius: 999px; padding: 0.05rem 0.45rem;
     }
+
+    /* Darkens the page while the drawer is out; clicking it closes the
+       drawer again. It sits under the drawer and over everything else. */
+    .drawer-scrim {
+      position: fixed; inset: 0; z-index: 4;
+      background: light-dark(rgba(36, 49, 42, 0.30), rgba(0, 0, 0, 0.45));
+      opacity: 0; pointer-events: none; transition: opacity 0.22s ease;
+    }
+    .drawer-scrim.open { opacity: 1; pointer-events: auto; }
 
     /* The drawer is open when the URL carries #series, so it needs no script. */
     .drawer {
@@ -250,13 +264,12 @@
     }
     .drawer.dimmed .drawer-dim { opacity: 1; pointer-events: auto; }
 
-    .drawer-row { position: relative; transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease; }
-    .drawer-row.spinning {
-      z-index: 5; background: var(--card);
-      transform: scale(1.03); border-radius: 10px;
-      box-shadow: 0 16px 36px -18px var(--shadow-c);
-      padding-left: 0.45rem; padding-right: 0.45rem;
-    }
+    /* The row itself never changes size or padding while spinning: its
+       contents just turn invisible under the floated card, so the rows
+       behind stay exactly where they were. */
+    .drawer-row { position: relative; }
+    .drawer-row.spinning { z-index: 5; }
+    .spinning > .drawer-cover, .spinning .row-body { visibility: hidden; }
 
     .switcher-btn {
       position: absolute; top: 50%; right: 0; z-index: 6;
@@ -264,36 +277,63 @@
       font: inherit; font-size: 1.15rem; line-height: 1; cursor: pointer;
       color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 8px;
       transform: translateY(-50%);
-      transition: transform 0.25s ease, color 0.15s ease, background 0.15s ease;
+      transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
     }
     .switcher-btn:hover { color: var(--moss); border-color: var(--moss); }
-    .spinning .switcher-btn {
-      color: var(--moss); background: var(--tint); border-color: var(--moss);
-      transform: translateY(-50%) rotate(180deg);
-    }
+    .spinning .switcher-btn { color: var(--moss); background: var(--tint); border-color: var(--moss); }
 
-    .wheel-face { display: none; }
-    .spinning .row-body { display: none; }
-    .spinning .wheel-face { display: grid; gap: 0.45rem; animation: wheel-in 0.18s ease-out; }
-    @keyframes wheel-in {
-      from { opacity: 0; transform: translateY(0.25rem); }
-      to   { opacity: 1; transform: none; }
+    /* The pop is the face itself: a card floated over the row, centered on
+       it, out of the flow — it can be taller or shorter than the row without
+       moving anything. It springs up with a slight overshoot. */
+    .wheel-face {
+      display: none; position: absolute; z-index: 1;
+      left: -0.45rem; right: -0.45rem; top: 50%; transform: translateY(-50%);
+      background: var(--card); border-radius: 10px;
+      box-shadow: 0 16px 32px -16px var(--shadow-c);
+      padding: 0.55rem 0.6rem;
     }
+    .spinning .wheel-face {
+      display: grid; grid-template-columns: 2.6rem 1fr;
+      gap: 0.45rem 0.7rem; align-items: center;
+      animation: face-pop 0.2s cubic-bezier(0.2, 0.8, 0.3, 1.25);
+    }
+    @keyframes face-pop {
+      from { opacity: 0; transform: translateY(-50%) scale(0.95); }
+      to   { opacity: 1; transform: translateY(-50%) scale(1); }
+    }
+    .wheel-cover {
+      grid-column: 1; width: 2.6rem; height: 3.9rem;
+      object-fit: cover; border-radius: 3px; background: var(--tint);
+    }
+    .wheel-controls { grid-column: 1 / -1; }
     .wheel-ghost {
       display: none; position: absolute; left: 0; right: 0; z-index: 5;
       align-items: center; gap: 0.6rem; text-align: left;
-      font: inherit; color: var(--ink); cursor: pointer;
-      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      font: inherit; cursor: pointer;
+      /* Opaque on purpose: a see-through card over the dimmed backdrop goes
+         muddy. The ghosts step back through muted text alone — no filters,
+         no scaling — and speak up in colour when pointed at. */
+      color: var(--muted); background: var(--card);
+      border: 1px solid var(--line); border-radius: 10px;
       padding: 0.45rem 0.55rem;
-      /* Depth without transparency: a see-through card over the dimmed
-         backdrop goes muddy, so the ghosts stay opaque and step back through
-         size and a slightly darker surface instead. */
-      filter: brightness(0.86); transform: scale(0.92);
-      box-shadow: 0 8px 20px -14px var(--shadow-c);
-      transition: transform 0.15s ease, filter 0.15s ease;
+      box-shadow: 0 6px 16px -12px var(--shadow-c);
+      transition: color 0.15s ease, border-color 0.15s ease;
     }
     .spinning .wheel-ghost { display: flex; }
-    .wheel-ghost:hover { filter: brightness(1); transform: scale(0.96); }
+    /* backwards keeps the ghosts invisible through their delay, so the row
+       is seen to lift first and the cards to come out from behind it. */
+    .spinning .wheel-prev { animation: fan-up 0.2s cubic-bezier(0.2, 0.8, 0.3, 1.15) 0.07s backwards; }
+    .spinning .wheel-next { animation: fan-down 0.2s cubic-bezier(0.2, 0.8, 0.3, 1.15) 0.07s backwards; }
+    @keyframes fan-up {
+      from { opacity: 0; transform: translateY(1.8rem) scale(0.95); }
+      to   { opacity: 1; transform: none; }
+    }
+    @keyframes fan-down {
+      from { opacity: 0; transform: translateY(-1.8rem) scale(0.95); }
+      to   { opacity: 1; transform: none; }
+    }
+    .wheel-ghost:hover { color: var(--ink); border-color: var(--moss); }
+    .wheel-ghost:hover .peek-name { color: var(--moss); }
     .wheel-prev { bottom: calc(100% + 0.4rem); }
     .wheel-next { top: calc(100% + 0.4rem); }
     /* Every candidate's peek is in the ghost; the script shows one. The
@@ -307,16 +347,19 @@
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .ghost-badges { display: flex; gap: 0.35rem; }
-    .wheel-item { display: grid; gap: 0.15rem; min-height: 3rem; align-content: center; width: calc(100% - 2.4rem); }
-    .wheel-item[hidden] { display: none; }
+    /* Every candidate occupies the same grid cell, the hidden ones kept in
+       the layout by visibility alone, so the card is always sized by its
+       tallest candidate and cycling never changes its height. */
+    .wheel-item { grid-area: 1 / 2; display: grid; gap: 0.15rem; min-height: 3rem; align-content: center; width: calc(100% - 2.4rem); }
+    .wheel-item[hidden] { visibility: hidden; }
     .wheel-item.roll-up   { animation: roll-up 0.16s ease-out; }
     .wheel-item.roll-down { animation: roll-down 0.16s ease-out; }
     @keyframes roll-up {
-      from { opacity: 0; transform: translateY(0.5rem); }
+      from { opacity: 0; transform: translateY(0.25rem); }
       to   { opacity: 1; transform: none; }
     }
     @keyframes roll-down {
-      from { opacity: 0; transform: translateY(-0.5rem); }
+      from { opacity: 0; transform: translateY(-0.25rem); }
       to   { opacity: 1; transform: none; }
     }
     .wheel-meta { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
@@ -327,6 +370,10 @@
     .switch-desc {
       font-size: 0.72rem; color: var(--muted); line-height: 1.4;
       display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+      /* Three lines are always reserved, so a candidate without a
+         description is as tall as one with, and cycling never resizes
+         the card. */
+      min-height: 4.2em;
     }
     .wheel-controls { display: flex; align-items: center; gap: 0.4rem; }
     .wheel-step, .wheel-cancel {
@@ -361,8 +408,10 @@
       .cover { width: 104px; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .btn, .theme-toggle { transition: none; }
+      .btn, .theme-toggle, img.cover, .drawer-scrim { transition: none; }
       .btn:hover { transform: none; }
+      .spinning .wheel-prev, .spinning .wheel-next, .spinning .wheel-face,
+      .wheel-item.roll-up, .wheel-item.roll-down { animation: none; }
     }
     /* The waiting card holds the real card's footprint, so nothing jumps
        when the recommendation lands. Only the shell carries it: once a card
@@ -410,6 +459,7 @@
   </main>
 
   <a class="drawer-toggle" id="drawer-toggle" href="#series" hidden>Series <span class="drawer-count">0</span></a>
+  <div class="drawer-scrim" aria-hidden="true"></div>
   <aside class="drawer" id="series" aria-label="Series you're tracking">
     <div class="drawer-head">
       <h2 class="drawer-title">Series</h2>
@@ -432,16 +482,20 @@
       function drawer() { return document.querySelector(".drawer"); }
 
       // The hash stays the drawer's source of truth; the class is how the CSS
-      // reads it, now that :target went with the script-free path.
+      // reads it, now that :target went with the script-free path. The scrim
+      // follows the drawer.
       function syncDrawer() {
+        var open = location.hash === "#series";
         var d = drawer();
-        if (d) { d.classList.toggle("open", location.hash === "#series"); }
+        if (d) { d.classList.toggle("open", open); }
+        var scrim = document.querySelector(".drawer-scrim");
+        if (scrim) { scrim.classList.toggle("open", open); }
       }
+
+      function closeDrawer() { location.hash = ""; }
 
       function closeWheel() {
         if (!openRow) { return; }
-        var img = openRow.querySelector("img.drawer-cover");
-        if (img && img.dataset.original) { img.src = img.dataset.original; }
         openRow.classList.remove("spinning");
         var d = drawer();
         if (d) { d.classList.remove("dimmed"); }
@@ -462,10 +516,16 @@
       function render(row, dir) {
         var list = items(row), i = at(row), n = list.length;
         showAt(list, i);
-        // The row wears the face it would have if the shown candidate were
-        // picked, falling back to its own cover for a coverless one.
-        var cover = row.querySelector("img.drawer-cover");
-        if (cover) { cover.src = list[i].dataset.cover || row.dataset.originalCover || ""; }
+        // The card wears the cover the row would have if the shown candidate
+        // were picked, falling back to the row's own for a coverless one.
+        // The row's img underneath is never touched.
+        var cover = row.querySelector(".wheel-cover");
+        var rowCover = row.querySelector("img.drawer-cover");
+        var src = list[i].dataset.cover || (rowCover ? rowCover.getAttribute("src") : "");
+        if (cover) {
+          cover.hidden = !src;
+          if (src) { cover.src = src; }
+        }
         // The wheel loops, so both directions always show where they lead:
         // with two candidates that is the same place, and the same card above
         // and below is the honest picture of a loop.
@@ -488,9 +548,6 @@
       function spin(row) {
         if (openRow === row) { closeWheel(); return; }
         closeWheel();
-        var cover = row.querySelector("img.drawer-cover");
-        row.dataset.originalCover = cover ? cover.src : "";
-        if (cover) { cover.dataset.original = cover.src; }
         row.dataset.wheelAt = "0";
         render(row);
         row.classList.add("spinning");
@@ -515,6 +572,7 @@
       // and its rows are replaced on every decision.
       document.body.addEventListener("click", function (e) {
         var hit = function (sel) { return e.target.closest(sel); };
+        if (hit(".drawer-scrim")) { closeDrawer(); return; }
         if (hit(".drawer-dim")) { closeWheel(); return; }
         var btn = hit(".switcher-btn");
         if (btn) { spin(btn.closest(".drawer-row")); return; }
@@ -528,7 +586,11 @@
       });
 
       document.addEventListener("keydown", function (e) {
-        if (e.key === "Escape") { closeWheel(); return; }
+        if (e.key === "Escape") {
+          // Innermost layer first: an open wheel, then the drawer itself.
+          if (openRow) { closeWheel(); } else if (location.hash === "#series") { closeDrawer(); }
+          return;
+        }
         if (!openRow) { return; }
         if (e.key === "ArrowDown") { e.preventDefault(); cycle(openRow, 1); }
         if (e.key === "ArrowUp") { e.preventDefault(); cycle(openRow, -1); }
@@ -584,13 +646,41 @@
       document.body.addEventListener("htmx:timeout", loadFailed);
 
       window.addEventListener("hashchange", syncDrawer);
+      // The card's cover element survives the morph, so after a swap it may
+      // hold a stale bitmap while the new file loads. Every changed cover is
+      // snapped invisible and faded back in — a cached one immediately, an
+      // uncached one when its pixels arrive — so arrival always reads the
+      // same. A re-render of the same book keeps its cover still.
+      var shownCover = null;
+      function settleCovers() {
+        var img = document.querySelector("img.cover");
+        if (!img) { shownCover = null; return; }
+        var src = img.getAttribute("src");
+        if (src === shownCover) { return; }
+        shownCover = src;
+        // Snap to invisible without the transition, so the fade only runs in.
+        img.style.transition = "none";
+        img.classList.add("cover--loading");
+        void img.offsetWidth;
+        img.style.transition = "";
+        var reveal = function () { img.classList.remove("cover--loading"); };
+        if (img.complete) {
+          // A timeout, not requestAnimationFrame: rAF stalls in hidden tabs,
+          // which would leave the cover invisible until the tab is refocused.
+          setTimeout(reveal, 20);
+        } else {
+          img.addEventListener("load", reveal, { once: true });
+          img.addEventListener("error", reveal, { once: true });
+        }
+      }
+      settleCovers();
+
       // A morph rebuilds the drawer from server HTML, which carries none of the
       // state these classes hold, so re-derive it every time.
       document.body.addEventListener("htmx:afterSettle", function () {
+        settleCovers();
         // The overlay outlives the swap, so the wheel's transient state is
-        // cleared rather than replaced along with the rows. closeWheel, not a
-        // bare reset, because it is what restores the row's own cover after a
-        // refusal leaves the row on screen.
+        // cleared rather than replaced along with the rows.
         closeWheel();
         var d = drawer();
         if (d) { d.classList.remove("dimmed"); }

@@ -141,6 +141,20 @@ func TestPanelListsTrackedSeriesAndOffersUndo(t *testing.T) {
 	}
 }
 
+// Pinning from the card re-renders the very same card, so the button read as
+// doing nothing at all. Pinning lives in the drawer, where filing a series
+// under "Reading next" is a change the reader can see.
+func TestTheCardOffersParkAndDropButNoPin(t *testing.T) {
+	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view")
+	deck, _, _ := strings.Cut(body, `id="drawer-toggle"`)
+	if strings.Contains(deck, `hx-post="/series/pin"`) {
+		t.Error("the card still offers a pin whose effect it cannot show")
+	}
+	if !strings.Contains(deck, `hx-post="/series/park"`) || !strings.Contains(deck, `hx-post="/series/drop"`) {
+		t.Error("park and drop belong on the card")
+	}
+}
+
 func TestCardOffersNoDecisionsForASeriesTheReaderHasNotStarted(t *testing.T) {
 	src := stubSource{toRead: []library.Entry{seriesEntry("Book 1", "Unstarted", 1)}}
 	h := ready(t, src, testStore(t))
@@ -399,6 +413,11 @@ func TestTheSwitcherSpinsInPlace(t *testing.T) {
 	if n := strings.Count(body, `class="wheel-peek"`); n != 4 {
 		t.Errorf("%d peeks, want each ghost to hold every candidate", n)
 	}
+	// The face floats over the row rather than replacing its content, so it
+	// wears its own cover; the row underneath is never touched.
+	if !strings.Contains(body, `class="wheel-cover"`) {
+		t.Error("the face has no cover of its own, so it would have to borrow the row's")
+	}
 }
 
 func TestSwitchingFromTheDrawerChangesWhichSeriesIsTracked(t *testing.T) {
@@ -502,17 +521,26 @@ func TestADecisionConfirmsItselfAndOffersUndo(t *testing.T) {
 	}
 }
 
-// A switch's undo is the reverse switch, back to the identity it replaced.
-func TestASwitchConfirmationOffersTheWayBack(t *testing.T) {
-	h := ready(t, switchSource(), testStore(t))
-	form := url.Values{"name": {"The Expanse (Chronological)"}, "to": {"The Expanse"}}
-	rec := post(t, h, "/series/switch", form)
+// A decision made in the drawer shows its effect right where the reader is
+// standing — the row moves to its new group, undo alongside — so no banner
+// appears in the page behind it. The drawer's controls say so themselves.
+func TestADrawerDecisionRaisesNoBanner(t *testing.T) {
+	h := ready(t, midSeries(), testStore(t))
+	rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}, "from": {"drawer"}})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	flash := flashOf(t, rec.Body.String())
-	if !strings.Contains(flash, `hx-post="/series/switch"`) {
-		t.Errorf("the confirmation offers no switch back: %q", flash)
+	if flash := flashOf(t, rec.Body.String()); strings.Contains(flash, "notice") {
+		t.Errorf("a drawer decision still raises a banner: %q", flash)
+	}
+
+	body := getBody(t, h, "/view")
+	if !strings.Contains(body, `&#34;from&#34;:&#34;drawer&#34;`) {
+		t.Error("drawer buttons do not say where they were pressed")
+	}
+	i := strings.Index(body, `class="wheel-form"`)
+	if i >= 0 && !strings.Contains(body[i:], `name="from" value="drawer"`) {
+		t.Error("the wheel form does not say it lives in the drawer")
 	}
 }
 
