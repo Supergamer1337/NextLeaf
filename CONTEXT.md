@@ -49,6 +49,13 @@ unplaced book cannot say what follows it, so it anchors nothing; the series can
 still be continued from volumes on the reader's own shelf.
 _Avoid_: position zero, unnumbered, missing position
 
+**Alternative series**:
+Another series the same books belong to — usually the same franchise ordered
+differently (published order versus chronological), or a franchise beside one
+of its sub-series. A book is tracked under one series at a time; the reader can
+switch it to an alternative.
+_Avoid_: duplicate series, secondary series, variant
+
 **Anchor**:
 The read or in-progress book that decides which series is up for continuation,
 and whose position defines what "next" means.

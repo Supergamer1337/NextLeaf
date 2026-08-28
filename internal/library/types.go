@@ -68,7 +68,11 @@ type Book struct {
 	Authors     []string
 	Genres      []string
 	Moods       []string // tone tags, e.g. "dark", "hopeful"; nil if unknown
+	// Series is the one series the book is tracked under. OtherSeries holds
+	// the alternatives it could be tracked under instead, best first — a
+	// franchise reordered chronologically, or a sub-series (see CONTEXT.md).
 	Series      *Series
+	OtherSeries []Series
 	ReleaseYear int
 	ReleaseDate time.Time // zero when the source gives only a year, or nothing
 	PageCount   int       // 0 if unknown

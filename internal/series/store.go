@@ -16,8 +16,14 @@ import (
 // migrations are applied in order, each step advancing PRAGMA user_version by
 // one. A step may hold several statements, which run in one transaction. Never
 // edit a shipped step: append a new one.
-var migrations = [][]string{{
-	`CREATE TABLE tracked_series (
+// migrations are applied in order, each step advancing PRAGMA user_version by
+// one. A step may hold several statements, which run in one transaction.
+//
+// Never edit a shipped step, and never regroup them: the version is a count
+// of steps, so merging two would renumber every database in existence and
+// silently skip everything after it. Append only.
+var migrations = [][]string{
+	{`CREATE TABLE tracked_series (
 		name            TEXT PRIMARY KEY,
 		display_name    TEXT NOT NULL,
 		position        REAL NOT NULL DEFAULT 0,
@@ -25,23 +31,23 @@ var migrations = [][]string{{
 		decided_at      INTEGER NOT NULL DEFAULT 0,
 		parked_after    INTEGER NOT NULL DEFAULT 0,
 		pinned_position REAL NOT NULL DEFAULT 0
-	)`,
-	`ALTER TABLE tracked_series ADD COLUMN slug TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE tracked_series ADD COLUMN completed INTEGER NOT NULL DEFAULT 0`,
-	`ALTER TABLE tracked_series ADD COLUMN caught_up INTEGER NOT NULL DEFAULT 0`,
-	`ALTER TABLE tracked_series ADD COLUMN next_title TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE tracked_series ADD COLUMN next_cover_url TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE tracked_series ADD COLUMN next_url TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE tracked_series ADD COLUMN next_position REAL NOT NULL DEFAULT 0`,
-	`ALTER TABLE tracked_series ADD COLUMN checked_at INTEGER NOT NULL DEFAULT 0`,
-	`ALTER TABLE tracked_series ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''`,
-}, {
-	// position becomes nullable, so a book that belongs to a series without
-	// occupying a numbered slot is no longer indistinguishable from one at
-	// position zero — series really do number prequels 0 or below. Every
-	// stored zero meant "unknown" under the old rules, so it maps to NULL.
-	`ALTER TABLE tracked_series RENAME TO tracked_series_old`,
-	`CREATE TABLE tracked_series (
+	)`},
+	{`ALTER TABLE tracked_series ADD COLUMN slug TEXT NOT NULL DEFAULT ''`},
+	{`ALTER TABLE tracked_series ADD COLUMN completed INTEGER NOT NULL DEFAULT 0`},
+	{`ALTER TABLE tracked_series ADD COLUMN caught_up INTEGER NOT NULL DEFAULT 0`},
+	{`ALTER TABLE tracked_series ADD COLUMN next_title TEXT NOT NULL DEFAULT ''`},
+	{`ALTER TABLE tracked_series ADD COLUMN next_cover_url TEXT NOT NULL DEFAULT ''`},
+	{`ALTER TABLE tracked_series ADD COLUMN next_url TEXT NOT NULL DEFAULT ''`},
+	{`ALTER TABLE tracked_series ADD COLUMN next_position REAL NOT NULL DEFAULT 0`},
+	{`ALTER TABLE tracked_series ADD COLUMN checked_at INTEGER NOT NULL DEFAULT 0`},
+	{`ALTER TABLE tracked_series ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''`},
+	{
+		// position becomes nullable, so a book that belongs to a series without
+		// occupying a numbered slot is no longer indistinguishable from one at
+		// position zero — series really do number prequels 0 or below. Every
+		// stored zero meant "unknown" under the old rules, so it maps to NULL.
+		`ALTER TABLE tracked_series RENAME TO tracked_series_old`,
+		`CREATE TABLE tracked_series (
 		name            TEXT PRIMARY KEY,
 		display_name    TEXT NOT NULL,
 		position        REAL,
@@ -59,13 +65,26 @@ var migrations = [][]string{{
 		checked_at      INTEGER NOT NULL DEFAULT 0,
 		cover_url       TEXT NOT NULL DEFAULT ''
 	)`,
-	`INSERT INTO tracked_series
+		`INSERT INTO tracked_series
 	 SELECT name, display_name, NULLIF(position, 0), decision, decided_at,
 	        parked_after, pinned_position, slug, completed, caught_up,
 	        next_title, next_cover_url, next_url, next_position, checked_at, cover_url
 	 FROM tracked_series_old`,
-	`DROP TABLE tracked_series_old`,
-}}
+		`DROP TABLE tracked_series_old`,
+	}, {
+		// A book can belong to several series at once — a franchise and its
+		// chronological reordering. One is tracked; the rest are offered so the
+		// reader can switch, and their choice is remembered so reconciling does
+		// not revert it.
+		`CREATE TABLE series_alternative (
+		name        TEXT NOT NULL,
+		alternative TEXT NOT NULL,
+		display     TEXT NOT NULL,
+		PRIMARY KEY (name, alternative)
+	)`,
+		`ALTER TABLE tracked_series ADD COLUMN chosen INTEGER NOT NULL DEFAULT 0`,
+	},
+}
 
 // Store is the durable record of tracked series and standing decisions.
 type Store struct {
@@ -140,6 +159,31 @@ type Snapshot struct {
 	ToRead  []library.Entry
 }
 
+// preferred returns the reader's chosen series among the memberships of one
+// book, so a switch survives the next reconcile. ok is false when they have
+// expressed no preference, leaving the source's ranking to decide.
+func preferred(ctx context.Context, tx *sql.Tx, memberships []library.Series) (library.Series, bool) {
+	for _, m := range memberships {
+		var chosen int
+		err := tx.QueryRowContext(ctx,
+			`SELECT chosen FROM tracked_series WHERE name = ?`, key(m.Name)).Scan(&chosen)
+		if err == nil && chosen == 1 {
+			return m, true
+		}
+	}
+	return library.Series{}, false
+}
+
+// memberships lists every series a book belongs to, the tracked one first.
+func memberships(b library.Book) []library.Series {
+	if b.Series == nil {
+		return nil
+	}
+	out := make([]library.Series, 0, 1+len(b.OtherSeries))
+	out = append(out, *b.Series)
+	return append(out, b.OtherSeries...)
+}
+
 // Reconcile folds the reader's current library state into the store: every
 // series they have read into becomes tracked at its furthest position, and
 // standing decisions that have served their purpose are cleared.
@@ -152,10 +196,20 @@ func (s *Store) Reconcile(ctx context.Context, snap Snapshot) error {
 
 	for _, group := range [][]library.Entry{snap.Reads, snap.Reading} {
 		for _, e := range group {
-			if e.Book.Series == nil || key(e.Book.Series.Name) == "" {
+			all := memberships(e.Book)
+			if len(all) == 0 || key(all[0].Name) == "" {
 				continue
 			}
-			if err := observe(ctx, tx, *e.Book.Series, e.Book.CoverURL); err != nil {
+			tracked := all[0]
+			if chosen, ok := preferred(ctx, tx, all); ok {
+				// Each ordering numbers the same book differently, so the
+				// chosen membership brings its own position with it.
+				tracked = chosen
+			}
+			if err := observe(ctx, tx, tracked, e.Book.CoverURL); err != nil {
+				return err
+			}
+			if err := recordAlternatives(ctx, tx, tracked, all); err != nil {
 				return err
 			}
 		}
@@ -236,6 +290,106 @@ func (s *Store) SetNext(ctx context.Context, name string, queried float64, next 
 	return nil
 }
 
+// recordAlternatives notes the other series the same book belongs to, so the
+// drawer can offer them.
+func recordAlternatives(ctx context.Context, tx *sql.Tx, tracked library.Series, all []library.Series) error {
+	for _, m := range all {
+		if key(m.Name) == key(tracked.Name) {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO series_alternative (name, alternative, display)
+			VALUES (?, ?, ?) ON CONFLICT(name, alternative) DO UPDATE SET display = excluded.display`,
+			key(tracked.Name), key(m.Name), m.Name); err != nil {
+			return fmt.Errorf("recording alternatives of %q: %w", tracked.Name, err)
+		}
+	}
+	return nil
+}
+
+// alternatives lists the other series a tracked series' books belong to.
+func (s *Store) alternatives(ctx context.Context, name string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT display FROM series_alternative WHERE name = ? ORDER BY display`, key(name))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []string
+	for rows.Next() {
+		var display string
+		if err := rows.Scan(&display); err != nil {
+			return nil, err
+		}
+		out = append(out, display)
+	}
+	return out, rows.Err()
+}
+
+// Switch tracks the series under one of its alternatives instead. The standing
+// decision moves across — correcting which series a book is filed under is not
+// a change of heart about reading it — and the old row is dropped so the next
+// reconcile rebuilds it under the chosen name.
+func (s *Store) Switch(ctx context.Context, from, to string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		decision               string
+		decidedAt, parkedAfter int64
+		pinnedPosition         float64
+	)
+	err = tx.QueryRowContext(ctx, `
+		SELECT decision, decided_at, parked_after, pinned_position
+		FROM tracked_series WHERE name = ?`, key(from)).
+		Scan(&decision, &decidedAt, &parkedAfter, &pinnedPosition)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if err == sql.ErrNoRows {
+		decision = Active.String()
+	}
+
+	// chosen marks the reader's pick so the next reconcile does not revert to
+	// the source's ranking.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO tracked_series (name, display_name, decision, decided_at, parked_after, pinned_position, chosen)
+		VALUES (?, ?, ?, ?, ?, ?, 1)
+		ON CONFLICT(name) DO UPDATE SET
+			decision = excluded.decision,
+			decided_at = excluded.decided_at,
+			parked_after = excluded.parked_after,
+			pinned_position = excluded.pinned_position,
+			chosen = 1`,
+		key(to), to, decision, decidedAt, parkedAfter, pinnedPosition); err != nil {
+		return fmt.Errorf("switching to series %q: %w", to, err)
+	}
+
+	// The alternatives follow the books, so they move to the chosen name.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE OR REPLACE series_alternative SET name = ? WHERE name = ?`, key(to), key(from)); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM series_alternative WHERE name = ? AND alternative = ?`, key(to), key(to)); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO series_alternative (name, alternative, display) VALUES (?, ?, ?)
+		 ON CONFLICT(name, alternative) DO UPDATE SET display = excluded.display`,
+		key(to), key(from), from); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tracked_series WHERE name = ?`, key(from)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // List returns every tracked series, ordered by name so the UI and tests see a
 // stable order.
 func (s *Store) List(ctx context.Context) ([]Tracked, error) {
@@ -263,7 +417,18 @@ func (s *Store) List(ctx context.Context) ([]Tracked, error) {
 		t.CheckedAt = unix(checkedAt)
 		out = append(out, t)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Read after the cursor closes: the store holds a single connection.
+	for i := range out {
+		alts, err := s.alternatives(ctx, out[i].Name)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Alternatives = alts
+	}
+	return out, nil
 }
 
 // Get returns the tracked series by name. ok is false when it isn't tracked.
@@ -287,6 +452,11 @@ func (s *Store) Get(ctx context.Context, name string) (Tracked, bool, error) {
 	t.DecidedAt = unix(decidedAt)
 	t.ParkedAfter = unix(parkedAfter)
 	t.CheckedAt = unix(checkedAt)
+	alts, err := s.alternatives(ctx, t.Name)
+	if err != nil {
+		return Tracked{}, false, err
+	}
+	t.Alternatives = alts
 	return t, true, nil
 }
 

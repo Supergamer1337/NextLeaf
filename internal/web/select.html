@@ -222,6 +222,11 @@
     }
     .drawer-act:hover { color: var(--moss); }
     .drawer-act--go { color: var(--moss); }
+    .drawer-alts {
+      display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;
+      margin-top: 0.35rem; padding-top: 0.35rem; border-top: 1px dotted var(--line);
+    }
+    .drawer-alts-label { font-size: 0.68rem; color: var(--muted); }
 
     @media (max-width: 460px) {
       .drawer { width: 100vw; }
@@ -422,6 +427,7 @@
 {{define "drawerRows"}}
 <ul class="drawer-list">
   {{range .Items}}
+  {{$tracked := .Name}}
   <li>
     <div class="drawer-row">
       {{/* The next book when there is one, else the last book read. */}}
@@ -460,6 +466,20 @@
           </form>
           {{end}}
         </div>
+        {{if .Alternatives}}
+        {{/* The same books are filed under another series too, and the pick
+             between them is a guess the reader can correct. */}}
+        <div class="drawer-alts">
+          <span class="drawer-alts-label">Also filed as</span>
+          {{range .Alternatives}}
+          <form method="post" action="/series/switch">
+            <input type="hidden" name="name" value="{{$tracked}}">
+            <input type="hidden" name="to" value="{{.}}">
+            <button class="drawer-act" type="submit" title="Track this series under {{.}} instead">{{.}}</button>
+          </form>
+          {{end}}
+        </div>
+        {{end}}
       </div>
     </div>
   </li>

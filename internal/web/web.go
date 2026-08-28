@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -179,6 +180,22 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 		err = s.store.Pin(ctx, name, time.Now(), pos)
 	case "clear":
 		err = s.store.Clear(ctx, name)
+	case "switch":
+		to := strings.TrimSpace(r.FormValue("to"))
+		// Only the series these books actually belong to are switchable;
+		// anything else would invent a series the reader has never read.
+		tracked, ok, getErr := s.store.Get(ctx, name)
+		if getErr != nil {
+			http.Error(w, "could not record that decision", http.StatusInternalServerError)
+			return
+		}
+		if !ok || !slices.ContainsFunc(tracked.Alternatives, func(alt string) bool {
+			return series.Key(alt) == series.Key(to)
+		}) {
+			http.Error(w, "that series is not an alternative of this one", http.StatusBadRequest)
+			return
+		}
+		err = s.store.Switch(ctx, name, to)
 	default:
 		http.NotFound(w, r)
 		return

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -291,6 +292,7 @@ type bookData struct {
 			Name      string `json:"name"`
 			Slug      string `json:"slug"`
 			Completed bool   `json:"is_completed"`
+			Books     int    `json:"books_count"`
 		} `json:"series"`
 	} `json:"book_series"`
 }
@@ -308,7 +310,7 @@ const bookFields = `
       cached_tags
       image { url }
       contributions { author { name } }
-      book_series { position featured series { name slug is_completed } }`
+      book_series { position featured series { name slug is_completed books_count } }`
 
 // seriesBookFields adds the evidence the series lookup needs to tell an
 // original from its translations: whether the book has an edition in the
@@ -394,8 +396,11 @@ func mapBook(b bookData) library.Book {
 		Authors:     authors(b),
 		Genres:      cleanGenres(rawGenres),
 		Moods:       normalizeTags(tagCategory(b.CachedTags, "Mood")),
-		Series:      series(b),
+		Series:      nil,                     // set from the ranked memberships below
 		Nonfiction:  classifyMode(rawGenres), // classify before filler is dropped
+	}
+	if all := seriesMemberships(b); len(all) > 0 {
+		book.Series, book.OtherSeries = &all[0], all[1:]
 	}
 	if b.Image != nil {
 		book.CoverURL = b.Image.URL
@@ -432,30 +437,51 @@ func authors(b bookData) []string {
 	return names
 }
 
-// series returns the featured series if one is flagged, else the first listed.
-func series(b bookData) *library.Series {
-	list := b.BookSeries
-	if len(list) == 0 {
-		return nil
-	}
-	chosen := list[0]
-	for _, s := range list {
-		if s.Featured {
-			chosen = s
-			break
+// seriesMemberships returns every series the book belongs to, best candidate
+// first. Hardcover promises no ordering and flags more than one row featured,
+// so the ranking is made total: featured beats unfeatured, then the larger
+// series (the longer runway of next books), then the name. Without that, the
+// same book could resolve to a different series between two fetches — and the
+// orderings number their volumes differently, so the reader's position would
+// jump with it.
+func seriesMemberships(b bookData) []library.Series {
+	out := make([]library.Series, 0, len(b.BookSeries))
+	featured := make([]bool, 0, len(b.BookSeries))
+	counts := make([]int, 0, len(b.BookSeries))
+	for _, row := range b.BookSeries {
+		if row.Series == nil || row.Series.Name == "" {
+			continue
 		}
+		out = append(out, library.Series{
+			Name:      row.Series.Name,
+			Slug:      row.Series.Slug,
+			Completed: row.Series.Completed,
+			Position:  row.Position,
+		})
+		featured = append(featured, row.Featured)
+		counts = append(counts, row.Series.Books)
 	}
-	if chosen.Series == nil || chosen.Series.Name == "" {
-		return nil
+
+	idx := make([]int, len(out))
+	for i := range idx {
+		idx[i] = i
 	}
-	// A nil position is left nil: the book belongs to the series without
-	// occupying a numbered slot.
-	return &library.Series{
-		Name:      chosen.Series.Name,
-		Slug:      chosen.Series.Slug,
-		Completed: chosen.Series.Completed,
-		Position:  chosen.Position,
+	sort.SliceStable(idx, func(a, b int) bool {
+		x, y := idx[a], idx[b]
+		if featured[x] != featured[y] {
+			return featured[x]
+		}
+		if counts[x] != counts[y] {
+			return counts[x] > counts[y]
+		}
+		return out[x].Name < out[y].Name
+	})
+
+	ranked := make([]library.Series, len(out))
+	for i, j := range idx {
+		ranked[i] = out[j]
 	}
+	return ranked
 }
 
 // tagCategory extracts one category's tag names (e.g. "Genre", "Mood") from

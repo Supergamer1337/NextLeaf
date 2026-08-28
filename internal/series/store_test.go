@@ -2,6 +2,7 @@ package series
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -454,5 +455,63 @@ func TestBeingCaughtUpDoesNotEraseTheSeriesCover(t *testing.T) {
 	}
 	if tracked.CoverURL == "" {
 		t.Error("a finished series lost the cover of the last book read")
+	}
+}
+
+func TestADatabaseFromAnOlderVersionStillMigrates(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+
+	// Build a database as an early version left it, then stamp it with that
+	// version. Regrouping migrations must never renumber history: a store that
+	// counts steps differently would skip every later step on a live database.
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const shippedSteps = 10 // what the per-statement scheme left behind
+	for _, step := range migrations[:shippedSteps] {
+		for _, stmt := range step {
+			if _, err := db.Exec(stmt); err != nil {
+				t.Fatalf("seeding the old schema: %v", err)
+			}
+		}
+	}
+	// Ten statements shipped as ten separate steps, so a live database from
+	// that build is stamped 10 — higher than a regrouped list is long, which
+	// is exactly how renumbering silently stops all later migrations.
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", shippedSteps)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO tracked_series (name, display_name, position) VALUES ('mistborn', 'Mistborn', 3)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open on an older database: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	// Everything a later step added must be present, and the row survives.
+	tracked, ok, err := st.Get(ctx, "Mistborn")
+	if err != nil {
+		t.Fatalf("Get after migrating: %v", err)
+	}
+	if !ok {
+		t.Fatal("the existing row was lost by the migration")
+	}
+	if pos, known := tracked.Slot(); !known || pos != 3 {
+		t.Errorf("Position = %v (known=%v), want 3 carried across", pos, known)
+	}
+	if err := st.SetNext(ctx, "Mistborn", 3, nextBook("alloy"), true, day0); err != nil {
+		t.Errorf("a column from a later migration is missing: %v", err)
+	}
+	if _, err := st.alternatives(ctx, "Mistborn"); err != nil {
+		t.Errorf("the alternatives table is missing: %v", err)
 	}
 }

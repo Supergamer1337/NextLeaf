@@ -453,3 +453,114 @@ func TestNextInSeriesStillReportsExhaustionAsNoContinuation(t *testing.T) {
 		t.Error("found = true for a series with nothing readable left")
 	}
 }
+
+// multiSeries is a book filed in a franchise, its chronological reordering,
+// and a sub-series — the shape Hardcover really returns for The Expanse.
+const multiSeries = `{"data":{"user_books":[{
+  "status_id": 3, "owned": false, "date_added": "2024-01-01", "last_read_date": "2024-06-01",
+  "book": {
+    "title": "Leviathan Wakes", "slug": "leviathan-wakes", "release_year": 2011,
+    "book_series": [
+      {"position": 1, "featured": true, "series": {"name": "The Expanse", "books_count": 19}},
+      {"position": 2, "featured": true, "series": {"name": "The Expanse (Chronological)", "books_count": 20}},
+      {"position": 9, "featured": false, "series": {"name": "Expanse Shorts", "books_count": 4}}
+    ]
+  }
+}]}}`
+
+func multiSeriesClient(t *testing.T) *Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if strings.Contains(req.Query, "me { id }") {
+			_, _ = io.WriteString(w, `{"data":{"me":[{"id":42}]}}`)
+			return
+		}
+		_, _ = io.WriteString(w, multiSeries)
+	}))
+	t.Cleanup(srv.Close)
+	return New("tok", WithEndpoint(srv.URL))
+}
+
+func TestABookInSeveralSeriesPicksTheLargestFeaturedOne(t *testing.T) {
+	entries, err := multiSeriesClient(t).RecentReads(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("RecentReads: %v", err)
+	}
+	got := entries[0].Book.Series
+	// Two rows are flagged featured, so the flag alone cannot decide it; the
+	// larger series wins, giving the longer runway of next books.
+	if got == nil || got.Name != "The Expanse (Chronological)" {
+		t.Fatalf("Series = %+v, want The Expanse (Chronological)", got)
+	}
+	if pos, ok := got.Slot(); !ok || pos != 2 {
+		t.Errorf("Position = %v (ok=%v), want 2, the slot in the chosen series", pos, ok)
+	}
+}
+
+func TestTheOtherSeriesAreKeptAsAlternatives(t *testing.T) {
+	entries, err := multiSeriesClient(t).RecentReads(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("RecentReads: %v", err)
+	}
+	others := entries[0].Book.OtherSeries
+	if len(others) != 2 {
+		t.Fatalf("got %d alternatives, want 2", len(others))
+	}
+	// Ranked the same way, so the reader is offered the next best first, and
+	// each keeps its own slot: the same book is numbered differently in each.
+	if others[0].Name != "The Expanse" {
+		t.Errorf("first alternative = %q, want The Expanse", others[0].Name)
+	}
+	if pos, ok := others[0].Slot(); !ok || pos != 1 {
+		t.Errorf("The Expanse position = %v (ok=%v), want 1", pos, ok)
+	}
+	if pos, ok := others[1].Slot(); !ok || pos != 9 {
+		t.Errorf("Expanse Shorts position = %v (ok=%v), want 9", pos, ok)
+	}
+}
+
+func TestTheChoiceIsStableWhateverOrderTheAPIReturns(t *testing.T) {
+	// Hardcover guarantees no ordering, so the same memberships must always
+	// resolve to the same series rather than flipping between reads.
+	rows := []string{
+		`{"position": 2, "featured": true, "series": {"name": "B", "books_count": 5}}`,
+		`{"position": 1, "featured": true, "series": {"name": "A", "books_count": 5}}`,
+	}
+	first := seriesFromRows(t, rows[0], rows[1])
+	second := seriesFromRows(t, rows[1], rows[0])
+	if first != second {
+		t.Errorf("order changed the choice: %q then %q", first, second)
+	}
+	if first != "A" {
+		t.Errorf("tie broken to %q, want A by name", first)
+	}
+}
+
+func seriesFromRows(t *testing.T, rows ...string) string {
+	t.Helper()
+	body := `{"data":{"user_books":[{"status_id":3,"book":{"title":"X","book_series":[` +
+		strings.Join(rows, ",") + `]}}]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(b, &req)
+		if strings.Contains(req.Query, "me { id }") {
+			_, _ = io.WriteString(w, `{"data":{"me":[{"id":42}]}}`)
+			return
+		}
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	entries, err := New("tok", WithEndpoint(srv.URL)).RecentReads(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("RecentReads: %v", err)
+	}
+	return entries[0].Book.Series.Name
+}

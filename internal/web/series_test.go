@@ -660,3 +660,82 @@ func TestAnUnplacedSeriesShowsNoPositionRatherThanZero(t *testing.T) {
 		t.Error("an unplaced series claims to be read to book 0")
 	}
 }
+
+// expanseStore tracks one franchise that has an alternative ordering.
+func expanseStore(t *testing.T) *series.Store {
+	t.Helper()
+	st := testStore(t)
+	e := library.Entry{Book: library.Book{
+		Title:       "Leviathan Wakes",
+		Series:      &library.Series{Name: "The Expanse (Chronological)", Position: library.At(2)},
+		OtherSeries: []library.Series{{Name: "The Expanse", Position: library.At(1)}},
+	}}
+	if err := st.Reconcile(context.Background(), series.Snapshot{Reads: []library.Entry{e}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	return st
+}
+
+func TestTheDrawerOffersTheAlternativeOrdering(t *testing.T) {
+	body := getBody(t, ready(t, stubSource{}, expanseStore(t)), "/")
+
+	if !strings.Contains(body, `action="/series/switch"`) {
+		t.Error("the drawer offers no way to change which series is tracked")
+	}
+	// The alternative has to be named, or the reader cannot tell what they
+	// would be switching to.
+	if !strings.Contains(body, "The Expanse<") && !strings.Contains(body, ">The Expanse") {
+		t.Errorf("the alternative is not named:\n%s", section(body, "Active"))
+	}
+	// The form must say which series is being switched, and to what.
+	i := strings.Index(body, `action="/series/switch"`)
+	form := body[i:min(i+400, len(body))]
+	if !strings.Contains(form, `name="name" value="The Expanse (Chronological)"`) {
+		t.Errorf("the switch form does not name the series being switched:\n%s", form)
+	}
+	if !strings.Contains(form, `name="to" value="The Expanse"`) {
+		t.Errorf("the switch form does not name the target:\n%s", form)
+	}
+}
+
+func TestASeriesWithNoAlternativeOffersNoSwitch(t *testing.T) {
+	body := getBody(t, ready(t, stubSource{}, caughtUpStore(t)), "/")
+
+	if strings.Contains(body, `action="/series/switch"`) {
+		t.Error("offered a switch for series that belong to no other series")
+	}
+}
+
+func TestSwitchingFromTheDrawerChangesWhichSeriesIsTracked(t *testing.T) {
+	st := expanseStore(t)
+	h := ready(t, stubSource{}, st)
+
+	form := url.Values{"name": {"The Expanse (Chronological)"}, "to": {"The Expanse"}}
+	if rec := post(t, h, "/series/switch", form); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /series/switch: status = %d, want 303", rec.Code)
+	}
+
+	tracked, err := st.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(tracked) != 1 || tracked[0].Name != "The Expanse" {
+		names := make([]string, len(tracked))
+		for i, tr := range tracked {
+			names[i] = tr.Name
+		}
+		t.Errorf("tracked = %v, want only The Expanse", names)
+	}
+}
+
+func TestSwitchingToASeriesThatIsNotAnAlternativeIsRefused(t *testing.T) {
+	st := expanseStore(t)
+	h := ready(t, stubSource{}, st)
+
+	// Only the series the books actually belong to are switchable; anything
+	// else would invent a series the reader has never read.
+	form := url.Values{"name": {"The Expanse (Chronological)"}, "to": {"Some Other Saga"}}
+	if rec := post(t, h, "/series/switch", form); rec.Code != http.StatusBadRequest {
+		t.Errorf("POST /series/switch to a stranger: status = %d, want 400", rec.Code)
+	}
+}
