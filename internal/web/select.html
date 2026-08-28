@@ -283,7 +283,10 @@
       box-shadow: 0 8px 20px -14px var(--shadow-c);
       transition: transform 0.15s ease, filter 0.15s ease;
     }
-    .spinning .wheel-ghost { display: flex; }
+    /* :not([hidden]) matters: the hidden attribute is plain display:none in
+       the UA sheet, which this rule would otherwise override — leaving an
+       empty card forced visible. */
+    .spinning .wheel-ghost:not([hidden]) { display: flex; }
     .wheel-ghost:hover { filter: brightness(1); transform: scale(0.96); }
     .wheel-prev { bottom: calc(100% + 0.4rem); }
     .wheel-next { top: calc(100% + 0.4rem); }
