@@ -548,11 +548,14 @@ func finish(g *Group, books []*book, prefs picker.Prefs) {
 		g.NextPosition = nextPos
 	}
 
-	// Every other series these books belong to is an alternative home.
+	// Every other series these books belong to is an alternative home. Another
+	// backend's claim under the same name is not one: switching to it would
+	// change nothing the reader can see. (A same-named series that is still a
+	// separate row is different — the fold offer for those is added later.)
 	seen := map[string]bool{groupKey(library.Series{Source: g.Source, Name: g.Name}): true}
 	for _, m := range g.memberships {
 		k := groupKey(m)
-		if seen[k] {
+		if seen[k] || key(m.Name) == key(g.Name) {
 			continue
 		}
 		seen[k] = true

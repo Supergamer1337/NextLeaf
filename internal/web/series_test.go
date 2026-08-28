@@ -226,12 +226,12 @@ func TestDrawerFilesACaughtUpSeriesUnderFinished(t *testing.T) {
 	if !strings.Contains(finished, "Stormlight") {
 		t.Errorf("Stormlight is not in the Finished drawer:\n%s", finished)
 	}
-	if strings.Contains(section(body, "Active"), "Stormlight") {
+	if strings.Contains(section(body, "Current"), "Stormlight") {
 		t.Error("a caught-up series is still listed as active")
 	}
 }
 
-func TestTheFinishedGroupStartsCollapsed(t *testing.T) {
+func TestOnlyTheCurrentGroupStartsOpen(t *testing.T) {
 	h := ready(t, caughtUpSource(), testStore(t))
 	body := getBody(t, h, "/")
 
@@ -241,6 +241,74 @@ func TestTheFinishedGroupStartsCollapsed(t *testing.T) {
 	}
 	if openTag, _, _ := strings.Cut(block, ">"); strings.Contains(openTag, "open") {
 		t.Errorf("the Finished group starts open: %q", openTag)
+	}
+	block, ok = enclosingDetails(body, ">Current")
+	if !ok {
+		t.Fatal("the Current group is not collapsible")
+	}
+	if openTag, _, _ := strings.Cut(block, ">"); !strings.Contains(openTag, "open") {
+		t.Errorf("the Current group does not start open: %q", openTag)
+	}
+}
+
+func TestTheParkedGroupStartsCollapsed(t *testing.T) {
+	h := ready(t, midSeries(), testStore(t))
+	if rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /series/park: status = %d, want 303", rec.Code)
+	}
+	body := getBody(t, h, "/")
+
+	block, ok := enclosingDetails(body, ">Parked")
+	if !ok {
+		t.Fatal("the Parked group is not collapsible")
+	}
+	if openTag, _, _ := strings.Cut(block, ">"); strings.Contains(openTag, "open") {
+		t.Errorf("the Parked group starts open: %q", openTag)
+	}
+}
+
+func TestFinishedSitsAboveDropped(t *testing.T) {
+	h := ready(t, caughtUpSource(), testStore(t))
+	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /series/drop: status = %d, want 303", rec.Code)
+	}
+	body := getBody(t, h, "/")
+
+	// Finished is still your history; dropped is what you rejected, and the
+	// rejected pile belongs at the very bottom.
+	fin, dro := strings.Index(body, ">Finished"), strings.Index(body, ">Dropped")
+	if fin < 0 || dro < 0 || fin > dro {
+		t.Errorf("group order: Finished at %d, Dropped at %d; want Finished above", fin, dro)
+	}
+}
+
+func TestDrawerRowsOfferPark(t *testing.T) {
+	h := ready(t, midSeries(), testStore(t))
+	body := getBody(t, h, "/")
+
+	current := section(body, "Current")
+	if !strings.Contains(current, ">Park<") {
+		t.Error("a current series' row offers no park")
+	}
+}
+
+func TestAFoldedRowOffersNoDoNothingSwitch(t *testing.T) {
+	// Both backends file the book under the same name; switching between
+	// their identical claims changes nothing the reader can see.
+	hc := seriesEntry("Vol 8", "Overlord", 8)
+	hc.Status = library.StatusRead
+	hc.FinishedAt = time.Now().Add(-24 * time.Hour)
+	hc.Book.Series.Source = "hardcover"
+	gm := seriesEntry("Vol 8", "Overlord", 8)
+	gm.Status = library.StatusRead
+	gm.FinishedAt = hc.FinishedAt
+	gm.Book.Series.Source = "grimmory"
+	h := ready(t, stubSource{reads: []library.Entry{hc, gm}}, testStore(t))
+
+	// The CSS class definition is always in the stylesheet; what must be
+	// absent is the control itself.
+	if body := getBody(t, h, "/"); strings.Contains(body, `class="switcher-toggle"`) {
+		t.Error("a switch control is offered with nothing meaningful to switch to")
 	}
 }
 
@@ -313,7 +381,7 @@ func TestSwitchingFromTheDrawerChangesWhichSeriesIsTracked(t *testing.T) {
 	}
 	body := getBody(t, h, "/")
 	if !strings.Contains(body, `drawer-name">The Expanse<`) {
-		t.Errorf("the drawer does not track the preferred identity:\n%s", section(body, "Active"))
+		t.Errorf("the drawer does not track the preferred identity:\n%s", section(body, "Current"))
 	}
 }
 

@@ -445,10 +445,10 @@
     </div>
     <div class="drawer-body">
       {{template "drawerGroup" dict "Label" "Reading next" "Items" .Panel.Pinned "Undo" "Unpin"}}
-      {{template "drawerGroup" dict "Label" "Active" "Items" .Panel.Active "Undo" ""}}
+      {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Undo" "" "Open" true}}
       {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now"}}
+      {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "Undo" ""}}
       {{template "drawerGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
-      {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "Undo" "" "Collapsed" true}}
     </div>
   </aside>
   {{end}}
@@ -490,17 +490,10 @@
 
 {{define "drawerGroup"}}
 {{if .Items}}
-{{if .Collapsed}}
-<details class="drawer-group">
+<details class="drawer-group"{{if .Open}} open{{end}}>
   <summary class="drawer-label drawer-summary">{{.Label}} <span class="drawer-tally">{{len .Items}}</span></summary>
   {{template "drawerRows" .}}
 </details>
-{{else}}
-<div class="drawer-group">
-  <span class="drawer-label">{{.Label}}</span>
-  {{template "drawerRows" .}}
-</div>
-{{end}}
 {{end}}
 {{end}}
 
@@ -531,6 +524,12 @@
             <input type="hidden" name="name" value="{{.Name}}">
             <input type="hidden" name="position" value="{{.NextPosition}}">
             <button class="drawer-act drawer-act--go" type="submit">Pick this</button>
+          </form>
+          {{end}}
+          {{if eq $.Label "Current"}}
+          <form method="post" action="/series/park">
+            <input type="hidden" name="name" value="{{.Name}}">
+            <button class="drawer-act" type="submit">Park</button>
           </form>
           {{end}}
           {{if ne $.Label "Dropped"}}

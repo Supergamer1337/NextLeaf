@@ -145,9 +145,10 @@ func TestABookReadOnTwoSourcesIsOneGroup(t *testing.T) {
 	if len(v.Groups) != 1 {
 		t.Fatalf("groups = %v, want the same book on two backends to be one series", groupNames(v))
 	}
-	// The other backend's identity is still reachable as an alternative.
-	if len(v.Groups[0].Alternatives) != 1 || v.Groups[0].Alternatives[0].Source != "grimmory" {
-		t.Errorf("Alternatives = %+v, want the grimmory identity offered", v.Groups[0].Alternatives)
+	// The other backend's identical claim is not offered as an alternative:
+	// switching to it would change nothing the reader can see.
+	if len(v.Groups[0].Alternatives) != 0 {
+		t.Errorf("Alternatives = %+v, want none for an identical claim", v.Groups[0].Alternatives)
 	}
 }
 
