@@ -398,7 +398,8 @@ func TestDrawerRowsOfferDropAndPick(t *testing.T) {
 
 // section returns the drawer group whose label is name, for readable failures.
 func section(body, name string) string {
-	marker := ">" + name + "<"
+	// The label may be followed by a tally span rather than closing at once.
+	marker := ">" + name
 	i := strings.Index(body, marker)
 	if i < 0 {
 		return ""
@@ -475,5 +476,49 @@ func TestADecisionPostWithoutFetchMetadataStillWorks(t *testing.T) {
 
 	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
 		t.Errorf("plain POST: status = %d, want 303", rec.Code)
+	}
+}
+
+// enclosingDetails returns the <details> element that contains marker.
+func enclosingDetails(body, marker string) (string, bool) {
+	i := strings.Index(body, marker)
+	if i < 0 {
+		return "", false
+	}
+	start := strings.LastIndex(body[:i], "<details")
+	if start < 0 {
+		return "", false
+	}
+	end := strings.Index(body[start:], "</details>")
+	if end < 0 {
+		return "", false
+	}
+	return body[start : start+end], true
+}
+
+func TestTheFinishedGroupStartsCollapsed(t *testing.T) {
+	h := ready(t, stubSource{}, caughtUpStore(t))
+	body := getBody(t, h, "/")
+
+	// Finished is a record of what is done, so it should stay out of the way
+	// until asked for.
+	block, ok := enclosingDetails(body, ">Finished")
+	if !ok {
+		t.Fatal("the Finished group is not collapsible")
+	}
+	if openTag, _, _ := strings.Cut(block, ">"); strings.Contains(openTag, "open") {
+		t.Errorf("the Finished group starts open: %q", openTag)
+	}
+	if !strings.Contains(block, "Stormlight") {
+		t.Error("the caught-up series is not inside the collapsed group")
+	}
+}
+
+func TestTheGroupsWorthActingOnAreNotCollapsed(t *testing.T) {
+	h := ready(t, stubSource{}, caughtUpStore(t))
+	body := getBody(t, h, "/")
+
+	if _, ok := enclosingDetails(body, ">Active"); ok {
+		t.Error("Active is hidden behind a fold; only Finished should be")
 	}
 }

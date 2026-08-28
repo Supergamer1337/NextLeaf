@@ -189,6 +189,18 @@
     .drawer-label {
       font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
     }
+    .drawer-summary {
+      cursor: pointer; list-style: none; padding: 0.15rem 0;
+      display: flex; align-items: center; gap: 0.4rem;
+    }
+    .drawer-summary::-webkit-details-marker { display: none; }
+    .drawer-summary::before { content: "\25B8"; font-size: 0.7em; }
+    details[open] > .drawer-summary::before { content: "\25BE"; }
+    .drawer-summary:hover { color: var(--moss); }
+    .drawer-tally {
+      font-size: 0.68rem; color: var(--muted); background: var(--tint);
+      border-radius: 999px; padding: 0.02rem 0.4rem;
+    }
     .drawer-list { list-style: none; margin: 0.5rem 0 0; padding: 0; }
     .drawer-row {
       display: grid; grid-template-columns: 2.6rem 1fr; gap: 0.7rem;
@@ -351,7 +363,7 @@
       {{template "drawerGroup" dict "Label" "Active" "Items" .Panel.Active "Undo" ""}}
       {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now"}}
       {{template "drawerGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
-      {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "Undo" ""}}
+      {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "Undo" "" "Collapsed" true}}
     </div>
   </aside>
   {{end}}
@@ -393,52 +405,63 @@
 
 {{define "drawerGroup"}}
 {{if .Items}}
+{{if .Collapsed}}
+<details class="drawer-group">
+  <summary class="drawer-label drawer-summary">{{.Label}} <span class="drawer-tally">{{len .Items}}</span></summary>
+  {{template "drawerRows" .}}
+</details>
+{{else}}
 <div class="drawer-group">
   <span class="drawer-label">{{.Label}}</span>
-  <ul class="drawer-list">
-    {{range .Items}}
-    <li>
-      <div class="drawer-row">
-        {{if .NextCoverURL}}
-        <img class="drawer-cover" src="{{.NextCoverURL}}" alt="" loading="lazy">
-        {{else}}
-        <span class="drawer-cover drawer-cover--blank" aria-hidden="true"></span>
-        {{end}}
-        <div>
-          <span class="drawer-name">{{.Name}}</span>
-          {{if .NextTitle}}
-            <span class="drawer-next">Next: {{.NextTitle}}</span>
-          {{else if .CaughtUp}}
-            <span class="drawer-next">Nothing left to read</span>
-          {{else if .Position}}
-            <span class="drawer-pos">Read to book {{.Position}}</span>
-          {{end}}
-          <div class="drawer-acts">
-            {{if and .NextTitle (and (ne $.Label "Reading next") (ne $.Label "Dropped"))}}
-            <form method="post" action="/series/pin">
-              <input type="hidden" name="name" value="{{.Name}}">
-              <input type="hidden" name="position" value="{{.NextPosition}}">
-              <button class="drawer-act drawer-act--go" type="submit">Pick this</button>
-            </form>
-            {{end}}
-            {{if ne $.Label "Dropped"}}
-            <form method="post" action="/series/drop">
-              <input type="hidden" name="name" value="{{.Name}}">
-              <button class="drawer-act" type="submit">Drop</button>
-            </form>
-            {{end}}
-            {{if $.Undo}}
-            <form method="post" action="/series/clear">
-              <input type="hidden" name="name" value="{{.Name}}">
-              <button class="drawer-act" type="submit">{{$.Undo}}</button>
-            </form>
-            {{end}}
-          </div>
-        </div>
-      </div>
-    </li>
-    {{end}}
-  </ul>
+  {{template "drawerRows" .}}
 </div>
 {{end}}
+{{end}}
+{{end}}
+
+{{define "drawerRows"}}
+<ul class="drawer-list">
+  {{range .Items}}
+  <li>
+    <div class="drawer-row">
+      {{if .NextCoverURL}}
+      <img class="drawer-cover" src="{{.NextCoverURL}}" alt="" loading="lazy">
+      {{else}}
+      <span class="drawer-cover drawer-cover--blank" aria-hidden="true"></span>
+      {{end}}
+      <div>
+        <span class="drawer-name">{{.Name}}</span>
+        {{if .NextTitle}}
+          <span class="drawer-next">Next: {{.NextTitle}}</span>
+        {{else if .CaughtUp}}
+          <span class="drawer-next">Nothing left to read</span>
+        {{else if .Position}}
+          <span class="drawer-pos">Read to book {{.Position}}</span>
+        {{end}}
+        <div class="drawer-acts">
+          {{if and .NextTitle (and (ne $.Label "Reading next") (ne $.Label "Dropped"))}}
+          <form method="post" action="/series/pin">
+            <input type="hidden" name="name" value="{{.Name}}">
+            <input type="hidden" name="position" value="{{.NextPosition}}">
+            <button class="drawer-act drawer-act--go" type="submit">Pick this</button>
+          </form>
+          {{end}}
+          {{if ne $.Label "Dropped"}}
+          <form method="post" action="/series/drop">
+            <input type="hidden" name="name" value="{{.Name}}">
+            <button class="drawer-act" type="submit">Drop</button>
+          </form>
+          {{end}}
+          {{if $.Undo}}
+          <form method="post" action="/series/clear">
+            <input type="hidden" name="name" value="{{.Name}}">
+            <button class="drawer-act" type="submit">{{$.Undo}}</button>
+          </form>
+          {{end}}
+        </div>
+      </div>
+    </div>
+  </li>
+  {{end}}
+</ul>
 {{end}}
