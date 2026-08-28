@@ -30,8 +30,8 @@ type Group struct {
 	NextTitle     string
 	NextCoverURL  string
 	NextURL       string
-	NextPosition  float64
-	NextKey       string // book key of the next book, for pinning
+	NextPosition  *float64 // nil when the offer has no slot; 0 is a real slot
+	NextKey       string   // book key of the next book, for pinning
 	NextEntry     *library.Entry
 	NextFromShelf bool
 	// CaughtUp is set by the engine when a lookup says nothing is left.
@@ -63,6 +63,9 @@ type Alternative struct {
 	Source      string
 	Description string
 	Position    *float64
+	// PositionReading marks Position as a book still in progress. Only a twin
+	// carries it: an alternative ordering is placed by finished books alone.
+	PositionReading bool
 	// CoverURL is the face the row would wear if tracked under this
 	// identity: the cover of the furthest book read in that ordering.
 	CoverURL string
@@ -80,11 +83,13 @@ func (g Group) PositionLabel() string {
 	return "read to book " + formatPos(*g.Position)
 }
 
-// PositionLabel states where the reader stands under this identity. Only
-// finished books place them here, so it never speaks of one in progress.
+// PositionLabel states where the reader stands under this identity.
 func (a Alternative) PositionLabel() string {
 	if a.Position == nil {
 		return ""
+	}
+	if a.PositionReading {
+		return "reading book " + formatPos(*a.Position)
 	}
 	return "read to book " + formatPos(*a.Position)
 }
@@ -156,11 +161,12 @@ func Compute(in Input) View {
 				continue
 			}
 			twin := Alternative{
-				Name:        out[j].Name,
-				Source:      out[j].Source,
-				Description: "Tracked separately by " + out[j].Source + ". Switching folds the two rows into one.",
-				Position:    out[j].Position,
-				CoverURL:    out[j].CoverURL,
+				Name:            out[j].Name,
+				Source:          out[j].Source,
+				Description:     "Tracked separately by " + out[j].Source + ". Switching folds the two rows into one.",
+				Position:        out[j].Position,
+				PositionReading: out[j].PositionReading,
+				CoverURL:        out[j].CoverURL,
 			}
 			exists := false
 			for _, alt := range out[i].Alternatives {
@@ -613,7 +619,7 @@ func finish(g *Group, books []*book, prefs picker.Prefs) {
 		g.NextTitle = entry.Book.Title
 		g.NextCoverURL = entry.Book.CoverURL
 		g.NextURL = entry.Book.URL
-		g.NextPosition = nextPos
+		g.NextPosition = &nextPos
 	}
 
 	// Every other series these books belong to is an alternative home. Another

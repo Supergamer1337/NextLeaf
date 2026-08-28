@@ -646,3 +646,56 @@ func TestAnUnplacedGroupHasNoPositionLabel(t *testing.T) {
 		t.Errorf("PositionLabel() = %q, want empty for an unplaced series", got)
 	}
 }
+
+func TestATwinAlternativeInheritsTheInProgressState(t *testing.T) {
+	// Two backends file the same series name but no shared book joins them, so
+	// each is offered as the other's fold target. The offer must not call a
+	// book finished that the reader is still in.
+	started := entry("Leviathan Wakes", "The Expanse", 1, "hardcover")
+	started.Status = library.StatusCurrentlyRead
+	other := entry("Caliban's War", "The Expanse", 2, "grimmory")
+	other.Status = library.StatusRead
+	other.FinishedAt = day0
+
+	v := Compute(Input{
+		Reads:       []library.Entry{other},
+		Reading:     []library.Entry{started},
+		SourceOrder: []string{"hardcover", "grimmory"},
+	})
+	var twin *Alternative
+	for _, g := range v.Groups {
+		if g.Source != "grimmory" {
+			continue
+		}
+		for i, alt := range g.Alternatives {
+			if alt.Source == "hardcover" {
+				twin = &g.Alternatives[i]
+			}
+		}
+	}
+	if twin == nil {
+		t.Fatalf("the hardcover row is not offered as a fold target: %+v", v.Groups)
+	}
+	if !twin.PositionReading {
+		t.Error("the twin does not know its books are still being read")
+	}
+	if got, want := twin.PositionLabel(), "reading book 1"; got != want {
+		t.Errorf("PositionLabel() = %q, want %q", got, want)
+	}
+}
+
+func TestAnOfferAtSlotZeroKeepsItsSlot(t *testing.T) {
+	// Series really do number prequels 0, and that is not the same as an
+	// offer whose slot is unknown.
+	v := Compute(Input{
+		Reads:  []library.Entry{read("Book 1", "Saga", 1, day0)},
+		ToRead: []library.Entry{tbr("The Prequel", "Saga", 0, day1)},
+	})
+	g := groupNamed(t, v, "Saga")
+	if g.NextTitle != "The Prequel" {
+		t.Fatalf("NextTitle = %q, want the prequel offered", g.NextTitle)
+	}
+	if g.NextPosition == nil || *g.NextPosition != 0 {
+		t.Errorf("NextPosition = %v, want a placed slot 0", g.NextPosition)
+	}
+}

@@ -130,8 +130,8 @@ func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Dur
 		g.NextTitle = entry.Book.Title
 		g.NextCoverURL = entry.Book.CoverURL
 		g.NextURL = entry.Book.URL
-		if entry.Book.Series != nil && entry.Book.Series.Position != nil {
-			g.NextPosition = *entry.Book.Series.Position
+		if entry.Book.Series != nil {
+			g.NextPosition = entry.Book.Series.Position
 		}
 	}
 }

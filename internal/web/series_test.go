@@ -675,3 +675,18 @@ func drawerRow(t *testing.T, body string) string {
 	}
 	return body[i:min(i+600, len(body))]
 }
+
+func TestAnOfferAtSlotZeroIsStillNumbered(t *testing.T) {
+	done := seriesEntry("Book 1", "Saga", 1)
+	done.Status = library.StatusRead
+	done.FinishedAt = time.Now().Add(-24 * time.Hour)
+	src := stubSource{
+		reads:  []library.Entry{done},
+		toRead: []library.Entry{seriesEntry("The Prequel", "Saga", 0)},
+	}
+
+	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/"))
+	if !strings.Contains(row, "Next: The Prequel, book 0") {
+		t.Errorf("a prequel at slot 0 loses its number: %.300s", row)
+	}
+}
