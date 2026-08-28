@@ -15,10 +15,9 @@ import (
 // SeriesResolver: Grimmory has no next-in-series lookup beyond the user's own
 // shelves.
 var (
-	_ library.Source          = (*Client)(nil)
-	_ library.CoverProvider   = (*Client)(nil)
-	_ library.Verifier        = (*Client)(nil)
-	_ library.HistoryProvider = (*Client)(nil)
+	_ library.Source        = (*Client)(nil)
+	_ library.CoverProvider = (*Client)(nil)
+	_ library.Verifier      = (*Client)(nil)
 )
 
 // Name identifies this Source.
@@ -55,13 +54,6 @@ func (c *Client) RecentReads(ctx context.Context, limit int) ([]library.Entry, e
 		entries = entries[:limit]
 	}
 	return entries, nil
-}
-
-// ReadHistory returns every finished book, newest first — the whole history
-// rather than RecentReads' window, for the one-time series backfill. It
-// satisfies library.HistoryProvider.
-func (c *Client) ReadHistory(ctx context.Context) ([]library.Entry, error) {
-	return c.RecentReads(ctx, 0)
 }
 
 // ToRead returns the unread books in the user's library, oldest additions

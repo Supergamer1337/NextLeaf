@@ -20,9 +20,9 @@ import (
 	"nextleaf/internal/web"
 )
 
-// resyncInterval is how often the whole read history is re-imported, catching
-// anything the recent window slid past while the app was running.
-const resyncInterval = 24 * time.Hour
+// warmInterval is how often the next-in-series cache is refreshed in the
+// background, which is also what notices a newly published book on its own.
+const warmInterval = 24 * time.Hour
 
 func main() {
 	if err := config.LoadDotEnv(".env"); err != nil {
@@ -36,7 +36,11 @@ func main() {
 		reportSources(enabled)
 	}
 
-	store, backfill := startSeriesTracking(source)
+	names := make([]string, len(enabled))
+	for i, s := range enabled {
+		names[i] = s.Name()
+	}
+	engine, store := startSeriesTracking(source, names)
 	if store != nil {
 		defer func() { _ = store.Close() }()
 	}
@@ -47,13 +51,8 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr: addr,
-		Handler: web.NewHandler(web.Deps{
-			Source:   source,
-			Store:    store,
-			Backfill: backfill,
-			Prefs:    picker.Prefs{IncludeNovellas: includeNovellas()},
-		}),
+		Addr:              addr,
+		Handler:           web.NewHandler(web.Deps{Source: source, Engine: engine}),
 		ReadHeaderTimeout: 10 * time.Second,
 		// ReadTimeout bounds the body read too, so a slow client cannot hold
 		// a connection open through a decision POST.
@@ -85,11 +84,12 @@ func main() {
 	}
 }
 
-// startSeriesTracking opens the series database and kicks off the one-time
-// history import in the background, so the server starts listening immediately
-// and only continuations wait. A store that cannot be opened is not fatal: the
-// app falls back to variety picks alone rather than refusing to run.
-func startSeriesTracking(source library.Source) (*series.Store, *series.Backfill) {
+// startSeriesTracking opens the statement store and builds the series engine,
+// then keeps the next-in-series cache warm in the background so the drawer is
+// full and new releases are noticed without anyone visiting the page. A store
+// that cannot be opened is not fatal: the app falls back to variety picks
+// alone rather than refusing to run.
+func startSeriesTracking(source library.Source, order []string) (*series.Engine, *series.Store) {
 	if source == nil {
 		return nil, nil
 	}
@@ -107,41 +107,18 @@ func startSeriesTracking(source library.Source) (*series.Store, *series.Backfill
 	}
 	log.Printf("series tracking using %s", path)
 
-	backfill := series.NewBackfill(store, library.AsHistoryProviders(source))
-
-	// Resolving each series' next book is what fills the drawer and notices a
-	// new release, so it runs here in the background rather than on the
-	// request path, where a reader tracked in hundreds of series would pay for
-	// it on every page load.
-	var refresher *series.Refresher
-	if resolver, ok := library.AsSeriesResolver(source); ok {
-		refresher = series.NewRefresher(store, series.NewLookahead(resolver, resyncInterval), includeNovellas())
-	}
-
+	engine := series.NewEngine(store, source, picker.Prefs{IncludeNovellas: includeNovellas()})
+	engine.SourceOrder = order
 	go func() {
 		for {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-			backfill.Run(ctx)
-
-			status := backfill.Status()
-			if len(status.Failed) > 0 {
-				log.Printf("series history imported (%d books); retrying %v on the next resync",
-					status.Imported, status.Failed)
-			} else {
-				log.Printf("series history imported (%d books)", status.Imported)
-			}
-
-			if refresher != nil {
-				refresher.Run(ctx)
-				log.Print("series next-book lookups refreshed")
-			}
+			engine.Warm(ctx)
 			cancel()
-
-			time.Sleep(resyncInterval)
+			log.Print("series next-book lookups refreshed")
+			time.Sleep(warmInterval)
 		}
 	}()
-
-	return store, backfill
+	return engine, store
 }
 
 // includeNovellas reads the novella preference, which governs both series

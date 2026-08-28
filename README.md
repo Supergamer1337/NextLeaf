@@ -32,6 +32,13 @@ book, and carries **Pick this** and **Drop** on each row plus the undo that
 fits its state. Series you're caught up with sit in a **Finished** drawer at
 the bottom, and move back out on their own when a new book appears.
 
+Nothing about your series is stored: the view is recomputed from your sources
+on every look, so it follows whatever they say now — renamed series, corrected
+positions, a prequel added behind you. The only thing NextLeaf keeps is what
+you said (park, drop, pin, and which series you meant), anchored to the books
+themselves so a metadata change can never orphan a decision. If a source is
+unreachable, the page shows its last known data and says so.
+
 Books that aren't out yet are never recommended, and novellas at half-positions
 (book 3.5) are offered unless you turn them off. Translations, split editions
 and omnibus bundles are filtered out: Hardcover files all of them at the same
@@ -69,10 +76,9 @@ Grimmory covers sit behind its login, so NextLeaf relays them at
 `/cover/grimmory/{id}` — credentials stay server-side and browsers cache the
 images for a day.
 
-Series tracking keeps a small SQLite database in `DATA_DIR`. On first start
-NextLeaf imports your whole reading history in the background; until that
-finishes you get variety picks and a note saying so. Set `INCLUDE_NOVELLAS=false`
-if you'd rather be pointed at book 4 than book 3.5.
+Series tracking keeps a small SQLite database in `DATA_DIR` holding only your
+decisions — everything else is recomputed from the sources. Set
+`INCLUDE_NOVELLAS=false` if you'd rather be pointed at book 4 than book 3.5.
 
 ## Deployment
 

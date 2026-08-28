@@ -37,6 +37,17 @@ func NewLookahead(resolver library.SeriesResolver, ttl time.Duration) *Lookahead
 	}
 }
 
+// Cached reports whether a fresh answer for q is already held, so callers can
+// budget fresh queries separately from cache hits.
+func (l *Lookahead) Cached(q library.SeriesQuery) bool {
+	pos, _ := q.Series.Slot()
+	k := key(q.Series.Name) + "\x00" + formatPos(pos)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cached, ok := l.answers[k]
+	return ok && l.now().Sub(cached.at) < l.ttl
+}
+
 // Next returns the book following q's position, from cache when it is fresh.
 // Errors are never cached: a throttled backend must not hide a series for a
 // whole day.

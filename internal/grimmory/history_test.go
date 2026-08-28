@@ -19,27 +19,12 @@ func historyClient(t *testing.T) *Client {
 	return New(f.server(t).URL, "user", "pass")
 }
 
-func TestReadHistoryReturnsEveryFinishedBook(t *testing.T) {
-	c := historyClient(t)
-
-	history, err := c.ReadHistory(context.Background())
-	if err != nil {
-		t.Fatalf("ReadHistory: %v", err)
-	}
-	if len(history) != 3 {
-		t.Fatalf("got %d entries, want the 3 finished books", len(history))
-	}
-	if history[0].Book.Title != "Hyperion" {
-		t.Errorf("first entry = %q, want the newest finish, Hyperion", history[0].Book.Title)
-	}
-}
-
 func TestPublishedDateBecomesAReleaseDate(t *testing.T) {
 	c := historyClient(t)
 
-	history, err := c.ReadHistory(context.Background())
+	history, err := c.RecentReads(context.Background(), 0)
 	if err != nil {
-		t.Fatalf("ReadHistory: %v", err)
+		t.Fatalf("RecentReads: %v", err)
 	}
 	// Dating to the day is what decides whether a series' next book is out.
 	got := history[0].Book.ReleaseDate

@@ -2,23 +2,12 @@ package series
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"path/filepath"
-	"sync"
 	"testing"
-	"time"
-
-	"nextleaf/internal/library"
 )
-
-// readEntry is a finished book at a position in a series.
-func readEntry(name string, pos float64) library.Entry {
-	return library.Entry{
-		Book:   library.Book{Title: name + " " + formatPos(pos), Series: &library.Series{Name: name, Position: library.At(pos)}},
-		Status: library.StatusRead,
-	}
-}
 
 func openStore(t *testing.T) *Store {
 	t.Helper()
@@ -30,488 +19,151 @@ func openStore(t *testing.T) *Store {
 	return st
 }
 
-func TestReconcileTracksSeriesFromReads(t *testing.T) {
+func TestStatementsRoundTripInOrder(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
 
-	err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}})
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
+	for _, s := range []Statement{
+		{Kind: KindPark, MadeAt: day0, ParkCount: 4, Name: "Mistborn", Anchors: []string{"a", "b"}},
+		{Kind: KindPrefer, MadeAt: day1, PrefSource: "hardcover", PrefName: "The Expanse", Anchors: []string{"c"}},
+	} {
+		if err := st.Append(ctx, s); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
 	}
 
-	tracked, err := st.List(ctx)
+	got, err := st.Statements(ctx)
 	if err != nil {
-		t.Fatalf("List: %v", err)
+		t.Fatalf("Statements: %v", err)
 	}
-	if len(tracked) != 1 {
-		t.Fatalf("got %d tracked series, want 1", len(tracked))
+	if len(got) != 2 {
+		t.Fatalf("got %d statements, want 2", len(got))
 	}
-	if tracked[0].Name != "Mistborn" {
-		t.Errorf("Name = %q, want %q", tracked[0].Name, "Mistborn")
+	first := got[0]
+	if first.Kind != KindPark || first.ParkCount != 4 || first.Name != "Mistborn" {
+		t.Errorf("first = %+v, want the park intact", first)
 	}
-	if pos, _ := tracked[0].Slot(); pos != 3 {
-		t.Errorf("Position = %v, want 3", tracked[0].Position)
+	if len(first.Anchors) != 2 || first.Anchors[0] != "a" {
+		t.Errorf("Anchors = %v, want [a b]", first.Anchors)
 	}
-	if tracked[0].Decision != Active {
-		t.Errorf("Decision = %v, want Active", tracked[0].Decision)
+	if second := got[1]; second.PrefName != "The Expanse" || second.MadeAt.Unix() != day1.Unix() {
+		t.Errorf("second = %+v, want the prefer intact", second)
 	}
 }
 
-func TestReconcileKeepsFurthestPositionRead(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	// Book 5 read long ago, book 2 revisited since: furthest wins, not latest.
-	snap := Snapshot{Reads: []library.Entry{readEntry("Mistborn", 2), readEntry("Mistborn", 5)}}
-	if err := st.Reconcile(ctx, snap); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-
-	tracked, err := st.List(ctx)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(tracked) != 1 {
-		t.Fatalf("got %d tracked series, want 1 (both books are one series)", len(tracked))
-	}
-	if pos, _ := tracked[0].Slot(); pos != 5 {
-		t.Errorf("Position = %v, want 5", tracked[0].Position)
-	}
-}
-
-func TestTrackedSeriesSurvivesReopen(t *testing.T) {
+func TestStatementsSurviveReopen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "nextleaf.db")
-
 	st, err := Open(path)
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatal(err)
 	}
-	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if err := st.Drop(ctx, "Mistborn", time.Now()); err != nil {
-		t.Fatalf("Drop: %v", err)
+	if err := st.Append(ctx, Statement{Kind: KindDrop, MadeAt: day0, Anchors: []string{"k"}}); err != nil {
+		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+		t.Fatal(err)
 	}
 
 	reopened, err := Open(path)
 	if err != nil {
-		t.Fatalf("reopen: %v", err)
+		t.Fatal(err)
 	}
 	defer func() { _ = reopened.Close() }()
-
-	tracked, err := reopened.List(ctx)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(tracked) != 1 {
-		t.Fatalf("got %d tracked series after reopen, want 1", len(tracked))
-	}
-	if tracked[0].Decision != Dropped {
-		t.Errorf("Decision = %v after reopen, want Dropped", tracked[0].Decision)
+	got, err := reopened.Statements(ctx)
+	if err != nil || len(got) != 1 || got[0].Kind != KindDrop {
+		t.Errorf("Statements after reopen = (%v, %v), want the drop back", got, err)
 	}
 }
 
-func TestSeriesNamesMatchCaseInsensitively(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	snap := Snapshot{Reads: []library.Entry{readEntry("Mistborn", 1), readEntry("  MISTBORN ", 2)}}
-	if err := st.Reconcile(ctx, snap); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-
-	tracked, err := st.List(ctx)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(tracked) != 1 {
-		t.Fatalf("got %d tracked series, want 1", len(tracked))
-	}
-	if pos, _ := tracked[0].Slot(); pos != 2 {
-		t.Errorf("Position = %v, want 2", tracked[0].Position)
-	}
-}
-
-func TestReconcileRecordsSeriesIdentityHints(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	e := readEntry("Mistborn", 3)
-	e.Book.Series.Slug = "mistborn"
-	e.Book.Series.Completed = true
-	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{e}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-
-	tracked, ok, err := st.Get(ctx, "Mistborn")
-	if err != nil || !ok {
-		t.Fatalf("Get = (%v, %v)", ok, err)
-	}
-	if tracked.Slug != "mistborn" {
-		t.Errorf("Slug = %q, want mistborn", tracked.Slug)
-	}
-	if !tracked.Completed {
-		t.Error("Completed = false; a finished series should be recorded as such")
-	}
-}
-
-func TestSeriesIdentityHintsAreNotErasedBySourcesThatLackThem(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	rich := readEntry("Mistborn", 3)
-	rich.Book.Series.Slug = "mistborn"
-	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{rich}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	// Grimmory knows the same series by name alone; it must not blank the hint.
-	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 4)}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-
-	tracked, _, err := st.Get(ctx, "Mistborn")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if tracked.Slug != "mistborn" {
-		t.Errorf("Slug = %q, want it kept from the source that knew it", tracked.Slug)
-	}
-}
-
-func nextBook(title string) library.Entry {
-	return library.Entry{Book: library.Book{
-		Title:    title,
-		Series:   &library.Series{Name: "Mistborn", Position: library.At(4)},
-		CoverURL: "https://covers.example/" + title + ".jpg",
-		URL:      "https://hardcover.app/books/" + title,
-	}}
-}
-
-func TestNextBookIsRememberedForTheDrawer(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if err := st.SetNext(ctx, "Mistborn", 3, nextBook("alloy"), true, day0); err != nil {
-		t.Fatalf("SetNext: %v", err)
-	}
-
-	tracked, _, err := st.Get(ctx, "Mistborn")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if tracked.NextTitle != "alloy" {
-		t.Errorf("NextTitle = %q, want alloy", tracked.NextTitle)
-	}
-	if tracked.NextCoverURL == "" {
-		t.Error("NextCoverURL is empty; the drawer has no cover to show")
-	}
-	if tracked.CaughtUp {
-		t.Error("CaughtUp = true for a series with a next book")
-	}
-}
-
-func TestASeriesWithNoNextBookIsMarkedCaughtUp(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if err := st.SetNext(ctx, "Mistborn", 3, library.Entry{}, false, day0); err != nil {
-		t.Fatalf("SetNext: %v", err)
-	}
-
-	tracked, _, err := st.Get(ctx, "Mistborn")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if !tracked.CaughtUp {
-		t.Error("CaughtUp = false; a series with nothing left belongs in the Finished drawer")
-	}
-	if tracked.NextTitle != "" {
-		t.Errorf("NextTitle = %q, want it cleared", tracked.NextTitle)
-	}
-}
-
-func TestReadingTheRememberedNextBookClearsIt(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if err := st.SetNext(ctx, "Mistborn", 3, nextBook("alloy"), true, day0); err != nil {
-		t.Fatalf("SetNext: %v", err)
-	}
-	// Reading book 4 makes the remembered "next" the book behind you; the
-	// drawer must not keep offering it until the next resync.
-	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 4)}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-
-	tracked, _, err := st.Get(ctx, "Mistborn")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if tracked.NextTitle != "" {
-		t.Errorf("NextTitle = %q, want it cleared once that book was read", tracked.NextTitle)
-	}
-}
-
-func TestANewReleaseTakesASeriesBackOutOfFinished(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if err := st.SetNext(ctx, "Mistborn", 3, library.Entry{}, false, day0); err != nil {
-		t.Fatalf("SetNext: %v", err)
-	}
-	// A later resync finds a book that did not exist before.
-	if err := st.SetNext(ctx, "Mistborn", 3, nextBook("lost-metal"), true, day2); err != nil {
-		t.Fatalf("SetNext: %v", err)
-	}
-
-	tracked, _, err := st.Get(ctx, "Mistborn")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if tracked.CaughtUp {
-		t.Error("CaughtUp = true; a new release should take the series back out of Finished")
-	}
-}
-
-func TestAStaleLookupResultDoesNotOverwriteNewerProgress(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	// The reader finishes book 4 while a lookup made at position 3 is in
-	// flight; the lookup's answer describes a book now behind them.
-	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 4)}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if err := st.SetNext(ctx, "Mistborn", 3, nextBook("alloy"), true, day0); err != nil {
-		t.Fatalf("SetNext: %v", err)
-	}
-
-	tracked, _, err := st.Get(ctx, "Mistborn")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if tracked.NextTitle == "alloy" {
-		t.Error("a lookup made at an outdated position overwrote newer progress")
-	}
-}
-
-func TestAStaleCaughtUpResultDoesNotFileTheSeriesUnderFinished(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 4)}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	// "Nothing after book 3" says nothing about what follows book 4.
-	if err := st.SetNext(ctx, "Mistborn", 3, library.Entry{}, false, day0); err != nil {
-		t.Fatalf("SetNext: %v", err)
-	}
-
-	tracked, _, err := st.Get(ctx, "Mistborn")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if tracked.CaughtUp {
-		t.Error("a stale caught-up answer filed the series under Finished")
-	}
-}
-
-func TestConcurrentPinsLeaveExactlyOneSeriesPinned(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func(n int) {
-			defer wg.Done()
-			_ = st.Pin(ctx, fmt.Sprintf("Series %d", n), day0, 2)
-		}(i)
-	}
-	wg.Wait()
-
-	tracked, err := st.List(ctx)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	pinned := 0
-	for _, tr := range tracked {
-		if tr.Decision == Pinned {
-			pinned++
-		}
-	}
-	if pinned != 1 {
-		t.Errorf("%d series pinned after concurrent pins, want exactly 1", pinned)
-	}
-}
-
-// readWithCover is a finished book that carries its cover art.
-func readWithCover(name string, pos float64, cover string) library.Entry {
-	e := readEntry(name, pos)
-	e.Book.CoverURL = cover
-	return e
-}
-
-func TestASeriesKeepsTheCoverOfTheFurthestBookRead(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	snap := Snapshot{Reads: []library.Entry{
-		readWithCover("Mistborn", 3, "https://covers.example/three.jpg"),
-		readWithCover("Mistborn", 1, "https://covers.example/one.jpg"),
-	}}
-	if err := st.Reconcile(ctx, snap); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-
-	tracked, _, err := st.Get(ctx, "Mistborn")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	// Rereading book 1 should not roll the series' face back to book 1.
-	if tracked.CoverURL != "https://covers.example/three.jpg" {
-		t.Errorf("CoverURL = %q, want book 3's cover", tracked.CoverURL)
-	}
-}
-
-func TestReadingFurtherMovesTheSeriesCoverForward(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	first := Snapshot{Reads: []library.Entry{readWithCover("Mistborn", 3, "https://covers.example/three.jpg")}}
-	if err := st.Reconcile(ctx, first); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	later := Snapshot{Reads: []library.Entry{readWithCover("Mistborn", 4, "https://covers.example/four.jpg")}}
-	if err := st.Reconcile(ctx, later); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-
-	tracked, _, err := st.Get(ctx, "Mistborn")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if tracked.CoverURL != "https://covers.example/four.jpg" {
-		t.Errorf("CoverURL = %q, want book 4's cover", tracked.CoverURL)
-	}
-}
-
-func TestASeriesWithNoKnownPositionStillGetsACover(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	// Some sources name a series without saying where the book sits in it.
-	snap := Snapshot{Reads: []library.Entry{readWithCover("The Lord of the Rings", 0, "https://covers.example/lotr.jpg")}}
-	if err := st.Reconcile(ctx, snap); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-
-	tracked, _, err := st.Get(ctx, "The Lord of the Rings")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if tracked.CoverURL == "" {
-		t.Error("a series with no known position has no cover at all")
-	}
-}
-
-func TestBeingCaughtUpDoesNotEraseTheSeriesCover(t *testing.T) {
-	ctx := context.Background()
-	st := openStore(t)
-
-	snap := Snapshot{Reads: []library.Entry{readWithCover("Mistborn", 3, "https://covers.example/three.jpg")}}
-	if err := st.Reconcile(ctx, snap); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if err := st.SetNext(ctx, "Mistborn", 3, library.Entry{}, false, day0); err != nil {
-		t.Fatalf("SetNext: %v", err)
-	}
-
-	tracked, _, err := st.Get(ctx, "Mistborn")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if tracked.CoverURL == "" {
-		t.Error("a finished series lost the cover of the last book read")
-	}
-}
-
-func TestADatabaseFromAnOlderVersionStillMigrates(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "old.db")
-
-	// Build a database as an early version left it, then stamp it with that
-	// version. Regrouping migrations must never renumber history: a store that
-	// counts steps differently would skip every later step on a live database.
+// seedOldSchema builds a database exactly as the stored-state architecture
+// left it at the given step, stamped with that version.
+func seedOldSchema(t *testing.T, path string, steps int, rows func(db *sql.DB)) {
+	t.Helper()
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const shippedSteps = 10 // what the per-statement scheme left behind
-	for _, step := range migrations[:shippedSteps] {
+	defer func() { _ = db.Close() }()
+	for _, step := range migrations[:steps] {
 		for _, stmt := range step {
 			if _, err := db.Exec(stmt); err != nil {
-				t.Fatalf("seeding the old schema: %v", err)
+				t.Fatalf("seeding step: %v", err)
 			}
 		}
 	}
-	// Ten statements shipped as ten separate steps, so a live database from
-	// that build is stamped 10 — higher than a regrouped list is long, which
-	// is exactly how renumbering silently stops all later migrations.
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", shippedSteps)); err != nil {
+	if rows != nil {
+		rows(db)
+	}
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", steps)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(
-		`INSERT INTO tracked_series (name, display_name, position) VALUES ('mistborn', 'Mistborn', 3)`); err != nil {
-		t.Fatal(err)
+}
+
+// shippedSteps is how many migration steps the stored-state architecture
+// shipped; a live database from its last build is stamped with this.
+const shippedSteps = 15
+
+// TestShippedMigrationsAreUntouched pins the shipped prefix of the migration
+// list. The version is a count of steps, so editing or regrouping shipped
+// steps silently breaks every existing database — this failed twice during
+// development before this test existed.
+func TestShippedMigrationsAreUntouched(t *testing.T) {
+	if len(migrations) < shippedSteps {
+		t.Fatalf("migrations = %d steps, want the %d shipped ones kept verbatim", len(migrations), shippedSteps)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
+	h := sha256.New()
+	for _, step := range migrations[:shippedSteps] {
+		for _, stmt := range step {
+			_, _ = h.Write([]byte(stmt))
+		}
 	}
+	const want = "537df6995f439ec7"
+	if got := fmt.Sprintf("%x", h.Sum(nil))[:16]; got != want {
+		t.Errorf("shipped migration checksum = %s, want %s — shipped steps must never change; append instead", got, want)
+	}
+}
+
+func TestAStoredStateDatabaseMigratesItsDrops(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+	seedOldSchema(t, path, shippedSteps, func(db *sql.DB) {
+		if _, err := db.Exec(`INSERT INTO tracked_series (name, display_name, decision, decided_at)
+			VALUES ('mistborn', 'Mistborn', 'dropped', ?),
+			       ('saga', 'Saga', 'parked', ?)`, day0.Unix(), day0.Unix()); err != nil {
+			t.Fatal(err)
+		}
+	})
 
 	st, err := Open(path)
 	if err != nil {
-		t.Fatalf("Open on an older database: %v", err)
+		t.Fatalf("Open on a stored-state database: %v", err)
 	}
 	defer func() { _ = st.Close() }()
 
-	// Everything a later step added must be present, and the row survives.
-	tracked, ok, err := st.Get(ctx, "Mistborn")
+	got, err := st.Statements(ctx)
 	if err != nil {
-		t.Fatalf("Get after migrating: %v", err)
+		t.Fatalf("Statements: %v", err)
 	}
-	if !ok {
-		t.Fatal("the existing row was lost by the migration")
+	// The drop is durable and survives as a name-matched statement; the park
+	// was ephemeral by design and is deliberately not carried.
+	if len(got) != 1 || got[0].Kind != KindDrop || got[0].Name != "Mistborn" {
+		t.Errorf("migrated statements = %+v, want just the drop under its name", got)
 	}
-	if pos, known := tracked.Slot(); !known || pos != 3 {
-		t.Errorf("Position = %v (known=%v), want 3 carried across", pos, known)
+}
+
+func TestTheOldestShippedSchemaStillMigrates(t *testing.T) {
+	// Version 10 is what the very first per-statement scheme stamped; every
+	// later step must still replay on top of it.
+	path := filepath.Join(t.TempDir(), "ancient.db")
+	seedOldSchema(t, path, 10, nil)
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open on the oldest schema: %v", err)
 	}
-	if err := st.SetNext(ctx, "Mistborn", 3, nextBook("alloy"), true, day0); err != nil {
-		t.Errorf("a column from a later migration is missing: %v", err)
-	}
-	if _, err := st.alternatives(ctx, "Mistborn"); err != nil {
-		t.Errorf("the alternatives table is missing: %v", err)
+	defer func() { _ = st.Close() }()
+	if _, err := st.Statements(context.Background()); err != nil {
+		t.Errorf("Statements after full replay: %v", err)
 	}
 }

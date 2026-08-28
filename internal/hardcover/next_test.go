@@ -140,25 +140,6 @@ func TestNextInSeriesCarriesSeriesIdentityAndReleaseDate(t *testing.T) {
 	}
 }
 
-func TestReadHistoryReturnsEveryFinishedBook(t *testing.T) {
-	api := &fakeAPI{}
-	srv := api.server(t)
-	defer srv.Close()
-
-	c := New("tok", WithEndpoint(srv.URL))
-	history, err := c.ReadHistory(context.Background())
-	if err != nil {
-		t.Fatalf("ReadHistory: %v", err)
-	}
-	if len(history) != 1 {
-		t.Fatalf("got %d entries, want 1", len(history))
-	}
-	// An unlimited query is what makes it a history rather than a window.
-	if _, ok := api.lastVars["limit"]; ok {
-		t.Error("ReadHistory sent a limit; it must ask for the whole history")
-	}
-}
-
 // splitEditions is what Hardcover really returns for a reader who has finished
 // book 1 of The Wheel of Time: the two halves of that same book at .1 and .2,
 // then the actual next novel, then a novella.
@@ -167,9 +148,9 @@ const splitEditions = `{"data":{"book_series":[
     "book_series": [{"position": 1.1, "featured": true, "series": {"name": "The Wheel of Time"}}]}},
   {"position": 1.2, "book": {"title": "The Eye of the World, Part 2 of 2", "editions": [{"id": 1}], "release_year": 1990,
     "book_series": [{"position": 1.2, "featured": true, "series": {"name": "The Wheel of Time"}}]}},
-  {"position": 1.5, "book": {"title": "A Proper Novella", "editions": [{"id": 1}], "editions": [{"id": 1}], "release_year": 1998,
+  {"position": 1.5, "book": {"title": "A Proper Novella", "editions": [{"id": 1}], "release_year": 1998,
     "book_series": [{"position": 1.5, "featured": true, "series": {"name": "The Wheel of Time"}}]}},
-  {"position": 2, "book": {"title": "The Great Hunt", "editions": [{"id": 1}], "editions": [{"id": 1}], "release_year": 1990,
+  {"position": 2, "book": {"title": "The Great Hunt", "editions": [{"id": 1}], "release_year": 1990,
     "book_series": [{"position": 2, "featured": true, "series": {"name": "The Wheel of Time"}}]}}
 ]}}`
 

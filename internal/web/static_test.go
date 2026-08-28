@@ -34,7 +34,7 @@ func TestStaticAssetsAreServed(t *testing.T) {
 func TestStaticUnknownAssetIs404(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/static/nope.svg", nil)
 	rec := httptest.NewRecorder()
-	NewHandler(nil).ServeHTTP(rec, req)
+	NewHandler(Deps{}).ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}

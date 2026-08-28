@@ -16,10 +16,9 @@ import (
 
 // Client is a reading Source, a SeriesResolver, and a Verifier.
 var (
-	_ library.Source          = (*Client)(nil)
-	_ library.SeriesResolver  = (*Client)(nil)
-	_ library.Verifier        = (*Client)(nil)
-	_ library.HistoryProvider = (*Client)(nil)
+	_ library.Source         = (*Client)(nil)
+	_ library.SeriesResolver = (*Client)(nil)
+	_ library.Verifier       = (*Client)(nil)
 )
 
 // Name identifies this Source.
@@ -49,13 +48,6 @@ func (c *Client) RecentReads(ctx context.Context, limit int) ([]library.Entry, e
 // later favours books that have waited longest.
 func (c *Client) ToRead(ctx context.Context) ([]library.Entry, error) {
 	return c.fetchEntries(ctx, int(library.StatusWantToRead), "date_added: asc", 0)
-}
-
-// ReadHistory returns every finished book, newest first — the whole history
-// rather than RecentReads' window, for the one-time series backfill. It
-// satisfies library.HistoryProvider.
-func (c *Client) ReadHistory(ctx context.Context) ([]library.Entry, error) {
-	return c.RecentReads(ctx, 0)
 }
 
 const (

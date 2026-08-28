@@ -33,39 +33,6 @@ type Recommendation struct {
 	Cons  []string
 }
 
-// NextOnShelves returns the earliest book in the TBR that continues series past
-// its last-read Position, so the caller can continue without hitting the
-// provider. ok is false when no later book is on the shelf.
-func NextOnShelves(series library.Series, toRead []library.Entry, prefs Prefs) (library.Entry, bool) {
-	// An unplaced anchor gives nothing to count from, so every shelved volume
-	// is still ahead of the reader: the earliest one is the answer.
-	anchor, placed := series.Slot()
-
-	var next library.Entry
-	var nextPos float64
-	found := false
-	for _, e := range toRead {
-		s := e.Book.Series
-		if s == nil || !strings.EqualFold(s.Name, series.Name) {
-			continue
-		}
-		pos, ok := s.Slot()
-		if !ok {
-			continue // an unplaced volume cannot be shown to come next
-		}
-		if placed && pos <= anchor {
-			continue
-		}
-		if !prefs.IncludeNovellas && isNovella(pos) {
-			continue
-		}
-		if !found || pos < nextPos {
-			next, nextPos, found = e, pos, true
-		}
-	}
-	return next, found
-}
-
 // ContinueSeries builds the recommendation for the next series book, noting
 // the rating of the last book read in the series when it's known. e keeps its
 // provenance (Sources, Available) so the UI can say where the book came from.

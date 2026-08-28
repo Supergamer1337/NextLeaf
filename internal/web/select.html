@@ -354,8 +354,8 @@
     {{else if .Error}}
       <p class="notice notice--error">Couldn’t reach your library: {{.Error}}</p>
     {{else}}
-      {{if .Importing}}
-      <p class="notice">Series tracking is still importing your reading history. Until it finishes you’ll get variety picks only.</p>
+      {{range .Stale}}
+      <p class="notice">{{ucfirst .Source}} couldn’t be reached — showing its data from {{.Since.Format "15:04"}}. Recommendations may be out of date.</p>
       {{end}}
       {{if not .HasRec}}
       <p class="lede">Nothing to recommend yet.</p>
@@ -415,10 +415,9 @@
       <div class="actions">
         <a class="btn" href="/?another=1">Pick another</a>
         {{if $.Decidable}}
-        {{$name := $.Decide.Name}}
+        {{$name := $.Decide}}
         <form class="decide" method="post" action="/series/pin">
           <input type="hidden" name="name" value="{{$name}}">
-          {{with .Entry.Book.Series}}<input type="hidden" name="position" value="{{.Position}}">{{end}}
           <button class="btn btn--quiet" type="submit">Reading this next</button>
         </form>
         <form class="decide" method="post" action="/series/park">

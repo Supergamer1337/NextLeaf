@@ -181,25 +181,6 @@ func entryTitles(entries []library.Entry) []string {
 	return out
 }
 
-func TestNextOnShelvesFindsEarliestLaterBook(t *testing.T) {
-	toRead := []library.Entry{
-		{Book: seriesBook("Book 4", "Broken Earth", 4)},
-		{Book: seriesBook("Book 3", "Broken Earth", 3)},
-		{Book: seriesBook("Other", "Different", 1)},
-	}
-	got, ok := NextOnShelves(library.Series{Name: "Broken Earth", Position: library.At(2)}, toRead, Prefs{IncludeNovellas: true})
-	if !ok || got.Book.Title != "Book 3" {
-		t.Errorf("NextOnShelves = (%q, %v), want Book 3", got.Book.Title, ok)
-	}
-}
-
-func TestNextOnShelvesAbsent(t *testing.T) {
-	toRead := []library.Entry{{Book: seriesBook("Book 1", "Broken Earth", 1)}}
-	if _, ok := NextOnShelves(library.Series{Name: "Broken Earth", Position: library.At(2)}, toRead, Prefs{IncludeNovellas: true}); ok {
-		t.Error("NextOnShelves should be false when no later book is on the shelf")
-	}
-}
-
 func TestContinueSeriesReasonWithRating(t *testing.T) {
 	rec := ContinueSeries(library.Entry{Book: seriesBook("The Obelisk Gate", "The Broken Earth", 2)}, 4.5)
 	if len(rec.Pros) != 1 {
