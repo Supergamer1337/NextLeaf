@@ -228,13 +228,14 @@
     /* Switching which series a row is tracked under: the row itself becomes
        the wheel. It lifts in place over a dimmed drawer, candidates roll
        through its footprint, and it settles back once one is chosen. */
-    .drawer-body { position: relative; }
     .drawer-dim {
+      /* On the drawer itself, not the scrollable body: the dim must cover
+         the panel wherever the reader has scrolled to. */
       position: absolute; inset: 0; z-index: 4;
       background: light-dark(rgba(36,49,42,0.35), rgba(0,0,0,0.55));
       opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
     }
-    .drawer-body.dimmed .drawer-dim { opacity: 1; pointer-events: auto; }
+    .drawer.dimmed .drawer-dim { opacity: 1; pointer-events: auto; }
 
     .drawer-row { position: relative; transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease; }
     .drawer-row.spinning {
@@ -245,14 +246,18 @@
     }
 
     .switcher-btn {
-      position: absolute; top: 0.45rem; right: 0; z-index: 6;
-      display: grid; place-items: center; width: 1.6rem; height: 1.6rem;
-      font: inherit; font-size: 0.95rem; line-height: 1; cursor: pointer;
-      color: var(--muted); background: none; border: 1px solid transparent; border-radius: 6px;
-      transition: transform 0.25s ease, color 0.15s ease;
+      position: absolute; top: 50%; right: 0; z-index: 6;
+      display: grid; place-items: center; width: 2.1rem; height: 2.1rem;
+      font: inherit; font-size: 1.15rem; line-height: 1; cursor: pointer;
+      color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 8px;
+      transform: translateY(-50%);
+      transition: transform 0.25s ease, color 0.15s ease, background 0.15s ease;
     }
-    .switcher-btn:hover { color: var(--moss); border-color: var(--line); }
-    .spinning .switcher-btn { color: var(--moss); background: var(--tint); transform: rotate(180deg); }
+    .switcher-btn:hover { color: var(--moss); border-color: var(--moss); }
+    .spinning .switcher-btn {
+      color: var(--moss); background: var(--tint); border-color: var(--moss);
+      transform: translateY(-50%) rotate(180deg);
+    }
 
     .wheel-face { display: none; }
     .spinning .row-body { display: none; }
@@ -261,7 +266,18 @@
       from { opacity: 0; transform: translateY(0.25rem); }
       to   { opacity: 1; transform: none; }
     }
-    .wheel-item { display: grid; gap: 0.15rem; min-height: 3rem; align-content: start; }
+    .wheel-peek {
+      display: flex; align-items: baseline; gap: 0.4rem; width: calc(100% - 2.4rem); text-align: left;
+      font: inherit; font-size: 0.78rem; font-weight: 600; color: var(--ink);
+      background: none; border: none; padding: 0.1rem 0; cursor: pointer;
+      opacity: 0.35; transform: scale(0.9); transform-origin: left center;
+      overflow: hidden;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+    }
+    .wheel-peek:hover { opacity: 0.8; transform: scale(0.96); }
+    .peek-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .peek-badge { flex: none; }
+    .wheel-item { display: grid; gap: 0.15rem; min-height: 3rem; align-content: center; width: calc(100% - 2.4rem); }
     .wheel-item.roll-up   { animation: roll-up 0.16s ease-out; }
     .wheel-item.roll-down { animation: roll-down 0.16s ease-out; }
     @keyframes roll-up {
@@ -422,8 +438,8 @@
       <h2 class="drawer-title">Series</h2>
       <a class="drawer-close" href="#" aria-label="Close">&times;</a>
     </div>
+    <div class="drawer-dim"></div>
     <div class="drawer-body">
-      <div class="drawer-dim"></div>
       {{template "drawerGroup" dict "Label" "Reading next" "Items" .Panel.Pinned "Undo" "Unpin"}}
       {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Undo" "" "Open" true}}
       {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now"}}
@@ -438,15 +454,15 @@
     // drawer, candidates roll through its footprint, and choosing one submits
     // the switch. Everything else on the page works without this script.
     (function () {
-      var body = document.querySelector(".drawer-body");
-      if (!body) return;
-      var dim = body.querySelector(".drawer-dim");
+      var drawer = document.querySelector(".drawer");
+      if (!drawer) return;
+      var dim = drawer.querySelector(".drawer-dim");
       var openRow = null;
 
       function close() {
         if (!openRow) return;
         openRow.classList.remove("spinning");
-        body.classList.remove("dimmed");
+        drawer.classList.remove("dimmed");
         openRow = null;
       }
 
@@ -458,6 +474,19 @@
         var form = row.querySelector(".wheel-form");
         var item = face.querySelector(".wheel-item");
         var i = 0;
+
+        var prevPeek = face.querySelector(".wheel-prev");
+        var nextPeek = face.querySelector(".wheel-next");
+
+        function fillPeek(peek, c) {
+          peek.querySelector(".peek-name").textContent = c.name;
+          var badges = peek.querySelectorAll(".peek-badge");
+          badges[0].textContent = c.source;
+          badges[0].hidden = !c.source;
+          badges[1].textContent = c.pos ? "book " + c.pos : "";
+          badges[1].hidden = !c.pos;
+          peek.hidden = false;
+        }
 
         function render(dir) {
           var c = cands[i].dataset;
@@ -471,6 +500,14 @@
           var desc = item.querySelector(".wheel-desc");
           desc.textContent = c.desc;
           desc.hidden = !c.desc;
+
+          // The neighbours peek above and below, so the reader can see where
+          // the wheel goes before turning it. With two candidates there is
+          // only one other place to go, shown below.
+          var n = cands.length;
+          fillPeek(prevPeek, cands[(i - 1 + n) % n].dataset);
+          fillPeek(nextPeek, cands[(i + 1) % n].dataset);
+
           if (dir) {
             item.classList.remove("roll-up", "roll-down");
             void item.offsetWidth; // restart the animation
@@ -495,11 +532,11 @@
           i = 0;
           render();
           row.classList.add("spinning");
-          body.classList.add("dimmed");
+          drawer.classList.add("dimmed");
           openRow = row;
         });
-        face.querySelector(".wheel-up").addEventListener("click", function () { cycle(-1); });
-        face.querySelector(".wheel-down").addEventListener("click", function () { cycle(1); });
+        prevPeek.addEventListener("click", function () { cycle(-1); });
+        nextPeek.addEventListener("click", function () { cycle(1); });
         face.querySelector(".wheel-ok").addEventListener("click", confirm);
         face.querySelector(".wheel-cancel").addEventListener("click", close);
         row.addEventListener("keydown", function (e) {
@@ -612,6 +649,9 @@
         {{/* The wheel face the script swaps candidates through, in the row's
              own footprint. Hidden until the row is spun. */}}
         <div class="wheel-face">
+          <button type="button" class="wheel-peek wheel-prev" aria-label="Previous series" hidden>
+            <span class="peek-name"></span><span class="peek-badge switch-source" hidden></span><span class="peek-badge switch-pos" hidden></span>
+          </button>
           <div class="wheel-item">
             <span class="wheel-name drawer-name"></span>
             <span class="wheel-meta">
@@ -620,9 +660,10 @@
             </span>
             <span class="wheel-desc switch-desc" hidden></span>
           </div>
+          <button type="button" class="wheel-peek wheel-next" aria-label="Next series" hidden>
+            <span class="peek-name"></span><span class="peek-badge switch-source" hidden></span><span class="peek-badge switch-pos" hidden></span>
+          </button>
           <div class="wheel-controls">
-            <button type="button" class="wheel-step wheel-up" aria-label="Previous series">▲</button>
-            <button type="button" class="wheel-step wheel-down" aria-label="Next series">▼</button>
             <button type="button" class="wheel-ok">Use this</button>
             <button type="button" class="wheel-cancel" aria-label="Cancel">✕</button>
           </div>

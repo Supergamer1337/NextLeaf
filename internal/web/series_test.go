@@ -388,6 +388,10 @@ func TestTheSwitcherSpinsInPlace(t *testing.T) {
 	if !strings.Contains(body, `action="/series/switch"`) {
 		t.Error("no form to submit the chosen candidate")
 	}
+	// The wheel previews its neighbours above and below the current face.
+	if !strings.Contains(body, `class="wheel-peek wheel-prev"`) || !strings.Contains(body, `class="wheel-peek wheel-next"`) {
+		t.Error("the wheel has no neighbour previews")
+	}
 }
 
 func TestSwitchingFromTheDrawerChangesWhichSeriesIsTracked(t *testing.T) {
