@@ -151,7 +151,7 @@ func TestUnknownPathIsNotFound(t *testing.T) {
 }
 
 func TestSelectorUnconfigured(t *testing.T) {
-	rec := get(t, nil, "/")
+	rec := get(t, nil, "/view")
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 		t.Errorf("Content-Type = %q, want text/html", ct)
 	}
@@ -162,14 +162,14 @@ func TestSelectorUnconfigured(t *testing.T) {
 
 func TestSelectorSourceError(t *testing.T) {
 	src := stubSource{toReadErr: errors.New("boom")}
-	rec := get(t, src, "/")
+	rec := get(t, src, "/view")
 	if body := rec.Body.String(); !strings.Contains(body, "boom") {
 		t.Errorf("error page should surface the failure:\n%s", body)
 	}
 }
 
 func TestSelectorEmptyList(t *testing.T) {
-	rec := get(t, stubSource{}, "/")
+	rec := get(t, stubSource{}, "/view")
 	if body := rec.Body.String(); !strings.Contains(body, "Want-to-Read list is empty") {
 		t.Errorf("empty page should invite adding books:\n%s", body)
 	}
@@ -180,7 +180,7 @@ func TestSelectorContinuesSeriesFromShelf(t *testing.T) {
 		reads:  []library.Entry{seriesEntry("The Fifth Season", "The Broken Earth", 1)},
 		toRead: []library.Entry{seriesEntry("The Obelisk Gate", "The Broken Earth", 2)},
 	}
-	body := get(t, src, "/").Body.String()
+	body := get(t, src, "/view").Body.String()
 	for _, want := range []string{"The Obelisk Gate", "The Broken Earth", "Continues"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("series continuation should mention %q:\n%s", want, body)
@@ -195,7 +195,7 @@ func TestSelectorResolvesSeriesOffShelf(t *testing.T) {
 		next:       library.Entry{Book: library.Book{Title: "The Obelisk Gate", Series: &library.Series{Name: "The Broken Earth", Position: library.At(2)}}},
 		found:      true,
 	}
-	body := get(t, src, "/").Body.String()
+	body := get(t, src, "/view").Body.String()
 	if !strings.Contains(body, "The Obelisk Gate") {
 		t.Errorf("off-shelf next book should be recommended:\n%s", body)
 	}
@@ -207,7 +207,7 @@ func TestSelectorShowsFavourReasons(t *testing.T) {
 		reads:  []library.Entry{{Book: library.Book{Title: "Recent", Genres: []string{"Fantasy"}}}},
 		toRead: []library.Entry{{Book: library.Book{Title: "TBR Pick", Genres: []string{"History"}}}},
 	}
-	body := get(t, src, "/?another=1").Body.String()
+	body := get(t, src, "/view?another=1").Body.String()
 
 	if !strings.Contains(body, "In favour") {
 		t.Errorf("a pick with pros should show an 'In favour' section:\n%s", body)
@@ -229,7 +229,7 @@ func TestSelectorShowsTradeOffs(t *testing.T) {
 		reads:  []library.Entry{fantasy("R1"), fantasy("R2"), fantasy("R3")},
 		toRead: []library.Entry{fantasy("TBR Fantasy")},
 	}
-	body := get(t, src, "/?another=1").Body.String()
+	body := get(t, src, "/view?another=1").Body.String()
 
 	if !strings.Contains(body, "Trade-offs") {
 		t.Errorf("a pick with cons should show a 'Trade-offs' section:\n%s", body)
@@ -247,7 +247,7 @@ func TestSelectorShowsShelfBadgeAndSources(t *testing.T) {
 			Available: true,
 		}},
 	}
-	body := get(t, src, "/?another=1").Body.String()
+	body := get(t, src, "/view?another=1").Body.String()
 
 	if !strings.Contains(body, "On your shelf") {
 		t.Errorf("an available book should carry the shelf badge:\n%s", body)
@@ -264,7 +264,7 @@ func TestSelectorShowsSourcesWithoutBadge(t *testing.T) {
 			Sources: []library.SourceRef{{Name: "hardcover"}},
 		}},
 	}
-	body := get(t, src, "/?another=1").Body.String()
+	body := get(t, src, "/view?another=1").Body.String()
 
 	if !strings.Contains(body, "Hardcover") {
 		t.Errorf("the source name should be shown:\n%s", body)
@@ -282,7 +282,7 @@ func TestSelectorJoinsMergedSources(t *testing.T) {
 			Available: true,
 		}},
 	}
-	body := get(t, src, "/?another=1").Body.String()
+	body := get(t, src, "/view?another=1").Body.String()
 
 	if !strings.Contains(body, "Grimmory · Hardcover") {
 		t.Errorf("merged sources should be joined:\n%s", body)
@@ -293,7 +293,7 @@ func TestSelectorShowsDescription(t *testing.T) {
 	src := stubSource{
 		toRead: []library.Entry{{Book: library.Book{Title: "Pick", Description: "A world ends in ash."}}},
 	}
-	body := get(t, src, "/?another=1").Body.String()
+	body := get(t, src, "/view?another=1").Body.String()
 	if !strings.Contains(body, "A world ends in ash.") || !strings.Contains(body, `class="rec-desc"`) {
 		t.Errorf("description should render below the card:\n%s", body)
 	}
@@ -303,7 +303,7 @@ func TestSelectorOmitsEmptyDescription(t *testing.T) {
 	src := stubSource{
 		toRead: []library.Entry{{Book: library.Book{Title: "Pick"}}},
 	}
-	body := get(t, src, "/?another=1").Body.String()
+	body := get(t, src, "/view?another=1").Body.String()
 	if strings.Contains(body, `class="rec-desc"`) {
 		t.Errorf("no description element should render when there is none:\n%s", body)
 	}
@@ -317,7 +317,7 @@ func TestSelectorHasNoViewDetailsLink(t *testing.T) {
 			Sources: []library.SourceRef{{Name: "grimmory", URL: "http://gm.local/book/7"}},
 		}},
 	}
-	body := get(t, src, "/?another=1").Body.String()
+	body := get(t, src, "/view?another=1").Body.String()
 	if strings.Contains(body, "View details") {
 		t.Errorf("View details should no longer render:\n%s", body)
 	}
@@ -330,7 +330,7 @@ func TestSelectorSourceChipLinksToSource(t *testing.T) {
 			Sources: []library.SourceRef{{Name: "grimmory", URL: "http://gm.local/book/7"}},
 		}},
 	}
-	body := get(t, src, "/?another=1").Body.String()
+	body := get(t, src, "/view?another=1").Body.String()
 
 	if !strings.Contains(body, `href="http://gm.local/book/7"`) {
 		t.Errorf("chip should link to the source's book page:\n%s", body)
@@ -347,7 +347,7 @@ func TestSelectorSourceWithoutURLIsPlainText(t *testing.T) {
 			Sources: []library.SourceRef{{Name: "hardcover"}},
 		}},
 	}
-	body := get(t, src, "/?another=1").Body.String()
+	body := get(t, src, "/view?another=1").Body.String()
 
 	if !strings.Contains(body, "Hardcover") {
 		t.Errorf("source name should still render:\n%s", body)
@@ -370,7 +370,7 @@ func TestSelectorResolverPickShowsSourceWithoutBadge(t *testing.T) {
 		},
 		found: true,
 	}
-	body := get(t, src, "/").Body.String()
+	body := get(t, src, "/view").Body.String()
 
 	if !strings.Contains(body, `href="https://hardcover.app/books/two"`) || !strings.Contains(body, "Hardcover") {
 		t.Errorf("the resolving source should show as a linked chip:\n%s", body)
@@ -388,7 +388,7 @@ func TestSelectorContinuationKeepsProvenance(t *testing.T) {
 		reads:  []library.Entry{seriesEntry("Book One", "Saga", 1)},
 		toRead: []library.Entry{next},
 	}
-	body := get(t, src, "/").Body.String()
+	body := get(t, src, "/view").Body.String()
 
 	if !strings.Contains(body, "Continues") {
 		t.Fatalf("expected a series continuation:\n%s", body)
@@ -404,11 +404,73 @@ func TestSelectorRerollUsesVariety(t *testing.T) {
 		reads:  []library.Entry{seriesEntry("The Fifth Season", "The Broken Earth", 1)},
 		toRead: []library.Entry{{Book: library.Book{Title: "A Standalone Pick"}}},
 	}
-	body := get(t, src, "/?another=1").Body.String()
+	body := get(t, src, "/view?another=1").Body.String()
 	if !strings.Contains(body, "A Standalone Pick") {
 		t.Errorf("reroll should pick from the TBR:\n%s", body)
 	}
 	if strings.Contains(body, "Continues") {
 		t.Errorf("reroll should not offer a series continuation:\n%s", body)
+	}
+}
+
+// countingSource records whether a handler touched the library at all.
+type countingSource struct {
+	stubSource
+	reads int
+}
+
+func (c *countingSource) ToRead(ctx context.Context) ([]library.Entry, error) {
+	c.reads++
+	return c.stubSource.ToRead(ctx)
+}
+
+func (c *countingSource) RecentReads(ctx context.Context, n int) ([]library.Entry, error) {
+	c.reads++
+	return c.stubSource.RecentReads(ctx, n)
+}
+
+// The shell is the same document for everyone. It reads no source, so it can
+// neither be slow nor fail, whatever state the library is in.
+func TestShellIsConstantAndReadsNoSource(t *testing.T) {
+	src := &countingSource{stubSource: midSeries()}
+	h := ready(t, src, testStore(t))
+
+	first, second := getBody(t, h, "/"), getBody(t, h, "/")
+	if first != second {
+		t.Error("the shell differs between requests, so it is not constant")
+	}
+	if src.reads > 0 {
+		t.Errorf("the shell read the source %d times, want 0", src.reads)
+	}
+	// The drawer shell is part of the page, but nothing that depends on the
+	// library may be: no card, and no series rows.
+	if strings.Contains(first, `class="rec-title"`) || strings.Contains(first, `class="drawer-row"`) {
+		t.Error("the shell carries card or series content, which belongs to /view")
+	}
+	if !strings.Contains(first, `<div class="drawer-body" id="drawer-body"></div>`) {
+		t.Error("the shell has no empty drawer body for the fragment to fill")
+	}
+	if !strings.Contains(first, `hx-get="/view"`) {
+		t.Error("the shell never fetches the view, so the card would never arrive")
+	}
+}
+
+// The fragment is document-free: it is swapped into a page that already has a
+// head and a body.
+func TestViewIsAFragmentNotAPage(t *testing.T) {
+	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view")
+	for _, tag := range []string{"<html", "<head", "<body", "<!DOCTYPE"} {
+		if strings.Contains(body, tag) {
+			t.Errorf("the fragment contains %s, so it would nest a document in the page", tag)
+		}
+	}
+}
+
+// The notice slot comes back empty from every successful render, so a refusal
+// clears itself as soon as something works.
+func TestTheNoticeSlotIsEmptyOnASuccessfulRender(t *testing.T) {
+	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view")
+	if !strings.Contains(body, `<div id="flash" role="status"></div>`) {
+		t.Error("the notice slot is not empty, so an earlier refusal would persist")
 	}
 }

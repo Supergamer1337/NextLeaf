@@ -65,7 +65,7 @@ func midSeries() stubSource {
 
 func TestSeriesContinuationIsOffered(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
-	if body := getBody(t, h, "/"); !strings.Contains(body, "Book 4") {
+	if body := getBody(t, h, "/view"); !strings.Contains(body, "Book 4") {
 		t.Error("the next book in the tracked series was not recommended")
 	}
 }
@@ -74,10 +74,10 @@ func TestParkingASeriesStopsItBeingContinued(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
 
 	rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}})
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("POST /series/park: status = %d, want 303", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /series/park: status = %d, want 200", rec.Code)
 	}
-	if body := getBody(t, h, "/"); strings.Contains(body, "Continues Mistborn") {
+	if body := getBody(t, h, "/view"); strings.Contains(body, "Continues Mistborn") {
 		t.Error("a parked series was still offered as a continuation")
 	}
 }
@@ -91,10 +91,10 @@ func TestDroppingASeriesAlsoWithholdsItsBooksFromVarietyPicks(t *testing.T) {
 	}
 	h := ready(t, src, testStore(t))
 
-	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("POST /series/drop: status = %d, want 303", rec.Code)
+	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+		t.Fatalf("POST /series/drop: status = %d, want 200", rec.Code)
 	}
-	if body := getBody(t, h, "/"); strings.Contains(body, "Book 4") {
+	if body := getBody(t, h, "/view"); strings.Contains(body, "Book 4") {
 		t.Error("a dropped series' book still reached the variety pool")
 	}
 }
@@ -115,13 +115,13 @@ func TestPinnedSeriesOutranksAMoreRecentlyFinishedOne(t *testing.T) {
 	}
 	h := ready(t, src, testStore(t))
 
-	if body := getBody(t, h, "/"); !strings.Contains(body, "Stormlight 2") {
+	if body := getBody(t, h, "/view"); !strings.Contains(body, "Stormlight 2") {
 		t.Fatal("expected the most recently finished series to be continued")
 	}
-	if rec := post(t, h, "/series/pin", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("POST /series/pin: status = %d, want 303", rec.Code)
+	if rec := post(t, h, "/series/pin", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+		t.Fatalf("POST /series/pin: status = %d, want 200", rec.Code)
 	}
-	if body := getBody(t, h, "/"); !strings.Contains(body, "Mistborn 4") {
+	if body := getBody(t, h, "/view"); !strings.Contains(body, "Mistborn 4") {
 		t.Error("the pinned series was not continued first")
 	}
 }
@@ -129,10 +129,10 @@ func TestPinnedSeriesOutranksAMoreRecentlyFinishedOne(t *testing.T) {
 func TestPanelListsTrackedSeriesAndOffersUndo(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
 
-	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("POST /series/drop: status = %d, want 303", rec.Code)
+	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+		t.Fatalf("POST /series/drop: status = %d, want 200", rec.Code)
 	}
-	body := getBody(t, h, "/")
+	body := getBody(t, h, "/view")
 	if !strings.Contains(body, "Mistborn") {
 		t.Error("the panel does not list the tracked series")
 	}
@@ -145,7 +145,7 @@ func TestCardOffersNoDecisionsForASeriesTheReaderHasNotStarted(t *testing.T) {
 	src := stubSource{toRead: []library.Entry{seriesEntry("Book 1", "Unstarted", 1)}}
 	h := ready(t, src, testStore(t))
 
-	if body := getBody(t, h, "/"); strings.Contains(body, "/series/park") {
+	if body := getBody(t, h, "/view"); strings.Contains(body, "/series/park") {
 		t.Error("decision buttons were offered for a series the reader has never read")
 	}
 }
@@ -195,8 +195,8 @@ func TestASameOriginDecisionPostStillWorks(t *testing.T) {
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther {
-		t.Errorf("same-origin POST: status = %d, want 303", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("same-origin POST: status = %d, want 200", rec.Code)
 	}
 }
 
@@ -220,7 +220,7 @@ func caughtUpSource() *resolverStub {
 
 func TestDrawerFilesACaughtUpSeriesUnderFinished(t *testing.T) {
 	h := ready(t, caughtUpSource(), testStore(t))
-	body := getBody(t, h, "/")
+	body := getBody(t, h, "/view")
 
 	finished := section(body, "Finished")
 	if !strings.Contains(finished, "Stormlight") {
@@ -233,7 +233,7 @@ func TestDrawerFilesACaughtUpSeriesUnderFinished(t *testing.T) {
 
 func TestOnlyTheCurrentGroupStartsOpen(t *testing.T) {
 	h := ready(t, caughtUpSource(), testStore(t))
-	body := getBody(t, h, "/")
+	body := getBody(t, h, "/view")
 
 	block, ok := enclosingDetails(body, ">Finished")
 	if !ok {
@@ -253,10 +253,10 @@ func TestOnlyTheCurrentGroupStartsOpen(t *testing.T) {
 
 func TestTheParkedGroupStartsCollapsed(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
-	if rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("POST /series/park: status = %d, want 303", rec.Code)
+	if rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+		t.Fatalf("POST /series/park: status = %d, want 200", rec.Code)
 	}
-	body := getBody(t, h, "/")
+	body := getBody(t, h, "/view")
 
 	block, ok := enclosingDetails(body, ">Parked")
 	if !ok {
@@ -269,10 +269,10 @@ func TestTheParkedGroupStartsCollapsed(t *testing.T) {
 
 func TestFinishedSitsAboveDropped(t *testing.T) {
 	h := ready(t, caughtUpSource(), testStore(t))
-	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("POST /series/drop: status = %d, want 303", rec.Code)
+	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+		t.Fatalf("POST /series/drop: status = %d, want 200", rec.Code)
 	}
-	body := getBody(t, h, "/")
+	body := getBody(t, h, "/view")
 
 	// Finished is still your history; dropped is what you rejected, and the
 	// rejected pile belongs at the very bottom.
@@ -284,7 +284,7 @@ func TestFinishedSitsAboveDropped(t *testing.T) {
 
 func TestDrawerRowsOfferPark(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
-	body := getBody(t, h, "/")
+	body := getBody(t, h, "/view")
 
 	current := section(body, "Current")
 	if !strings.Contains(current, ">Park<") {
@@ -307,7 +307,7 @@ func TestAFoldedRowOffersNoDoNothingSwitch(t *testing.T) {
 
 	// The CSS class definition is always in the stylesheet; what must be
 	// absent is the control itself.
-	if body := getBody(t, h, "/"); strings.Contains(body, `class="switcher-btn"`) {
+	if body := getBody(t, h, "/view"); strings.Contains(body, `class="switcher-btn"`) {
 		t.Error("a switch control is offered with nothing meaningful to switch to")
 	}
 }
@@ -317,7 +317,7 @@ func TestAFinishedSeriesShowsTheCoverOfTheLastBookRead(t *testing.T) {
 	src.reads[1].Book.CoverURL = "https://covers.example/stormlight4.jpg"
 	h := ready(t, src, testStore(t))
 
-	if body := getBody(t, h, "/"); !strings.Contains(body, "stormlight4.jpg") {
+	if body := getBody(t, h, "/view"); !strings.Contains(body, "stormlight4.jpg") {
 		t.Error("a finished series shows no cover at all")
 	}
 }
@@ -327,10 +327,10 @@ func TestStaleSourcesAreCalledOutOnThePage(t *testing.T) {
 	cached := library.NewCached(flaky, time.Nanosecond)
 	h := ready(t, cached, testStore(t))
 
-	getBody(t, h, "/") // prime the cache
+	getBody(t, h, "/view") // prime the cache
 	flaky.broken = true
 	time.Sleep(2 * time.Nanosecond)
-	body := getBody(t, h, "/")
+	body := getBody(t, h, "/view")
 	if !strings.Contains(body, "couldn’t be reached") {
 		t.Error("no notice that the source data may be out of date")
 	}
@@ -355,7 +355,7 @@ func switchSource() stubSource {
 
 func TestTheSwitcherSpinsInPlace(t *testing.T) {
 	h := ready(t, switchSource(), testStore(t))
-	body := getBody(t, h, "/")
+	body := getBody(t, h, "/view")
 
 	// The row itself becomes the wheel: an icon-only control, candidate data
 	// for the script to cycle through in place, and one form to submit the
@@ -385,7 +385,7 @@ func TestTheSwitcherSpinsInPlace(t *testing.T) {
 	if !strings.Contains(body, "Published order.") {
 		t.Error("the candidate does not carry its description")
 	}
-	if !strings.Contains(body, `action="/series/switch"`) {
+	if !strings.Contains(body, `hx-post="/series/switch"`) {
 		t.Error("no form to submit the chosen candidate")
 	}
 	// The selection moves between ghost cards above and below the lifted row.
@@ -398,10 +398,10 @@ func TestSwitchingFromTheDrawerChangesWhichSeriesIsTracked(t *testing.T) {
 	h := ready(t, switchSource(), testStore(t))
 
 	form := url.Values{"name": {"The Expanse (Chronological)"}, "to": {"The Expanse"}}
-	if rec := post(t, h, "/series/switch", form); rec.Code != http.StatusSeeOther {
-		t.Fatalf("POST /series/switch: status = %d, want 303", rec.Code)
+	if rec := post(t, h, "/series/switch", form); rec.Code != http.StatusOK {
+		t.Fatalf("POST /series/switch: status = %d, want 200", rec.Code)
 	}
-	body := getBody(t, h, "/")
+	body := getBody(t, h, "/view")
 	if !strings.Contains(body, `drawer-name">The Expanse<`) {
 		t.Errorf("the drawer does not track the preferred identity:\n%s", section(body, "Current"))
 	}
@@ -417,7 +417,7 @@ func TestSwitchingToASeriesThatIsNotAnAlternativeIsRefused(t *testing.T) {
 
 func TestPositionsRenderAsNumbersNotPointers(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
-	body := getBody(t, h, "/")
+	body := getBody(t, h, "/view")
 	if strings.Contains(body, "0xc0") {
 		t.Error("a position rendered as a pointer address")
 	}
@@ -431,7 +431,7 @@ func TestAnUnplacedSeriesShowsNoPositionRatherThanZero(t *testing.T) {
 	hobbit.FinishedAt = time.Now()
 	h := ready(t, stubSource{reads: []library.Entry{hobbit}}, testStore(t))
 
-	if body := getBody(t, h, "/"); strings.Contains(body, "read to book 0") {
+	if body := getBody(t, h, "/view"); strings.Contains(body, "read to book 0") {
 		t.Error("an unplaced series claims to be read to book 0")
 	}
 }
@@ -495,16 +495,21 @@ func enclosingDetails(body, marker string) (string, bool) {
 	return body[start : start+end], true
 }
 
-func TestADecisionRedirectsBackIntoTheDrawer(t *testing.T) {
-	// The reader was in the drawer when they decided; landing them back on a
-	// closed drawer loses their place.
+func TestADecisionReturnsTheRefreshedDrawer(t *testing.T) {
+	// The reader was in the drawer when they decided. Nothing navigates now, so
+	// what matters is that the response carries the drawer back for the morph,
+	// with the decision already reflected in it.
 	h := ready(t, midSeries(), testStore(t))
 	rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}})
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want 303", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if loc := rec.Header().Get("Location"); loc != "/#series" {
-		t.Errorf("Location = %q, want /#series so the drawer stays open", loc)
+	body := rec.Body.String()
+	if !strings.Contains(body, `id="drawer-body" hx-swap-oob="innerHTML"`) {
+		t.Error("the response carries no drawer body to swap back into the page")
+	}
+	if !strings.Contains(body, "Parked") {
+		t.Error("the parked series is not filed under Parked in the response")
 	}
 }
 
@@ -514,8 +519,8 @@ func TestDecidingNeverWaitsOnTheCatalogue(t *testing.T) {
 	src := &countingSlowResolver{stubSource: midSeries()}
 	h := ready(t, src, testStore(t))
 
-	if rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want 303", rec.Code)
+	if rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	if src.calls != 0 {
 		t.Errorf("the decision POST made %d catalogue lookups, want 0", src.calls)
@@ -535,10 +540,10 @@ func (c *countingSlowResolver) NextInSeries(_ context.Context, _ library.SeriesQ
 
 func TestThePinnedGroupIsOpenAndNamed(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
-	if rec := post(t, h, "/series/pin", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("POST /series/pin: status = %d, want 303", rec.Code)
+	if rec := post(t, h, "/series/pin", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+		t.Fatalf("POST /series/pin: status = %d, want 200", rec.Code)
 	}
-	body := getBody(t, h, "/")
+	body := getBody(t, h, "/view")
 
 	// The pinned series is the one thing the reader explicitly asked for
 	// next: at most one exists, so it is a plain section with nothing to
@@ -558,7 +563,7 @@ func TestThePinnedGroupIsOpenAndNamed(t *testing.T) {
 func TestRowsWearTheirIdentityBadges(t *testing.T) {
 	// The source and position show on the row itself, so two same-named rows
 	// are tellable apart without opening anything.
-	body := getBody(t, ready(t, switchSource(), testStore(t)), "/")
+	body := getBody(t, ready(t, switchSource(), testStore(t)), "/view")
 
 	i := strings.Index(body, `class="row-head"`)
 	if i < 0 {
@@ -585,7 +590,7 @@ func midSeriesReading() stubSource {
 }
 
 func TestTheNextLineNumbersTheBookItOffers(t *testing.T) {
-	row := drawerRow(t, getBody(t, ready(t, midSeries(), testStore(t)), "/"))
+	row := drawerRow(t, getBody(t, ready(t, midSeries(), testStore(t)), "/view"))
 	if !strings.Contains(row, "Next: Book 4, book 4") {
 		t.Errorf("the offered book is not numbered where it is named: %.300s", row)
 	}
@@ -593,7 +598,7 @@ func TestTheNextLineNumbersTheBookItOffers(t *testing.T) {
 
 func TestARowSaysNothingAboutWhereTheReaderHasBeen(t *testing.T) {
 	// The row offers a book; how far the reader came is the switcher's job.
-	row := drawerRow(t, getBody(t, ready(t, midSeriesReading(), testStore(t)), "/"))
+	row := drawerRow(t, getBody(t, ready(t, midSeriesReading(), testStore(t)), "/view"))
 	if strings.Contains(row, "read to") || strings.Contains(row, "reading book") {
 		t.Errorf("the row still reports the reader's own place: %.300s", row)
 	}
@@ -608,7 +613,7 @@ func TestACaughtUpRowOffersNoNumber(t *testing.T) {
 	done.FinishedAt = time.Now().Add(-24 * time.Hour)
 	src := resolverStub{stubSource: stubSource{reads: []library.Entry{done}}}
 
-	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/"))
+	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/view"))
 	if !strings.Contains(row, "Nothing left to read") {
 		t.Errorf("a caught-up row does not say it is done: %.300s", row)
 	}
@@ -627,7 +632,7 @@ func TestANextBookWithoutASlotIsNamedWithoutANumber(t *testing.T) {
 		found:      true,
 	}
 
-	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/"))
+	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/view"))
 	if !strings.Contains(row, "Next: The Companion<") {
 		t.Errorf("an unnumbered offer is not named plainly: %.300s", row)
 	}
@@ -637,7 +642,7 @@ func TestANextBookWithoutASlotIsNamedWithoutANumber(t *testing.T) {
 }
 
 func TestTheTagsSitBeneathTheTitle(t *testing.T) {
-	row := drawerRow(t, getBody(t, ready(t, midSeries(), testStore(t)), "/"))
+	row := drawerRow(t, getBody(t, ready(t, midSeries(), testStore(t)), "/view"))
 	head := row[:strings.Index(row, "</span>")]
 	if strings.Contains(head, "row-badge") {
 		t.Errorf("the tags share the title's line: %.300s", row)
@@ -660,7 +665,7 @@ func TestTheSwitcherStillSaysWhereTheReaderStands(t *testing.T) {
 	}, Status: library.StatusCurrentlyRead}
 	src := stubSource{reading: []library.Entry{started}}
 
-	body := getBody(t, ready(t, src, testStore(t)), "/")
+	body := getBody(t, ready(t, src, testStore(t)), "/view")
 	if !strings.Contains(body, `data-pos-label="reading book 1"`) {
 		t.Error("the switcher does not say the tracked identity is mid-book")
 	}
@@ -685,8 +690,37 @@ func TestAnOfferAtSlotZeroIsStillNumbered(t *testing.T) {
 		toRead: []library.Entry{seriesEntry("The Prequel", "Saga", 0)},
 	}
 
-	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/"))
+	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/view"))
 	if !strings.Contains(row, "Next: The Prequel, book 0") {
 		t.Errorf("a prequel at slot 0 loses its number: %.300s", row)
+	}
+}
+
+// htmx will not swap a 4xx into the page by default, so a refusal has to say
+// where it should land. The status stays honest either way.
+func TestARefusedDecisionIsRetargetedAtTheNoticeSlot(t *testing.T) {
+	h := ready(t, midSeries(), testStore(t))
+	rec := post(t, h, "/series/park", url.Values{"name": {""}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if got := rec.Header().Get("HX-Retarget"); got != "#flash" {
+		t.Errorf("HX-Retarget = %q, want #flash", got)
+	}
+	if got := rec.Header().Get("HX-Reswap"); got != "innerHTML" {
+		t.Errorf("HX-Reswap = %q, want innerHTML", got)
+	}
+	if !strings.Contains(rec.Body.String(), "a series name is required") {
+		t.Error("the refusal does not say what went wrong")
+	}
+}
+
+// Each fold carries a stable key. The reader's open/closed state is theirs,
+// not the server's, and the key is what lets it be matched across a morph
+// that would otherwise reset every group to the markup's default.
+func TestDrawerGroupsCarryAStableFoldKey(t *testing.T) {
+	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view")
+	if !strings.Contains(body, `data-group="Current"`) {
+		t.Error("the Current fold has no stable key to restore its state against")
 	}
 }
