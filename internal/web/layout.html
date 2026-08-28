@@ -9,6 +9,7 @@
   <link rel="apple-touch-icon" href="/static/icon-180.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
   <meta name="theme-color" content="#3f7d54">
+  <meta name="htmx-config" content='{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"[45]..","swap":true,"error":true}]}'>
   <script>
     // Apply a saved theme override before first paint to avoid a flash.
     (function () {
@@ -160,6 +161,8 @@
       box-shadow: 0 10px 24px -18px var(--shadow-c);
     }
     .drawer-toggle:hover { border-color: var(--moss); color: var(--moss); }
+    /* display:inline-flex above would otherwise defeat the hidden attribute. */
+    .drawer-toggle[hidden] { display: none; }
     .drawer-count {
       font-size: 0.72rem; color: var(--muted); background: var(--tint);
       border-radius: 999px; padding: 0.05rem 0.45rem;
@@ -178,9 +181,10 @@
          block for the fixed overlay below and trap it inside the drawer. */
       transition: right 0.22s ease, visibility 0.22s;
     }
-    /* :target for the script-free path; the script mirrors the hash into a
-       class, since Chromium can drop :target matching after DOM morphing. */
-    .drawer:target, .drawer.open { right: 0; visibility: visible; }
+    /* The hash drives the drawer, mirrored onto a class by syncDrawer. The
+       :target half of this rule went with the script-free path: with the
+       script always present, one mechanism is enough. */
+    .drawer.open { right: 0; visibility: visible; }
     .drawer-head {
       display: flex; align-items: baseline; justify-content: space-between;
       gap: 1rem; padding: 1.3rem 1.4rem 0.9rem; border-bottom: 1px solid var(--line);
@@ -357,9 +361,33 @@
       .btn, .theme-toggle { transition: none; }
       .btn:hover { transform: none; }
     }
+    /* The waiting card holds the real card's footprint, so nothing jumps
+       when the recommendation lands. Static by design: the motion floor caps
+       animation at sub-200ms micro-interactions. */
+    .deck > .waiting { display: none; }
+    .deck > .waiting--initial { display: block; }
+    /* A failed first load swaps the skeleton for the way out of it; a retry
+       puts the skeleton back, so the deck is never left blank. */
+    #app.failed .deck > .waiting--initial { display: none; }
+    #app.htmx-request .deck > .waiting--initial { display: block; }
+    #app.htmx-request .deck > .waiting { display: block; }
+    /* The drawer sits outside .deck, so a decision never blanks it out from
+       under a reader who is standing in it. */
+    #app.htmx-request .deck > :not(.waiting) { display: none; }
+    .rec--waiting { opacity: 0.55; }
+    .bone {
+      display: block; height: 0.72rem; border-radius: 999px;
+      background: var(--tint); border: 1px solid var(--line);
+    }
+    .bone--eyebrow { width: 5.5rem; height: 0.6rem; }
+    .bone--title { width: 80%; height: 1.15rem; margin-top: 0.55rem; }
+    .bone--author { width: 45%; margin-top: 0.5rem; }
+    /* An empty notice slot must not take up room between renders. */
+    #flash:empty { display: none; }
   </style>
 </head>
-<body>
+<body hx-ext="morph" hx-target="#app" hx-swap="morph:innerHTML"
+      hx-sync="#app:replace" hx-indicator="#app">
   <main class="wrap">
     <header class="masthead">
       {{ mark }}
@@ -372,286 +400,235 @@
       </button>
     </header>
 
-    {{if not .Configured}}
-      <p class="notice">No reading source connected. Set <code>HARDCOVER_TOKEN</code> and restart to get a recommendation.</p>
-    {{else if .Error}}
-      <p class="notice notice--error">Couldn’t reach your library: {{.Error}}</p>
-    {{else}}
-      {{range .Stale}}
-      <p class="notice">{{ucfirst .Source}} couldn’t be reached — showing its data from {{.Since.Format "15:04"}}. Recommendations may be out of date.</p>
-      {{end}}
-      {{if not .HasRec}}
-      <p class="lede">Nothing to recommend yet.</p>
-      <p class="notice">Your Want-to-Read list is empty — add a few books and come back.</p>
-    {{else}}
-      {{with .Rec}}
-      <p class="lede">Something different for your next read.</p>
-      <article class="rec">
-        <span class="ribbon" aria-hidden="true"></span>
-        {{template "cover" .Entry}}
-        <div class="rec-body">
-          <span class="eyebrow">Recommended</span>
-          <h2 class="rec-title">{{.Entry.Book.Title}}</h2>
-          {{if .Entry.Book.Authors}}<p class="rec-author">{{template "authors" .Entry.Book.Authors}}</p>{{end}}
-          {{with .Entry.Book.Series}}<p class="rec-series">{{.Name}}{{if .Position}} · Book {{.Position}}{{end}}</p>{{end}}
-          {{if or .Entry.Book.ReleaseYear .Entry.Book.PageCount}}
-            <p class="rec-meta">
-              {{- if .Entry.Book.ReleaseYear}}{{.Entry.Book.ReleaseYear}}{{end -}}
-              {{- if and .Entry.Book.ReleaseYear .Entry.Book.PageCount}} · {{end -}}
-              {{- if .Entry.Book.PageCount}}{{.Entry.Book.PageCount}} pages{{end -}}
-            </p>
-          {{end}}
-          {{if .Entry.Book.Genres}}<div class="tags">{{range firstN 4 .Entry.Book.Genres}}<span class="tag">{{.}}</span>{{end}}</div>{{end}}
-          {{if or .Entry.Available .Entry.Sources}}
-            <p class="rec-origin">
-              {{- if .Entry.Available}}<span class="shelf-badge">On your shelf</span>{{end -}}
-              {{- if .Entry.Sources}}<span class="rec-sources">{{range $i, $s := .Entry.Sources}}{{if $i}} · {{end}}{{if $s.URL}}<a class="rec-source" href="{{$s.URL}}" target="_blank" rel="noopener">{{ucfirst $s.Name}}</a>{{else}}{{ucfirst $s.Name}}{{end}}{{end}}</span>{{end -}}
-            </p>
-          {{end}}
-        </div>
-      </article>
-
-      {{with .Entry.Book.Description}}<p class="rec-desc">{{.}}</p>{{end}}
-
-      <section class="why">
-        {{if .Pros}}
-          <div class="why-group">
-            <span class="why-label why-label--for">In favour</span>
-            <ul class="why-list why-list--for">
-              {{range .Pros}}<li><span class="dot" aria-hidden="true">+</span>{{ucfirst .}}</li>{{end}}
-            </ul>
-          </div>
-        {{end}}
-        {{if .Cons}}
-          <div class="why-group">
-            <span class="why-label why-label--against">Trade-offs</span>
-            <ul class="why-list why-list--against">
-              {{range .Cons}}<li><span class="dot" aria-hidden="true">–</span>{{ucfirst .}}</li>{{end}}
-            </ul>
-          </div>
-        {{end}}
-        {{if and (not .Pros) (not .Cons)}}
-          <p class="why-none">A fresh pick from your list, chosen for variety.</p>
-        {{end}}
-      </section>
-
-      <div class="actions">
-        <a class="btn" href="/?another=1">Pick another</a>
-        {{if $.Decidable}}
-        {{$name := $.Decide}}
-        <form class="decide" method="post" action="/series/pin">
-          <input type="hidden" name="name" value="{{$name}}">
-          <button class="btn btn--quiet" type="submit">Reading this next</button>
-        </form>
-        <form class="decide" method="post" action="/series/park">
-          <input type="hidden" name="name" value="{{$name}}">
-          <button class="btn btn--quiet" type="submit">Park for one book</button>
-        </form>
-        <form class="decide" method="post" action="/series/drop">
-          <input type="hidden" name="name" value="{{$name}}">
-          <button class="btn btn--quiet" type="submit">Drop this series</button>
-        </form>
-        {{end}}
+    <div id="app" hx-get="/view" hx-trigger="load" aria-live="polite" aria-busy="true">
+      <div class="deck">
+        <div class="waiting waiting--initial" aria-hidden="true">{{template "waitingCard"}}</div>
+        <p class="notice deck-error" hidden>Couldn't reach the server for a recommendation.
+          <button class="btn btn--quiet" type="button" hx-get="/view" hx-disabled-elt="this">Try again</button></p>
       </div>
-      {{end}}
-      {{end}}
-
-    {{end}}
+    </div>
   </main>
 
-  {{if .Panel.Any}}
-  <a class="drawer-toggle" href="#series">Series <span class="drawer-count">{{.Panel.Count}}</span></a>
+  <a class="drawer-toggle" id="drawer-toggle" href="#series" hidden>Series <span class="drawer-count">0</span></a>
   <aside class="drawer" id="series" aria-label="Series you're tracking">
     <div class="drawer-head">
       <h2 class="drawer-title">Series</h2>
       <a class="drawer-close" href="#" aria-label="Close">&times;</a>
     </div>
     <div class="drawer-dim"></div>
-    <div class="drawer-body">
-      {{template "drawerGroup" dict "Label" "Reading next — pinned" "Items" .Panel.Pinned "Undo" "Unpin" "Flat" true}}
-      {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Undo" "" "Open" true}}
-      {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now"}}
-      {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "Undo" ""}}
-      {{template "drawerGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
-    </div>
+    <div class="drawer-body" id="drawer-body"></div>
   </aside>
-  {{end}}
 
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/idiomorph-ext.min.js" defer></script>
   <script>
-    // The series wheel and the seamless form posts. The server stays a
-    // plain form-and-redirect app; this layer follows the redirect with
-    // fetch and swaps the fresh HTML in place, so the page never visibly
-    // reloads. Without the script, every form still works the classic way.
+    // The series wheel. htmx owns the swapping; this layer only drives the
+    // wheel's local state. Handlers are delegated from the mount, which is
+    // never itself replaced, so a morph never leaves the drawer inert.
     (function () {
-      var drawer = document.querySelector(".drawer");
-      if (!drawer) return;
-      var dim = drawer.querySelector(".drawer-dim");
+      var app = document.getElementById("app");
       var openRow = null;
 
-      function syncDrawer() {
-        drawer.classList.toggle("open", location.hash === "#series");
-      }
-      window.addEventListener("hashchange", syncDrawer);
-      syncDrawer();
+      function drawer() { return document.querySelector(".drawer"); }
 
-      function close() {
-        if (!openRow) return;
+      // The hash stays the drawer's source of truth; the class is how the CSS
+      // reads it, now that :target went with the script-free path.
+      function syncDrawer() {
+        var d = drawer();
+        if (d) { d.classList.toggle("open", location.hash === "#series"); }
+      }
+
+      function closeWheel() {
+        if (!openRow) { return; }
         var img = openRow.querySelector("img.drawer-cover");
         if (img && img.dataset.original) { img.src = img.dataset.original; }
         openRow.classList.remove("spinning");
-        drawer.classList.remove("dimmed");
+        var d = drawer();
+        if (d) { d.classList.remove("dimmed"); }
         openRow = null;
       }
-      dim.addEventListener("click", close);
-      document.addEventListener("keydown", function (e) {
-        if (e.key === "Escape") close();
-      });
 
-      // seamless posts a series form and morphs the page from the response
-      // the redirect lands on, keeping the drawer's fold state and scroll.
-      function seamless(form) {
-        var body = drawer.querySelector(".drawer-body");
-        var openLabels = [];
-        body.querySelectorAll("details.drawer-group[open]").forEach(function (d) {
-          openLabels.push(d.querySelector(".drawer-label").textContent);
-        });
-        var scroll = body.scrollTop;
+      // Wheel state lives on the row, not in a closure, so these handlers keep
+      // working against whatever the last morph left behind.
+      function cands(row) {
+        return Array.prototype.slice.call(row.querySelectorAll(".wheel-candidate"));
+      }
+      function at(row) { return parseInt(row.dataset.wheelAt || "0", 10); }
 
-        return fetch(form.action, {
-          method: "POST",
-          body: new URLSearchParams(new FormData(form)),
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        }).then(function (resp) {
-          if (!resp.ok) throw new Error(resp.status);
-          return resp.text();
-        }).then(function (html) {
-          var doc = new DOMParser().parseFromString(html, "text/html");
-          var newMain = doc.querySelector("main.wrap");
-          var newBody = doc.querySelector(".drawer-body");
-          if (!newMain || !newBody) throw new Error("unexpected page");
-          close();
-          document.querySelector("main.wrap").innerHTML = newMain.innerHTML;
-          body.innerHTML = newBody.innerHTML;
-          body.querySelectorAll("details.drawer-group").forEach(function (d) {
-            var label = d.querySelector(".drawer-label").textContent;
-            d.open = openLabels.indexOf(label) >= 0 || d.hasAttribute("open");
-          });
-          body.scrollTop = scroll;
-          wireWheels();
-          wireTheme();
-        }, function () {
-          form.submit(); // the POST never landed; the classic path retries it
-        }).catch(function () {
-          // The decision was recorded but the morph failed; reload to show
-          // the truth without posting it a second time.
-          window.location.reload();
-        });
+      function fillGhost(ghost, c, fallback) {
+        ghost.querySelector(".peek-name").textContent = c.name;
+        var badges = ghost.querySelectorAll(".peek-badge");
+        badges[0].textContent = c.source;
+        badges[0].hidden = !c.source;
+        badges[1].textContent = c.pos ? "book " + c.pos : "";
+        badges[1].hidden = !c.pos;
+        // Each identity wears the face the row would have if picked.
+        var img = ghost.querySelector(".ghost-cover");
+        var src = c.cover || fallback;
+        if (src) { img.src = src; }
+        img.hidden = !src;
+        ghost.hidden = false;
       }
 
-      // Every series form on the page posts seamlessly, wherever it lives.
-      document.addEventListener("submit", function (e) {
-        var form = e.target;
-        if (form.getAttribute("action") && form.getAttribute("action").indexOf("/series/") === 0) {
-          e.preventDefault();
-          seamless(form);
+      function render(row, dir) {
+        var list = cands(row), i = at(row);
+        var c = list[i].dataset;
+        var face = row.querySelector(".wheel-face");
+        var item = face.querySelector(".wheel-item");
+        var cover = row.querySelector("img.drawer-cover");
+        var fallback = row.dataset.originalCover || "";
+
+        item.querySelector(".wheel-name").textContent = c.name;
+        var src = item.querySelector(".wheel-source");
+        src.textContent = c.source;
+        src.hidden = !c.source;
+        var pos = item.querySelector(".wheel-pos");
+        pos.textContent = c.posLabel || "";
+        pos.hidden = !c.posLabel;
+        var desc = item.querySelector(".wheel-desc");
+        desc.textContent = c.desc;
+        desc.hidden = !c.desc;
+        if (cover) { cover.src = c.cover || fallback; }
+
+        // The wheel loops, so both directions always show where they lead:
+        // with two candidates that is the same place, and the same card above
+        // and below is the honest picture of a loop.
+        var n = list.length;
+        fillGhost(row.querySelector(".wheel-prev"), list[(i - 1 + n) % n].dataset, fallback);
+        fillGhost(row.querySelector(".wheel-next"), list[(i + 1) % n].dataset, fallback);
+        if (dir) {
+          item.classList.remove("roll-up", "roll-down");
+          void item.offsetWidth; // restart the animation
+          item.classList.add(dir > 0 ? "roll-up" : "roll-down");
+        }
+      }
+
+      function cycle(row, d) {
+        var n = cands(row).length;
+        row.dataset.wheelAt = String((at(row) + d + n) % n);
+        render(row, d);
+      }
+
+      function spin(row) {
+        if (openRow === row) { closeWheel(); return; }
+        closeWheel();
+        var cover = row.querySelector("img.drawer-cover");
+        row.dataset.originalCover = cover ? cover.src : "";
+        if (cover) { cover.dataset.original = cover.src; }
+        row.dataset.wheelAt = "0";
+        render(row);
+        row.classList.add("spinning");
+        var d = drawer();
+        if (d) { d.classList.add("dimmed"); }
+        openRow = row;
+        row.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+
+      function confirmWheel(row) {
+        var list = cands(row), c = list[at(row)].dataset;
+        if (!c.to) { closeWheel(); return; } // kept the current identity
+        var form = row.querySelector(".wheel-form");
+        form.querySelector("input[name=to]").value = c.to;
+        // The row keeps wearing its current identity until the server agrees.
+        // A refusal swaps only the notice slot, so anything written here
+        // optimistically would stay on screen as a lie.
+        htmx.trigger(form, "submit");
+      }
+
+      // Delegated from the body: the drawer lives outside the swapped region,
+      // and its rows are replaced on every decision.
+      document.body.addEventListener("click", function (e) {
+        var hit = function (sel) { return e.target.closest(sel); };
+        if (hit(".drawer-dim")) { closeWheel(); return; }
+        var btn = hit(".switcher-btn");
+        if (btn) { spin(btn.closest(".drawer-row")); return; }
+        var ghost = hit(".wheel-ghost");
+        if (ghost) {
+          cycle(ghost.closest(".drawer-row"), ghost.classList.contains("wheel-next") ? 1 : -1);
+          return;
+        }
+        if (hit(".wheel-ok")) { confirmWheel(hit(".drawer-row")); return; }
+        if (hit(".wheel-cancel")) { closeWheel(); }
+      });
+
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") { closeWheel(); return; }
+        if (!openRow) { return; }
+        if (e.key === "ArrowDown") { e.preventDefault(); cycle(openRow, 1); }
+        if (e.key === "ArrowUp") { e.preventDefault(); cycle(openRow, -1); }
+        if (e.key === "Enter") { e.preventDefault(); confirmWheel(openRow); }
+      });
+
+      // The reader's folds are theirs; the markup only says which group starts
+      // open. A morph syncs that attribute back to the server's answer, so carry
+      // the reader's state across it by hand.
+      var folds = null, scrolled = 0;
+      document.body.addEventListener("htmx:beforeSwap", function () {
+        folds = {};
+        document.querySelectorAll("details.drawer-group").forEach(function (d) {
+          folds[d.dataset.group] = d.open;
+        });
+        var body = document.getElementById("drawer-body");
+        scrolled = body ? body.scrollTop : 0;
+      });
+      document.body.addEventListener("htmx:afterSwap", function () {
+        if (!folds) { return; }
+        document.querySelectorAll("details.drawer-group").forEach(function (d) {
+          if (d.dataset.group in folds) { d.open = folds[d.dataset.group]; }
+        });
+        folds = null;
+        var body = document.getElementById("drawer-body");
+        if (body) { body.scrollTop = scrolled; }
+      });
+
+      // Error responses are swapped by configuration, so a refusal can reach
+      // the notice slot. Anything that fails without saying where it belongs —
+      // a proxy's 502 page, say — would otherwise be morphed over the card.
+      document.body.addEventListener("htmx:beforeSwap", function (e) {
+        var xhr = e.detail.xhr;
+        if (!xhr || xhr.status < 400 || xhr.getResponseHeader("HX-Retarget")) { return; }
+        e.detail.shouldSwap = false;
+        var slot = document.getElementById("flash");
+        if (slot) {
+          slot.innerHTML = '<p class="notice notice--error">Something went wrong. Try again.</p>';
         }
       });
 
-      function wireWheels() {
-        drawer.querySelectorAll(".drawer-row").forEach(function (row) {
-          var btn = row.querySelector(".switcher-btn");
-          if (!btn) return;
-          var cands = Array.prototype.slice.call(row.querySelectorAll(".wheel-candidate"));
-          var face = row.querySelector(".wheel-face");
-          var form = row.querySelector(".wheel-form");
-          var item = face.querySelector(".wheel-item");
-          var prevGhost = row.querySelector(".wheel-prev");
-          var nextGhost = row.querySelector(".wheel-next");
-          var cover = row.querySelector("img.drawer-cover");
-          var i = 0;
-
-          var originalCover = cover ? cover.src : "";
-
-          function fillGhost(ghost, c) {
-            ghost.querySelector(".peek-name").textContent = c.name;
-            var badges = ghost.querySelectorAll(".peek-badge");
-            badges[0].textContent = c.source;
-            badges[0].hidden = !c.source;
-            badges[1].textContent = c.pos ? "book " + c.pos : "";
-            badges[1].hidden = !c.pos;
-            // Each identity wears the face the row would have if picked.
-            var img = ghost.querySelector(".ghost-cover");
-            var src = c.cover || originalCover;
-            if (src) { img.src = src; }
-            img.hidden = !src;
-            ghost.hidden = false;
-          }
-
-          function render(dir) {
-            var c = cands[i].dataset;
-            item.querySelector(".wheel-name").textContent = c.name;
-            var src = item.querySelector(".wheel-source");
-            src.textContent = c.source;
-            src.hidden = !c.source;
-            var pos = item.querySelector(".wheel-pos");
-            pos.textContent = c.posLabel || "";
-            pos.hidden = !c.posLabel;
-            var desc = item.querySelector(".wheel-desc");
-            desc.textContent = c.desc;
-            desc.hidden = !c.desc;
-            if (cover) { cover.src = c.cover || originalCover; }
-            // The wheel loops, so both directions always show where they
-            // lead — with two candidates that is the same place, and the
-            // same card above and below is the honest picture of a loop.
-            var n = cands.length;
-            fillGhost(prevGhost, cands[(i - 1 + n) % n].dataset);
-            fillGhost(nextGhost, cands[(i + 1) % n].dataset);
-            if (dir) {
-              item.classList.remove("roll-up", "roll-down");
-              void item.offsetWidth; // restart the animation
-              item.classList.add(dir > 0 ? "roll-up" : "roll-down");
-            }
-          }
-          function cycle(d) {
-            i = (i + d + cands.length) % cands.length;
-            render(d);
-          }
-          function confirm() {
-            var to = cands[i].dataset.to;
-            if (!to) { close(); return; } // kept the current identity
-            form.querySelector("input[name=to]").value = to;
-            // Settle showing the chosen identity; the morph makes it real.
-            var nameEl = row.querySelector(".row-body .drawer-name");
-            if (nameEl) nameEl.textContent = cands[i].dataset.name;
-            seamless(form);
-          }
-
-          btn.addEventListener("click", function () {
-            if (openRow === row) { close(); return; }
-            close();
-            if (cover) { cover.dataset.original = originalCover; }
-            i = 0;
-            render();
-            row.classList.add("spinning");
-            drawer.classList.add("dimmed");
-            openRow = row;
-            row.scrollIntoView({ block: "center", behavior: "smooth" });
-          });
-          prevGhost.addEventListener("click", function () { cycle(-1); });
-          nextGhost.addEventListener("click", function () { cycle(1); });
-          face.querySelector(".wheel-ok").addEventListener("click", confirm);
-          face.querySelector(".wheel-cancel").addEventListener("click", close);
-          row.addEventListener("keydown", function (e) {
-            if (openRow !== row) return;
-            if (e.key === "Escape") close();
-            if (e.key === "ArrowDown") { e.preventDefault(); cycle(1); }
-            if (e.key === "ArrowUp") { e.preventDefault(); cycle(-1); }
-            if (e.key === "Enter") { e.preventDefault(); confirm(); }
-          });
-        });
+      // Before the first card arrives there is no notice slot to write into,
+      // and the skeleton would otherwise sit there for good.
+      function loadFailed() {
+        app.setAttribute("aria-busy", "false");
+        if (!app.querySelector(".waiting--initial")) { return; }
+        app.classList.add("failed");
+        var err = app.querySelector(".deck-error");
+        if (err) { err.hidden = false; }
       }
-      wireWheels();
-      window.wireWheels = wireWheels;
+      document.body.addEventListener("htmx:sendError", loadFailed);
+      document.body.addEventListener("htmx:responseError", loadFailed);
+      document.body.addEventListener("htmx:timeout", loadFailed);
+
+      window.addEventListener("hashchange", syncDrawer);
+      // A morph rebuilds the drawer from server HTML, which carries none of the
+      // state these classes hold, so re-derive it every time.
+      document.body.addEventListener("htmx:afterSettle", function () {
+        // The overlay outlives the swap, so the wheel's transient state is
+        // cleared rather than replaced along with the rows. closeWheel, not a
+        // bare reset, because it is what restores the row's own cover after a
+        // refusal leaves the row on screen.
+        closeWheel();
+        var d = drawer();
+        if (d) { d.classList.remove("dimmed"); }
+        document.querySelectorAll(".drawer-row.spinning").forEach(function (r) {
+          r.classList.remove("spinning");
+        });
+        syncDrawer();
+        app.setAttribute("aria-busy", "false");
+      });
+      document.body.addEventListener("htmx:beforeRequest", function () {
+        app.classList.remove("failed");
+        app.setAttribute("aria-busy", "true");
+      });
+      syncDrawer();
     })();
 
     function wireTheme() {
@@ -678,144 +655,3 @@
   </script>
 </body>
 </html>
-
-{{define "cover"}}
-  {{- if .Book.CoverURL -}}
-    <img class="cover" src="{{.Book.CoverURL}}" alt="Cover of {{.Book.Title}}" loading="lazy">
-  {{- else -}}
-    <div class="cover cover--blank"><span>{{.Book.Title}}</span></div>
-  {{- end -}}
-{{end}}
-
-{{define "authors"}}{{range $i, $a := .}}{{if $i}}, {{end}}{{$a}}{{end}}{{end}}
-
-{{define "drawerGroup"}}
-{{if .Items}}
-{{if .Flat}}
-<div class="drawer-group drawer-group--flat">
-  <span class="drawer-label">{{.Label}}</span>
-  {{template "drawerRows" .}}
-</div>
-{{else}}
-<details class="drawer-group"{{if .Open}} open{{end}}>
-  <summary class="drawer-label drawer-summary">{{.Label}} <span class="drawer-tally">{{len .Items}}</span></summary>
-  {{template "drawerRows" .}}
-</details>
-{{end}}
-{{end}}
-{{end}}
-
-{{define "drawerRows"}}
-<ul class="drawer-list">
-  {{range .Items}}
-  {{$tracked := .Name}}
-  <li>
-    <div class="drawer-row">
-      {{/* The next book when there is one, else the last book read. */}}
-      {{if or .NextCoverURL .CoverURL}}
-      <img class="drawer-cover" src="{{or .NextCoverURL .CoverURL}}" alt="" loading="lazy">
-      {{else}}
-      <span class="drawer-cover drawer-cover--blank" aria-hidden="true"></span>
-      {{end}}
-      <div class="drawer-cell">
-        <div class="row-body">
-          <span class="row-head">
-            <span class="drawer-name">{{.Name}}</span>
-          </span>
-          <span class="row-tags">
-            {{if .Source}}<span class="row-badge switch-source">{{ucfirst .Source}}</span>{{end}}
-          </span>
-          {{if .NextTitle}}
-            {{/* The row's one number belongs to the book it is offering, named
-                 in the same breath; where the reader has been is the
-                 switcher's business. */}}
-            <span class="drawer-next">Next: {{.NextTitle}}{{if .NextPosition}}, book {{.NextPosition}}{{end}}</span>
-          {{else if .CaughtUp}}
-            <span class="drawer-next">Nothing left to read</span>
-          {{end}}
-          <div class="drawer-acts">
-            {{if and .NextTitle (and (ne $.Label "Reading next — pinned") (ne $.Label "Dropped"))}}
-            <form method="post" action="/series/pin">
-              <input type="hidden" name="name" value="{{.Name}}">
-              <button class="drawer-act drawer-act--go" type="submit">Pick this</button>
-            </form>
-            {{end}}
-            {{if eq $.Label "Current"}}
-            <form method="post" action="/series/park">
-              <input type="hidden" name="name" value="{{.Name}}">
-              <button class="drawer-act" type="submit">Park</button>
-            </form>
-            {{end}}
-            {{if ne $.Label "Dropped"}}
-            <form method="post" action="/series/drop">
-              <input type="hidden" name="name" value="{{.Name}}">
-              <button class="drawer-act" type="submit">Drop</button>
-            </form>
-            {{end}}
-            {{if $.Undo}}
-            <form method="post" action="/series/clear">
-              <input type="hidden" name="name" value="{{.Name}}">
-              <button class="drawer-act" type="submit">{{$.Undo}}</button>
-            </form>
-            {{end}}
-          </div>
-        </div>
-        {{if .Alternatives}}
-        {{/* The wheel face the script swaps candidates through, in the row's
-             own footprint. Hidden until the row is spun. */}}
-        <div class="wheel-face">
-          <div class="wheel-item">
-            <span class="wheel-name drawer-name"></span>
-            <span class="wheel-meta">
-              <span class="wheel-source switch-source" hidden></span>
-              <span class="wheel-pos switch-pos" hidden></span>
-            </span>
-            <span class="wheel-desc switch-desc" hidden></span>
-          </div>
-          <div class="wheel-controls">
-            <button type="button" class="wheel-ok">Use this</button>
-            <button type="button" class="wheel-cancel" aria-label="Cancel">✕</button>
-          </div>
-        </div>
-        {{end}}
-      </div>
-      {{if .Alternatives}}
-      {{/* The ghost cards the selection moves between: rendered above and
-           below the lifted card, smaller and darkened for depth. */}}
-      <button type="button" class="wheel-ghost wheel-prev" aria-label="Previous series" hidden>
-        <img class="ghost-cover" alt="" hidden>
-        <span class="ghost-text">
-          <span class="peek-name"></span>
-          <span class="ghost-badges">
-            <span class="peek-badge switch-source" hidden></span>
-            <span class="peek-badge switch-pos" hidden></span>
-          </span>
-        </span>
-      </button>
-      <button type="button" class="wheel-ghost wheel-next" aria-label="Next series" hidden>
-        <img class="ghost-cover" alt="" hidden>
-        <span class="ghost-text">
-          <span class="peek-name"></span>
-          <span class="ghost-badges">
-            <span class="peek-badge switch-source" hidden></span>
-            <span class="peek-badge switch-pos" hidden></span>
-          </span>
-        </span>
-      </button>
-      <button class="switcher-btn" type="button" title="Track under a different series" aria-label="Switch series">⇄</button>
-      <div hidden>
-        <span class="wheel-candidate" data-to="" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-pos-label="{{.PositionLabel}}" data-desc="Currently tracked." data-cover="{{or .NextCoverURL .CoverURL}}"></span>
-        {{range .Alternatives}}
-        <span class="wheel-candidate" data-to="{{.Name}}" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-pos-label="{{.PositionLabel}}" data-desc="{{.Description}}" data-cover="{{.CoverURL}}"></span>
-        {{end}}
-        <form method="post" action="/series/switch" class="wheel-form">
-          <input type="hidden" name="name" value="{{$tracked}}">
-          <input type="hidden" name="to" value="">
-        </form>
-      </div>
-      {{end}}
-    </div>
-  </li>
-  {{end}}
-</ul>
-{{end}}

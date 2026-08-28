@@ -1,0 +1,266 @@
+{{define "view"}}
+  <div id="flash" role="status"></div>
+  <div class="deck">
+    <div class="waiting" aria-hidden="true">{{template "waitingCard"}}</div>
+    {{if not .Configured}}
+      <p class="notice">No reading source connected. Set <code>HARDCOVER_TOKEN</code> and restart to get a recommendation.</p>
+    {{else if .Error}}
+      <p class="notice notice--error">Couldn’t reach your library: {{.Error}}</p>
+    {{else}}
+      {{range .Stale}}
+      <p class="notice">{{ucfirst .Source}} couldn’t be reached — showing its data from {{.Since.Format "15:04"}}. Recommendations may be out of date.</p>
+      {{end}}
+      {{if not .HasRec}}
+      <p class="lede">Nothing to recommend yet.</p>
+      <p class="notice">Your Want-to-Read list is empty — add a few books and come back.</p>
+    {{else}}
+      {{with .Rec}}
+      <p class="lede">Something different for your next read.</p>
+      <article class="rec">
+        <span class="ribbon" aria-hidden="true"></span>
+        {{template "cover" .Entry}}
+        <div class="rec-body">
+          <span class="eyebrow">Recommended</span>
+          <h2 class="rec-title">{{.Entry.Book.Title}}</h2>
+          {{if .Entry.Book.Authors}}<p class="rec-author">{{template "authors" .Entry.Book.Authors}}</p>{{end}}
+          {{with .Entry.Book.Series}}<p class="rec-series">{{.Name}}{{if .Position}} · Book {{.Position}}{{end}}</p>{{end}}
+          {{if or .Entry.Book.ReleaseYear .Entry.Book.PageCount}}
+            <p class="rec-meta">
+              {{- if .Entry.Book.ReleaseYear}}{{.Entry.Book.ReleaseYear}}{{end -}}
+              {{- if and .Entry.Book.ReleaseYear .Entry.Book.PageCount}} · {{end -}}
+              {{- if .Entry.Book.PageCount}}{{.Entry.Book.PageCount}} pages{{end -}}
+            </p>
+          {{end}}
+          {{if .Entry.Book.Genres}}<div class="tags">{{range firstN 4 .Entry.Book.Genres}}<span class="tag">{{.}}</span>{{end}}</div>{{end}}
+          {{if or .Entry.Available .Entry.Sources}}
+            <p class="rec-origin">
+              {{- if .Entry.Available}}<span class="shelf-badge">On your shelf</span>{{end -}}
+              {{- if .Entry.Sources}}<span class="rec-sources">{{range $i, $s := .Entry.Sources}}{{if $i}} · {{end}}{{if $s.URL}}<a class="rec-source" href="{{$s.URL}}" target="_blank" rel="noopener">{{ucfirst $s.Name}}</a>{{else}}{{ucfirst $s.Name}}{{end}}{{end}}</span>{{end -}}
+            </p>
+          {{end}}
+        </div>
+      </article>
+
+      {{with .Entry.Book.Description}}<p class="rec-desc">{{.}}</p>{{end}}
+
+      <section class="why">
+        {{if .Pros}}
+          <div class="why-group">
+            <span class="why-label why-label--for">In favour</span>
+            <ul class="why-list why-list--for">
+              {{range .Pros}}<li><span class="dot" aria-hidden="true">+</span>{{ucfirst .}}</li>{{end}}
+            </ul>
+          </div>
+        {{end}}
+        {{if .Cons}}
+          <div class="why-group">
+            <span class="why-label why-label--against">Trade-offs</span>
+            <ul class="why-list why-list--against">
+              {{range .Cons}}<li><span class="dot" aria-hidden="true">–</span>{{ucfirst .}}</li>{{end}}
+            </ul>
+          </div>
+        {{end}}
+        {{if and (not .Pros) (not .Cons)}}
+          <p class="why-none">A fresh pick from your list, chosen for variety.</p>
+        {{end}}
+      </section>
+
+      <div class="actions">
+        <button class="btn" type="button" hx-get="/view?another=1" hx-disabled-elt="this">Pick another</button>
+        {{if $.Decidable}}
+        {{$name := $.Decide}}
+        <form class="decide" hx-post="/series/pin" hx-disabled-elt="find button">
+          <input type="hidden" name="name" value="{{$name}}">
+          <button class="btn btn--quiet" type="submit">Reading this next</button>
+        </form>
+        <form class="decide" hx-post="/series/park" hx-disabled-elt="find button">
+          <input type="hidden" name="name" value="{{$name}}">
+          <button class="btn btn--quiet" type="submit">Park for one book</button>
+        </form>
+        <form class="decide" hx-post="/series/drop" hx-disabled-elt="find button">
+          <input type="hidden" name="name" value="{{$name}}">
+          <button class="btn btn--quiet" type="submit">Drop this series</button>
+        </form>
+        {{end}}
+      </div>
+      {{end}}
+      {{end}}
+
+    {{end}}
+  </div>
+  {{/* Only these two pieces of the drawer travel. The overlay itself stays in
+       the page, so a decision never disturbs the drawer the reader is standing
+       in: no reopening, and the scroll position survives on its own. */}}
+  <a class="drawer-toggle" id="drawer-toggle" href="#series" hx-swap-oob="true"{{if not .Panel.Any}} hidden{{end}}>Series <span class="drawer-count">{{.Panel.Count}}</span></a>
+  <div class="drawer-body" id="drawer-body" hx-swap-oob="innerHTML">
+      {{template "drawerGroup" dict "Label" "Reading next — pinned" "Items" .Panel.Pinned "Undo" "Unpin" "Flat" true}}
+      {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Undo" "" "Open" true}}
+      {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now"}}
+      {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "Undo" ""}}
+      {{template "drawerGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
+  </div>
+{{end}}
+
+{{define "cover"}}
+  {{- if .Book.CoverURL -}}
+    <img class="cover" src="{{.Book.CoverURL}}" alt="Cover of {{.Book.Title}}" loading="lazy">
+  {{- else -}}
+    <div class="cover cover--blank"><span>{{.Book.Title}}</span></div>
+  {{- end -}}
+{{end}}
+
+{{define "authors"}}{{range $i, $a := .}}{{if $i}}, {{end}}{{$a}}{{end}}{{end}}
+
+{{define "drawerGroup"}}
+{{if .Items}}
+{{if .Flat}}
+<div class="drawer-group drawer-group--flat">
+  <span class="drawer-label">{{.Label}}</span>
+  {{template "drawerRows" .}}
+</div>
+{{else}}
+<details class="drawer-group" data-group="{{.Label}}"{{if .Open}} open{{end}}>
+  <summary class="drawer-label drawer-summary">{{.Label}} <span class="drawer-tally">{{len .Items}}</span></summary>
+  {{template "drawerRows" .}}
+</details>
+{{end}}
+{{end}}
+{{end}}
+
+{{define "drawerRows"}}
+<ul class="drawer-list">
+  {{range .Items}}
+  {{$tracked := .Name}}
+  <li>
+    <div class="drawer-row">
+      {{/* The next book when there is one, else the last book read. */}}
+      {{if or .NextCoverURL .CoverURL}}
+      <img class="drawer-cover" src="{{or .NextCoverURL .CoverURL}}" alt="" loading="lazy">
+      {{else}}
+      <span class="drawer-cover drawer-cover--blank" aria-hidden="true"></span>
+      {{end}}
+      <div class="drawer-cell">
+        <div class="row-body">
+          <span class="row-head">
+            <span class="drawer-name">{{.Name}}</span>
+          </span>
+          <span class="row-tags">
+            {{if .Source}}<span class="row-badge switch-source">{{ucfirst .Source}}</span>{{end}}
+          </span>
+          {{if .NextTitle}}
+            {{/* The row's one number belongs to the book it is offering, named
+                 in the same breath; where the reader has been is the
+                 switcher's business. */}}
+            <span class="drawer-next">Next: {{.NextTitle}}{{if .NextPosition}}, book {{.NextPosition}}{{end}}</span>
+          {{else if .CaughtUp}}
+            <span class="drawer-next">Nothing left to read</span>
+          {{end}}
+          <div class="drawer-acts">
+            {{if and .NextTitle (and (ne $.Label "Reading next — pinned") (ne $.Label "Dropped"))}}
+            <form hx-post="/series/pin" hx-disabled-elt="find button">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <button class="drawer-act drawer-act--go" type="submit">Pick this</button>
+            </form>
+            {{end}}
+            {{if eq $.Label "Current"}}
+            <form hx-post="/series/park" hx-disabled-elt="find button">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <button class="drawer-act" type="submit">Park</button>
+            </form>
+            {{end}}
+            {{if ne $.Label "Dropped"}}
+            <form hx-post="/series/drop" hx-disabled-elt="find button">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <button class="drawer-act" type="submit">Drop</button>
+            </form>
+            {{end}}
+            {{if $.Undo}}
+            <form hx-post="/series/clear" hx-disabled-elt="find button">
+              <input type="hidden" name="name" value="{{.Name}}">
+              {{/* Only a dropped group comes back with nothing cached about it. */}}
+              {{if eq $.Label "Dropped"}}<input type="hidden" name="uncached" value="1">{{end}}
+              <button class="drawer-act" type="submit">{{$.Undo}}</button>
+            </form>
+            {{end}}
+          </div>
+        </div>
+        {{if .Alternatives}}
+        {{/* The wheel face the script swaps candidates through, in the row's
+             own footprint. Hidden until the row is spun. */}}
+        <div class="wheel-face">
+          <div class="wheel-item">
+            <span class="wheel-name drawer-name"></span>
+            <span class="wheel-meta">
+              <span class="wheel-source switch-source" hidden></span>
+              <span class="wheel-pos switch-pos" hidden></span>
+            </span>
+            <span class="wheel-desc switch-desc" hidden></span>
+          </div>
+          <div class="wheel-controls">
+            <button type="button" class="wheel-ok">Use this</button>
+            <button type="button" class="wheel-cancel" aria-label="Cancel">✕</button>
+          </div>
+        </div>
+        {{end}}
+      </div>
+      {{if .Alternatives}}
+      {{/* The ghost cards the selection moves between: rendered above and
+           below the lifted card, smaller and darkened for depth. */}}
+      <button type="button" class="wheel-ghost wheel-prev" aria-label="Previous series" hidden>
+        <img class="ghost-cover" alt="" hidden>
+        <span class="ghost-text">
+          <span class="peek-name"></span>
+          <span class="ghost-badges">
+            <span class="peek-badge switch-source" hidden></span>
+            <span class="peek-badge switch-pos" hidden></span>
+          </span>
+        </span>
+      </button>
+      <button type="button" class="wheel-ghost wheel-next" aria-label="Next series" hidden>
+        <img class="ghost-cover" alt="" hidden>
+        <span class="ghost-text">
+          <span class="peek-name"></span>
+          <span class="ghost-badges">
+            <span class="peek-badge switch-source" hidden></span>
+            <span class="peek-badge switch-pos" hidden></span>
+          </span>
+        </span>
+      </button>
+      <button class="switcher-btn" type="button" title="Track under a different series" aria-label="Switch series">⇄</button>
+      <div hidden>
+        <span class="wheel-candidate" data-to="" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-pos-label="{{.PositionLabel}}" data-desc="Currently tracked." data-cover="{{or .NextCoverURL .CoverURL}}"></span>
+        {{range .Alternatives}}
+        <span class="wheel-candidate" data-to="{{.Name}}" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-pos-label="{{.PositionLabel}}" data-desc="{{.Description}}" data-cover="{{.CoverURL}}"></span>
+        {{end}}
+        {{/* The wheel's button sits outside this form, so name it directly; only
+             one row is ever spun at a time. */}}
+        <form hx-post="/series/switch" hx-disabled-elt=".wheel-ok" class="wheel-form">
+          <input type="hidden" name="name" value="{{$tracked}}">
+          <input type="hidden" name="to" value="">
+        </form>
+      </div>
+      {{end}}
+    </div>
+  </li>
+  {{end}}
+</ul>
+{{end}}
+
+{{/* The card's footprint while a recommendation is in flight. Static: the
+     accessibility floor caps motion at sub-200ms micro-interactions. */}}
+{{define "waitingCard"}}
+  <p class="lede">Looking through your list.</p>
+  <article class="rec rec--waiting">
+    <span class="ribbon"></span>
+    <div class="cover cover--blank"></div>
+    <div class="rec-body">
+      <span class="bone bone--eyebrow"></span>
+      <span class="bone bone--title"></span>
+      <span class="bone bone--author"></span>
+    </div>
+  </article>
+{{end}}
+
+{{/* A refusal, swapped into #flash on its own. The next successful render
+     leaves that slot empty again, so it clears itself. */}}
+{{define "flash"}}<p class="notice notice--error">{{.}}</p>{{end}}
