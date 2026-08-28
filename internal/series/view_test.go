@@ -542,3 +542,34 @@ func TestEachAlternativeCarriesItsOwnProspectiveCover(t *testing.T) {
 		t.Errorf("alternative cover = %q, want published's furthest (Book B)", got)
 	}
 }
+
+func TestAnAlternativeWithoutACoverFallsBackToTheRowsNotALowerVolumes(t *testing.T) {
+	// The furthest book in the alternative ordering has no cover. Showing a
+	// lower volume's cover would mislabel the preview; fall back to the row's.
+	a := library.Entry{Book: library.Book{
+		Title: "Book A", CoverURL: "https://covers.example/a.jpg",
+		Series:      &library.Series{Name: "Chrono", Position: library.At(2), Source: "hardcover"},
+		OtherSeries: []library.Series{{Name: "Published", Position: library.At(1), Source: "hardcover"}},
+	}, Status: library.StatusRead}
+	a.FinishedAt = day0
+	b := library.Entry{Book: library.Book{
+		Title:       "Book B",
+		Series:      &library.Series{Name: "Chrono", Position: library.At(1), Source: "hardcover"},
+		OtherSeries: []library.Series{{Name: "Published", Position: library.At(2), Source: "hardcover"}},
+	}, Status: library.StatusRead}
+	b.FinishedAt = day0
+	c := library.Entry{Book: library.Book{
+		Title: "Book C", CoverURL: "https://covers.example/c.jpg",
+		Series: &library.Series{Name: "Chrono", Position: library.At(3), Source: "hardcover"},
+	}, Status: library.StatusRead}
+	c.FinishedAt = day0
+
+	v := Compute(Input{Reads: []library.Entry{a, b, c}, SourceOrder: []string{"hardcover"}})
+	g := groupNamed(t, v, "Chrono")
+	if len(g.Alternatives) != 1 {
+		t.Fatalf("alternatives = %+v, want Published", g.Alternatives)
+	}
+	if got := g.Alternatives[0].CoverURL; got != "https://covers.example/c.jpg" {
+		t.Errorf("alternative cover = %q, want the row's fallback, not Book A's", got)
+	}
+}

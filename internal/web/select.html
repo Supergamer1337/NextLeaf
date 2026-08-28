@@ -533,8 +533,12 @@
           body.scrollTop = scroll;
           wireWheels();
           wireTheme();
+        }, function () {
+          form.submit(); // the POST never landed; the classic path retries it
         }).catch(function () {
-          form.submit(); // the classic path still works
+          // The decision was recorded but the morph failed; reload to show
+          // the truth without posting it a second time.
+          window.location.reload();
         });
       }
 

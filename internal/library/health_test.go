@@ -12,6 +12,7 @@ type flakyListSource struct {
 	name    string
 	entries []Entry
 	broken  bool
+	failure error // the error served while broken; nil means a default
 }
 
 func (s *flakyListSource) Name() string { return s.name }
@@ -22,6 +23,9 @@ func (s *flakyListSource) RecentReads(_ context.Context, _ int) ([]Entry, error)
 func (s *flakyListSource) ToRead(_ context.Context) ([]Entry, error)             { return s.list() }
 func (s *flakyListSource) list() ([]Entry, error) {
 	if s.broken {
+		if s.failure != nil {
+			return nil, s.failure
+		}
 		return nil, errors.New("connection refused")
 	}
 	return s.entries, nil
@@ -163,6 +167,52 @@ func TestStalenessIsTrackedPerQueryNotPerSource(t *testing.T) {
 	}
 	if h := c.Health(); h.Stale {
 		t.Errorf("Health = %+v after every query recovered, want fresh", h)
+	}
+}
+
+func TestHealthKeepsTheErrorOfTheQueryItReports(t *testing.T) {
+	ctx := context.Background()
+	src := &flakyListSource{name: "gm", entries: []Entry{{Book: Book{Title: "X"}}}}
+	now := time.Now()
+	c := NewCached(src, time.Minute)
+	c.now = func() time.Time { return now }
+
+	if _, err := c.RecentReads(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ToRead(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reads fall over first, then the TBR fails for a different reason.
+	src.broken, src.failure = true, errors.New("reads down")
+	now = now.Add(2 * time.Minute)
+	if _, err := c.RecentReads(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	readsFailedAt := now
+	src.failure = errors.New("toRead down")
+	now = now.Add(time.Minute)
+	if _, err := c.ToRead(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// The TBR recovers; the reads are still stale, and Health dates the outage
+	// from them, so it must also carry their error rather than the TBR's.
+	src.broken = false
+	now = now.Add(2 * time.Minute)
+	if _, err := c.ToRead(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h := c.Health()
+	if !h.Stale {
+		t.Fatal("Health.Stale = false while the reads still serve fallback data")
+	}
+	if h.Err != "reads down" {
+		t.Errorf("Health.Err = %q, want the stale query's own error %q", h.Err, "reads down")
+	}
+	if !h.Since.Equal(readsFailedAt.Add(-2 * time.Minute)) {
+		t.Errorf("Health.Since = %v, want the reads' last clean fetch", h.Since)
 	}
 }
 

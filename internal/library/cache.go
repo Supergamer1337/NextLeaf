@@ -37,17 +37,18 @@ type Cached struct {
 	healthMu sync.Mutex
 	// Staleness is per query: one query recovering must not mask another
 	// still serving fallback data.
-	stale   map[string]bool
-	success map[string]time.Time
-	lastErr error
+	stale    map[string]bool
+	success  map[string]time.Time
+	staleErr map[string]error
 }
 
 // NewCached returns a Source that caches src's results for ttl.
 func NewCached(src Source, ttl time.Duration) *Cached {
 	return &Cached{
 		src: src, ttl: ttl, now: time.Now,
-		stale:   make(map[string]bool),
-		success: make(map[string]time.Time),
+		stale:    make(map[string]bool),
+		success:  make(map[string]time.Time),
+		staleErr: make(map[string]error),
 	}
 }
 
@@ -75,10 +76,13 @@ func (c *Cached) Health() Health {
 		at := c.success[query]
 		if h.Since.IsZero() || at.Before(h.Since) {
 			h.Since = at
+			// The error travels with the query whose age sets Since, so the
+			// report never dates one outage while describing another.
+			h.Err = ""
+			if err := c.staleErr[query]; err != nil {
+				h.Err = err.Error()
+			}
 		}
-	}
-	if h.Stale && c.lastErr != nil {
-		h.Err = c.lastErr.Error()
 	}
 	return h
 }
@@ -87,13 +91,14 @@ func (c *Cached) Health() Health {
 func (c *Cached) noteSuccess(query string) {
 	c.healthMu.Lock()
 	c.success[query], c.stale[query] = c.now(), false
+	delete(c.staleErr, query)
 	c.healthMu.Unlock()
 }
 
 // noteFallback records that err forced one query onto older data.
 func (c *Cached) noteFallback(query string, err error) {
 	c.healthMu.Lock()
-	c.lastErr, c.stale[query] = err, true
+	c.staleErr[query], c.stale[query] = err, true
 	c.healthMu.Unlock()
 }
 

@@ -607,10 +607,9 @@ func finish(g *Group, books []*book, prefs picker.Prefs) {
 			for _, bm := range b.memberships {
 				if bm.Source == m.Source && key(bm.Name) == key(m.Name) && bm.Position != nil {
 					if at == nil || *bm.Position > *at {
-						at = bm.Position
-						if b.cover != "" {
-							alt.CoverURL = b.cover
-						}
+						// The cover mirrors the furthest book exactly, even to
+						// empty: a lower volume's face would mislabel the preview.
+						at, alt.CoverURL = bm.Position, b.cover
 					}
 				}
 			}
