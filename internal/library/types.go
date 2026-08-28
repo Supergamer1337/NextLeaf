@@ -85,13 +85,19 @@ type Book struct {
 	Nonfiction  *bool     // nil if the source can't classify fiction vs nonfiction
 	CoverURL    string
 	URL         string
+	// ISBNs are the neutral identifiers this book is known by, when the
+	// source can supply them. They are what lets two sources' copies of one
+	// book be joined without guessing from titles.
+	ISBNs []string
 }
 
 // SourceRef names a backend holding an entry and links to the book's page
-// there. URL is empty when the source has no page for it.
+// there. URL is empty when the source has no page for it, and ID is the
+// backend's own identifier for the book, "" when it has none.
 type SourceRef struct {
 	Name string
 	URL  string
+	ID   string
 }
 
 // Entry is a book together with the user's relationship to it: where it sits in

@@ -47,3 +47,21 @@ func TestPublishedDateBecomesAReleaseDate(t *testing.T) {
 		t.Errorf("ReleaseDate = %v, want %s", got, want)
 	}
 }
+
+func TestBooksCarryTheirISBNs(t *testing.T) {
+	const withISBN = `[{"id":2,"readStatus":"READ","dateFinished":"2025-06-01T00:00:00Z",
+	  "metadata":{"title":"Hyperion","isbn13":"9780553283686","isbn10":"0553283685"}}]`
+	f := &fake{books: acceptLatest(withISBN)}
+	c := New(f.server(t).URL, "user", "pass")
+
+	reads, err := c.RecentReads(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("RecentReads: %v", err)
+	}
+	// ISBNs are the neutral identifiers that join this book to another
+	// source's copy without guessing from the title.
+	got := reads[0].Book.ISBNs
+	if len(got) != 2 || got[0] != "9780553283686" {
+		t.Errorf("ISBNs = %v, want the isbn13 first then isbn10", got)
+	}
+}

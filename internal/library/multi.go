@@ -186,6 +186,11 @@ func mergeSeries(base Book, dup Book) (*Series, []Series) {
 	return &chosen, others
 }
 
+// BookKey identifies a book across sources: normalized title plus first
+// author. It is the stable key statements are anchored to, and the fallback
+// join for books without a shared identifier. Empty means "never merge".
+func BookKey(e Entry) string { return dedupKey(e) }
+
 // dedupKey identifies a book for deduplication; empty means "never merge".
 func dedupKey(e Entry) string {
 	title := normalize(e.Book.Title)
@@ -261,6 +266,12 @@ func mergeEntry(base, dup Entry) Entry {
 	}
 	if b.URL == "" {
 		b.URL = d.URL
+	}
+	// ISBNs union: each source may know different editions' numbers.
+	for _, isbn := range d.ISBNs {
+		if !slices.Contains(b.ISBNs, isbn) {
+			b.ISBNs = append(append([]string(nil), b.ISBNs...), isbn)
+		}
 	}
 	return base
 }

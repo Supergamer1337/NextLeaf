@@ -287,7 +287,7 @@ func TestMapEntryStampsProvenance(t *testing.T) {
 	c := New("http://gm.local", "u", "p")
 	e := c.mapEntry(book{ID: 7, Title: "Bare Book"})
 
-	want := library.SourceRef{Name: "grimmory", URL: "http://gm.local/book/7"}
+	want := library.SourceRef{Name: "grimmory", URL: "http://gm.local/book/7", ID: "7"}
 	if len(e.Sources) != 1 || e.Sources[0] != want {
 		t.Errorf("Sources = %v, want [%v]", e.Sources, want)
 	}

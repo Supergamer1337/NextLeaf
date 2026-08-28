@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -131,7 +132,7 @@ func (c *Client) NextInSeries(ctx context.Context, q library.SeriesQuery) (libra
 			}
 			return library.Entry{
 				Book:    book,
-				Sources: []library.SourceRef{{Name: "hardcover", URL: book.URL}},
+				Sources: []library.SourceRef{{Name: "hardcover", URL: book.URL, ID: strconv.Itoa(chosen.ID)}},
 			}, true, nil
 		}
 
@@ -263,6 +264,7 @@ type userBook struct {
 // bookData mirrors the book fields we request (see bookFields). It is shared by
 // the user_books query and the series lookup so both map through mapBook.
 type bookData struct {
+	ID          int    `json:"id"`
 	Title       string `json:"title"`
 	Subtitle    string `json:"subtitle"`
 	Description string `json:"description"`
@@ -300,6 +302,7 @@ type bookData struct {
 
 // bookFields is the GraphQL selection set for a book, shared across queries.
 const bookFields = `
+      id
       title
       subtitle
       description
@@ -376,7 +379,7 @@ func mapEntry(ub userBook) library.Entry {
 		Status:     library.Status(ub.StatusID),
 		DateAdded:  parseDate(ub.DateAdded),
 		FinishedAt: parseDate(ub.LastReadDate),
-		Sources:    []library.SourceRef{{Name: "hardcover", URL: book.URL}},
+		Sources:    []library.SourceRef{{Name: "hardcover", URL: book.URL, ID: strconv.Itoa(ub.Book.ID)}},
 		Available:  ub.Owned,
 	}
 	if ub.Rating != nil {

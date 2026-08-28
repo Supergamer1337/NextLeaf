@@ -21,6 +21,7 @@ const readsResponse = `{"data":{"user_books":[
     "date_added": "2022-01-15",
     "last_read_date": "2024-03-20",
     "book": {
+      "id": 101,
       "title": "The Fifth Season",
       "subtitle": "",
       "description": "A world ends in ash.",
@@ -101,7 +102,7 @@ func TestRecentReadsMapsData(t *testing.T) {
 	if got := e.FinishedAt.Format("2006-01-02"); got != "2024-03-20" {
 		t.Errorf("FinishedAt = %q, want 2024-03-20", got)
 	}
-	wantRef := library.SourceRef{Name: "hardcover", URL: "https://hardcover.app/books/the-fifth-season"}
+	wantRef := library.SourceRef{Name: "hardcover", URL: "https://hardcover.app/books/the-fifth-season", ID: "101"}
 	if len(e.Sources) != 1 || e.Sources[0] != wantRef {
 		t.Errorf("Sources = %v, want [%v]", e.Sources, wantRef)
 	}
@@ -272,6 +273,7 @@ func TestToReadOrdersByDateAddedNoLimit(t *testing.T) {
 const nextInSeriesResponse = `{"data":{"book_series":[
   {
     "book": {
+      "id": 202,
       "title": "The Obelisk Gate", "editions": [{"id": 1}],
       "subtitle": "",
       "slug": "the-obelisk-gate",
@@ -317,7 +319,7 @@ func TestNextInSeriesReturnsNextBook(t *testing.T) {
 	if book.Series == nil || book.Series.Position == nil || *book.Series.Position != 2 {
 		t.Errorf("Series = %+v, want position 2", book.Series)
 	}
-	wantRef := library.SourceRef{Name: "hardcover", URL: "https://hardcover.app/books/the-obelisk-gate"}
+	wantRef := library.SourceRef{Name: "hardcover", URL: "https://hardcover.app/books/the-obelisk-gate", ID: "202"}
 	if len(entry.Sources) != 1 || entry.Sources[0] != wantRef {
 		t.Errorf("Sources = %v, want [%v] (the resolver knows where it looked)", entry.Sources, wantRef)
 	}

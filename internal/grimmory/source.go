@@ -132,7 +132,7 @@ func (c *Client) mapEntry(b book) library.Entry {
 		Rating:     b.PersonalRating / 2, // Grimmory rates 0-10, the neutral model 0-5
 		DateAdded:  parseInstant(b.AddedOn),
 		FinishedAt: parseInstant(b.DateFinished),
-		Sources:    []library.SourceRef{{Name: c.Name(), URL: page}},
+		Sources:    []library.SourceRef{{Name: c.Name(), URL: page, ID: strconv.Itoa(b.ID)}},
 		Available:  true, // a Grimmory library holds the files themselves
 	}
 	return e
@@ -155,6 +155,11 @@ func (c *Client) mapBook(b book) library.Book {
 	out.ReleaseYear = parseYear(m.PublishedDate)
 	out.ReleaseDate = parseDay(m.PublishedDate)
 	out.PageCount = m.PageCount
+	for _, isbn := range []string{m.ISBN13, m.ISBN10} {
+		if isbn != "" {
+			out.ISBNs = append(out.ISBNs, isbn)
+		}
+	}
 	out.URL = m.ExternalURL
 	out.CoverURL = c.coverURL(b.ID, m)
 	if m.SeriesName != "" {
