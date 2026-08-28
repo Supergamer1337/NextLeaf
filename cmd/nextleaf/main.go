@@ -55,6 +55,13 @@ func main() {
 			Prefs:    picker.Prefs{IncludeNovellas: includeNovellas()},
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
+		// ReadTimeout bounds the body read too, so a slow client cannot hold
+		// a connection open through a decision POST.
+		ReadTimeout: 30 * time.Second,
+		// WriteTimeout must outlast the 30s the recommendation flow may spend
+		// on its sources, or slow-but-successful page loads get cut off.
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  2 * time.Minute,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

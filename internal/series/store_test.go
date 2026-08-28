@@ -2,7 +2,9 @@ package series
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -195,7 +197,7 @@ func TestNextBookIsRememberedForTheDrawer(t *testing.T) {
 	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if err := st.SetNext(ctx, "Mistborn", nextBook("alloy"), true, day0); err != nil {
+	if err := st.SetNext(ctx, "Mistborn", 3, nextBook("alloy"), true, day0); err != nil {
 		t.Fatalf("SetNext: %v", err)
 	}
 
@@ -221,7 +223,7 @@ func TestASeriesWithNoNextBookIsMarkedCaughtUp(t *testing.T) {
 	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if err := st.SetNext(ctx, "Mistborn", library.Entry{}, false, day0); err != nil {
+	if err := st.SetNext(ctx, "Mistborn", 3, library.Entry{}, false, day0); err != nil {
 		t.Fatalf("SetNext: %v", err)
 	}
 
@@ -244,7 +246,7 @@ func TestReadingTheRememberedNextBookClearsIt(t *testing.T) {
 	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if err := st.SetNext(ctx, "Mistborn", nextBook("alloy"), true, day0); err != nil {
+	if err := st.SetNext(ctx, "Mistborn", 3, nextBook("alloy"), true, day0); err != nil {
 		t.Fatalf("SetNext: %v", err)
 	}
 	// Reading book 4 makes the remembered "next" the book behind you; the
@@ -266,11 +268,14 @@ func TestANewReleaseTakesASeriesBackOutOfFinished(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
 
-	if err := st.SetNext(ctx, "Mistborn", library.Entry{}, false, day0); err != nil {
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := st.SetNext(ctx, "Mistborn", 3, library.Entry{}, false, day0); err != nil {
 		t.Fatalf("SetNext: %v", err)
 	}
 	// A later resync finds a book that did not exist before.
-	if err := st.SetNext(ctx, "Mistborn", nextBook("lost-metal"), true, day2); err != nil {
+	if err := st.SetNext(ctx, "Mistborn", 3, nextBook("lost-metal"), true, day2); err != nil {
 		t.Fatalf("SetNext: %v", err)
 	}
 
@@ -280,5 +285,83 @@ func TestANewReleaseTakesASeriesBackOutOfFinished(t *testing.T) {
 	}
 	if tracked.CaughtUp {
 		t.Error("CaughtUp = true; a new release should take the series back out of Finished")
+	}
+}
+
+func TestAStaleLookupResultDoesNotOverwriteNewerProgress(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	// The reader finishes book 4 while a lookup made at position 3 is in
+	// flight; the lookup's answer describes a book now behind them.
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 4)}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := st.SetNext(ctx, "Mistborn", 3, nextBook("alloy"), true, day0); err != nil {
+		t.Fatalf("SetNext: %v", err)
+	}
+
+	tracked, _, err := st.Get(ctx, "Mistborn")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if tracked.NextTitle == "alloy" {
+		t.Error("a lookup made at an outdated position overwrote newer progress")
+	}
+}
+
+func TestAStaleCaughtUpResultDoesNotFileTheSeriesUnderFinished(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 3)}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{readEntry("Mistborn", 4)}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	// "Nothing after book 3" says nothing about what follows book 4.
+	if err := st.SetNext(ctx, "Mistborn", 3, library.Entry{}, false, day0); err != nil {
+		t.Fatalf("SetNext: %v", err)
+	}
+
+	tracked, _, err := st.Get(ctx, "Mistborn")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if tracked.CaughtUp {
+		t.Error("a stale caught-up answer filed the series under Finished")
+	}
+}
+
+func TestConcurrentPinsLeaveExactlyOneSeriesPinned(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			_ = st.Pin(ctx, fmt.Sprintf("Series %d", n), day0, 2)
+		}(i)
+	}
+	wg.Wait()
+
+	tracked, err := st.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	pinned := 0
+	for _, tr := range tracked {
+		if tr.Decision == Pinned {
+			pinned++
+		}
+	}
+	if pinned != 1 {
+		t.Errorf("%d series pinned after concurrent pins, want exactly 1", pinned)
 	}
 }

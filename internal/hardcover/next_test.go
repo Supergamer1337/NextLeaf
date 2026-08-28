@@ -3,6 +3,7 @@ package hardcover
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -345,5 +346,114 @@ func TestNextInSeriesSkipsAnUnnamedAnnouncement(t *testing.T) {
 	}
 	if entry.Book.Title != "A Real Book" {
 		t.Errorf("Title = %q, want the announcement skipped", entry.Book.Title)
+	}
+}
+
+// pagedAPI serves series rows in pages, honouring the $after cursor the way
+// the real API does, so pagination behaviour is actually exercised.
+type pagedAPI struct {
+	rows  []string // JSON row objects, ascending by position
+	after []float64
+}
+
+func (p *pagedAPI) server(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Variables struct {
+				After float64 `json:"after"`
+				Limit int     `json:"limit"`
+			} `json:"variables"`
+		}
+		_ = json.Unmarshal(body, &req)
+		p.after = append(p.after, req.Variables.After)
+
+		var out []string
+		for _, row := range p.rows {
+			var probe struct {
+				Position float64 `json:"position"`
+			}
+			_ = json.Unmarshal([]byte(row), &probe)
+			if probe.Position > req.Variables.After {
+				out = append(out, row)
+			}
+			if len(out) == req.Variables.Limit {
+				break
+			}
+		}
+		_, _ = io.WriteString(w, `{"data":{"book_series":[`+strings.Join(out, ",")+`]}}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func junkRow(pos float64) string {
+	return fmt.Sprintf(`{"position": %g, "book": {"title": "Translation %g", "release_year": 2000,
+	  "book_series": [{"position": %g, "featured": true, "series": {"name": "Paged"}}]}}`, pos, pos, pos)
+}
+
+func readableRow(pos float64, title string) string {
+	return fmt.Sprintf(`{"position": %g, "book": {"title": "%s", "release_year": 2000, "editions": [{"id": 1}],
+	  "book_series": [{"position": %g, "featured": true, "series": {"name": "Paged"}}]}}`, pos, title, pos)
+}
+
+func TestNextInSeriesPagesPastAWallOfUnreadableRows(t *testing.T) {
+	// A heavily translated series can fill the whole first page with rows the
+	// filters reject; the readable next book sits on the second page. Giving
+	// up at the page boundary would file a live series under Finished.
+	api := &pagedAPI{}
+	for i := 0; i < seriesLookahead; i++ {
+		api.rows = append(api.rows, junkRow(2+float64(i)/100))
+	}
+	api.rows = append(api.rows, readableRow(3, "The Real Next Book"))
+	srv := api.server(t)
+
+	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
+	q := library.SeriesQuery{Series: library.Series{Name: "Paged", Position: 1}, IncludeNovellas: true}
+	entry, found, err := c.NextInSeries(context.Background(), q)
+	if err != nil || !found {
+		t.Fatalf("NextInSeries = (_, %v, %v), want the book on the second page", found, err)
+	}
+	if entry.Book.Title != "The Real Next Book" {
+		t.Errorf("Title = %q, want The Real Next Book", entry.Book.Title)
+	}
+	if len(api.after) < 2 {
+		t.Errorf("made %d requests, want a second page to be fetched", len(api.after))
+	}
+}
+
+func TestNextInSeriesReportsAnErrorAtThePageBoundNotACaughtUpSeries(t *testing.T) {
+	// A pathological series that never runs out of unreadable rows must end in
+	// an error the refresher retries later — found=false here would silently
+	// hide a series that may well have a continuation.
+	api := &pagedAPI{}
+	for i := 0; i < seriesLookahead*(maxSeriesPages+2); i++ {
+		api.rows = append(api.rows, junkRow(2+float64(i)))
+	}
+	srv := api.server(t)
+
+	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
+	q := library.SeriesQuery{Series: library.Series{Name: "Paged", Position: 1}, IncludeNovellas: true}
+	_, found, err := c.NextInSeries(context.Background(), q)
+	if err == nil {
+		t.Fatalf("err = nil (found=%v), want an error once the page bound is hit", found)
+	}
+}
+
+func TestNextInSeriesStillReportsExhaustionAsNoContinuation(t *testing.T) {
+	// A short page means the source truly has nothing more: that is the one
+	// honest found=false.
+	api := &pagedAPI{rows: []string{junkRow(2)}}
+	srv := api.server(t)
+
+	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
+	q := library.SeriesQuery{Series: library.Series{Name: "Paged", Position: 1}, IncludeNovellas: true}
+	_, found, err := c.NextInSeries(context.Background(), q)
+	if err != nil {
+		t.Fatalf("NextInSeries: %v", err)
+	}
+	if found {
+		t.Error("found = true for a series with nothing readable left")
 	}
 }

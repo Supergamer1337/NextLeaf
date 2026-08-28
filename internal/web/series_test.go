@@ -339,10 +339,10 @@ func caughtUpStore(t *testing.T) *series.Store {
 		Series:   &library.Series{Name: "Mistborn", Position: 4},
 		CoverURL: "https://covers.example/alloy.jpg",
 	}}
-	if err := st.SetNext(ctx, "Mistborn", next, true, time.Now()); err != nil {
+	if err := st.SetNext(ctx, "Mistborn", 3, next, true, time.Now()); err != nil {
 		t.Fatalf("SetNext: %v", err)
 	}
-	if err := st.SetNext(ctx, "Stormlight", library.Entry{}, false, time.Now()); err != nil {
+	if err := st.SetNext(ctx, "Stormlight", 4, library.Entry{}, false, time.Now()); err != nil {
 		t.Fatalf("SetNext: %v", err)
 	}
 	return st
@@ -425,5 +425,55 @@ func TestADroppedRowDoesNotAlsoOfferToPickIt(t *testing.T) {
 	}
 	if !strings.Contains(dropped, "Undrop") {
 		t.Errorf("a dropped series offers no way back:\n%s", dropped)
+	}
+}
+
+func TestACrossSiteDecisionPostIsRefused(t *testing.T) {
+	st := caughtUpStore(t)
+	h := ready(t, stubSource{}, st)
+
+	// NextLeaf has no login, so a page anywhere on the web could otherwise
+	// drop a series through the reader's own browser.
+	req := httptest.NewRequest(http.MethodPost, "/series/drop",
+		strings.NewReader(url.Values{"name": {"Mistborn"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-site POST: status = %d, want 403", rec.Code)
+	}
+	tracked, _, err := st.Get(context.Background(), "Mistborn")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if tracked.Decision == series.Dropped {
+		t.Error("a cross-site request recorded a decision")
+	}
+}
+
+func TestASameOriginDecisionPostStillWorks(t *testing.T) {
+	h := ready(t, stubSource{}, caughtUpStore(t))
+
+	req := httptest.NewRequest(http.MethodPost, "/series/drop",
+		strings.NewReader(url.Values{"name": {"Mistborn"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("same-origin POST: status = %d, want 303", rec.Code)
+	}
+}
+
+func TestADecisionPostWithoutFetchMetadataStillWorks(t *testing.T) {
+	// curl and older browsers send no Sec-Fetch-Site; absence is not evidence
+	// of a cross-site request.
+	h := ready(t, stubSource{}, caughtUpStore(t))
+
+	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
+		t.Errorf("plain POST: status = %d, want 303", rec.Code)
 	}
 }

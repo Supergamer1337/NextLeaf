@@ -57,10 +57,15 @@ func (c *Client) ReadHistory(ctx context.Context) ([]library.Entry, error) {
 }
 
 const (
-	// seriesLookahead is how many later rows to consider at once. A single
+	// seriesLookahead is how many later rows to fetch per page. A single
 	// position can hold a dozen rows — every translation of the book, plus
 	// bundles and split editions — so this is generous.
 	seriesLookahead = 30
+
+	// maxSeriesPages bounds the pagination. Hitting it is an error, never
+	// "no continuation": reporting a truncated read as a finished series
+	// would silently hide a series that may well have a next book.
+	maxSeriesPages = 10
 
 	// readingLanguage is the edition language a next book must exist in.
 	// Hardcover files every translation at the same series position with the
@@ -82,6 +87,62 @@ func (c *Client) NextInSeries(ctx context.Context, q library.SeriesQuery) (libra
 		return library.Entry{}, false, nil
 	}
 
+	// Filtering happens after the fetch, so a page can be consumed entirely by
+	// translations and split editions. Page until the source runs dry rather
+	// than mistaking a truncated read for the end of the series.
+	after := s.Position
+	for page := 0; page < maxSeriesPages; page++ {
+		rows, err := c.seriesPage(ctx, s.Name, after)
+		if err != nil {
+			return library.Entry{}, false, err
+		}
+		groups := byPosition(rows)
+		full := len(rows) == seriesLookahead
+
+		// On a full page the last position's rows may continue onto the next
+		// page, so its group is deferred — unless it is the only one, where
+		// deferring would never advance the cursor.
+		if full && len(groups) > 1 {
+			groups = groups[:len(groups)-1]
+		}
+
+		for _, group := range groups {
+			// Hardcover files a book split across two volumes at .1 and .2 of
+			// the position it already occupies, so those are halves of a book
+			// the reader has finished rather than anything new to read.
+			if isSplitEdition(group.position) {
+				continue
+			}
+			if !q.IncludeNovellas && isNovella(group.position) {
+				continue
+			}
+			chosen, ok := best(group.rows)
+			if !ok {
+				// Nothing at this position exists in the reading language, so
+				// there is no honest answer here; a later one may have it.
+				continue
+			}
+			book := mapBook(chosen)
+			if !c.released(book) {
+				continue
+			}
+			return library.Entry{
+				Book:    book,
+				Sources: []library.SourceRef{{Name: "hardcover", URL: book.URL}},
+			}, true, nil
+		}
+
+		if !full {
+			return library.Entry{}, false, nil
+		}
+		after = groups[len(groups)-1].position
+	}
+	return library.Entry{}, false, fmt.Errorf(
+		"hardcover: series %q: no readable book within %d pages", s.Name, maxSeriesPages)
+}
+
+// seriesPage fetches one page of a series' rows past the given position.
+func (c *Client) seriesPage(ctx context.Context, name string, after float64) ([]seriesRow, error) {
 	query := fmt.Sprintf(`
 query NextInSeries($name: String!, $after: float8!, $limit: Int!) {
   book_series(
@@ -97,37 +158,11 @@ query NextInSeries($name: String!, $after: float8!, $limit: Int!) {
 	var data struct {
 		BookSeries []seriesRow `json:"book_series"`
 	}
-	vars := map[string]any{"name": s.Name, "after": s.Position, "limit": seriesLookahead}
+	vars := map[string]any{"name": name, "after": after, "limit": seriesLookahead}
 	if err := c.execute(ctx, query, vars, &data); err != nil {
-		return library.Entry{}, false, err
+		return nil, err
 	}
-
-	for _, group := range byPosition(data.BookSeries) {
-		// Hardcover files a book split across two volumes at .1 and .2 of the
-		// position it already occupies, so those are halves of a book the
-		// reader has finished rather than anything new to read.
-		if isSplitEdition(group.position) {
-			continue
-		}
-		if !q.IncludeNovellas && isNovella(group.position) {
-			continue
-		}
-		chosen, ok := best(group.rows)
-		if !ok {
-			// Nothing at this position exists in the reading language, so
-			// there is no honest answer here; the next position may have one.
-			continue
-		}
-		book := mapBook(chosen)
-		if !c.released(book) {
-			continue
-		}
-		return library.Entry{
-			Book:    book,
-			Sources: []library.SourceRef{{Name: "hardcover", URL: book.URL}},
-		}, true, nil
-	}
-	return library.Entry{}, false, nil
+	return data.BookSeries, nil
 }
 
 // seriesRow is one book at one position within a series.

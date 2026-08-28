@@ -77,7 +77,7 @@ func (r *Refresher) Run(ctx context.Context) {
 			log.Printf("series refresh: looking up %q: %v", t.Name, err)
 			continue
 		}
-		if err := r.store.SetNext(ctx, t.Name, entry, found, time.Now()); err != nil {
+		if err := r.store.SetNext(ctx, t.Name, t.Position, entry, found, time.Now()); err != nil {
 			log.Printf("series refresh: recording %q: %v", t.Name, err)
 		}
 	}

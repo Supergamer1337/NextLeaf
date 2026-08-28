@@ -157,10 +157,15 @@ func observe(ctx context.Context, tx *sql.Tx, s library.Series) error {
 	return nil
 }
 
-// SetNext records the book a lookup found after a series' current position, or
-// marks the series caught up when there is nothing left. A later lookup finding
-// a newly published book takes the series back out of "caught up".
-func (s *Store) SetNext(ctx context.Context, name string, next library.Entry, found bool, at time.Time) error {
+// SetNext records the book a lookup found after queried, the series position
+// the lookup was made at, or marks the series caught up when there is nothing
+// left. A later lookup finding a newly published book takes the series back out
+// of "caught up".
+//
+// The result is discarded when the stored position has moved past queried: the
+// reader finished a book while the lookup was in flight, so its answer — next
+// book and caught-up alike — describes a question that is no longer being asked.
+func (s *Store) SetNext(ctx context.Context, name string, queried float64, next library.Entry, found bool, at time.Time) error {
 	var title, cover, url string
 	var pos float64
 	if found {
@@ -170,16 +175,15 @@ func (s *Store) SetNext(ctx context.Context, name string, next library.Entry, fo
 		}
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO tracked_series (name, display_name, caught_up, next_title, next_cover_url, next_url, next_position, checked_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(name) DO UPDATE SET
-			caught_up = excluded.caught_up,
-			next_title = excluded.next_title,
-			next_cover_url = excluded.next_cover_url,
-			next_url = excluded.next_url,
-			next_position = excluded.next_position,
-			checked_at = excluded.checked_at`,
-		key(name), name, boolToInt(!found), title, cover, url, pos, at.Unix())
+		UPDATE tracked_series SET
+			caught_up = ?,
+			next_title = ?,
+			next_cover_url = ?,
+			next_url = ?,
+			next_position = ?,
+			checked_at = ?
+		WHERE name = ? AND position = ?`,
+		boolToInt(!found), title, cover, url, pos, at.Unix(), key(name), queried)
 	if err != nil {
 		return fmt.Errorf("recording the next book of series %q: %w", name, err)
 	}
@@ -252,15 +256,26 @@ func (s *Store) Drop(ctx context.Context, name string, at time.Time) error {
 }
 
 // Pin makes the series the next thing to read. position is the book the pin
-// refers to; reading it clears the pin.
+// refers to; reading it clears the pin. The old pin's removal and the new pin
+// commit together, so two racing pins can never leave both series pinned, nor
+// a failure leave neither.
 func (s *Store) Pin(ctx context.Context, name string, at time.Time, position float64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	// Only one series is pinned at a time, so an existing pin steps aside.
-	if _, err := s.db.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE tracked_series SET decision = 'active', decided_at = 0, pinned_position = 0
 		 WHERE decision = 'pinned'`); err != nil {
 		return err
 	}
-	return s.decide(ctx, name, Pinned, at, func(q *decision) { q.pinnedPosition = position })
+	if err := decideIn(ctx, tx, name, Pinned, at, decision{pinnedPosition: position}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Clear returns the series to Active, undoing a park, drop or pin.
@@ -274,14 +289,25 @@ type decision struct {
 	pinnedPosition float64
 }
 
-// decide writes a standing decision, tracking the series first if a book of it
-// has never been seen — a series can be dropped before it is ever read.
+// decide writes a standing decision outside any wider transaction.
 func (s *Store) decide(ctx context.Context, name string, d Decision, at time.Time, with func(*decision)) error {
 	var q decision
 	if with != nil {
 		with(&q)
 	}
-	_, err := s.db.ExecContext(ctx, `
+	return decideIn(ctx, s.db, name, d, at, q)
+}
+
+// execer is the slice of database/sql shared by *sql.DB and *sql.Tx.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// decideIn writes a standing decision on db, tracking the series first if a
+// book of it has never been seen — a series can be dropped before it is ever
+// read.
+func decideIn(ctx context.Context, db execer, name string, d Decision, at time.Time, q decision) error {
+	_, err := db.ExecContext(ctx, `
 		INSERT INTO tracked_series (name, display_name, decision, decided_at, parked_after, pinned_position)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET

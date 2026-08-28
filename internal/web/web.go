@@ -134,6 +134,15 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// NextLeaf has no login, so any page on the web could otherwise post a
+	// decision through the reader's own browser. Browsers stamp cross-site
+	// requests with Sec-Fetch-Site; its absence (curl, old browsers) is not
+	// evidence of one.
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "cross-site", "same-site":
+		http.Error(w, "cross-origin requests are refused", http.StatusForbidden)
+		return
+	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	if name == "" {
 		http.Error(w, "a series name is required", http.StatusBadRequest)
