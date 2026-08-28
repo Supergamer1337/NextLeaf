@@ -266,17 +266,26 @@
       from { opacity: 0; transform: translateY(0.25rem); }
       to   { opacity: 1; transform: none; }
     }
-    .wheel-peek {
-      display: flex; align-items: baseline; gap: 0.4rem; width: calc(100% - 2.4rem); text-align: left;
-      font: inherit; font-size: 0.78rem; font-weight: 600; color: var(--ink);
-      background: none; border: none; padding: 0.1rem 0; cursor: pointer;
-      opacity: 0.35; transform: scale(0.9); transform-origin: left center;
-      overflow: hidden;
-      transition: opacity 0.15s ease, transform 0.15s ease;
+    .wheel-ghost {
+      display: none; position: absolute; left: 0; right: 0; z-index: 5;
+      align-items: center; gap: 0.6rem; text-align: left;
+      font: inherit; color: var(--ink); cursor: pointer;
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      padding: 0.45rem 0.55rem;
+      opacity: 0.55; filter: brightness(0.82); transform: scale(0.92);
+      transition: opacity 0.15s ease, transform 0.15s ease, filter 0.15s ease;
     }
-    .wheel-peek:hover { opacity: 0.8; transform: scale(0.96); }
-    .peek-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .peek-badge { flex: none; }
+    .spinning .wheel-ghost { display: flex; }
+    .wheel-ghost:hover { opacity: 0.85; filter: brightness(0.95); transform: scale(0.96); }
+    .wheel-prev { bottom: calc(100% + 0.4rem); }
+    .wheel-next { top: calc(100% + 0.4rem); }
+    .ghost-cover { width: 1.8rem; height: 2.7rem; object-fit: cover; border-radius: 3px; flex: none; }
+    .ghost-text { display: grid; gap: 0.15rem; min-width: 0; }
+    .peek-name {
+      font-size: 0.8rem; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .ghost-badges { display: flex; gap: 0.35rem; }
     .wheel-item { display: grid; gap: 0.15rem; min-height: 3rem; align-content: center; width: calc(100% - 2.4rem); }
     .wheel-item.roll-up   { animation: roll-up 0.16s ease-out; }
     .wheel-item.roll-down { animation: roll-down 0.16s ease-out; }
@@ -475,17 +484,23 @@
         var item = face.querySelector(".wheel-item");
         var i = 0;
 
-        var prevPeek = face.querySelector(".wheel-prev");
-        var nextPeek = face.querySelector(".wheel-next");
+        var prevGhost = row.querySelector(".wheel-prev");
+        var nextGhost = row.querySelector(".wheel-next");
+        var cover = row.querySelector("img.drawer-cover");
 
-        function fillPeek(peek, c) {
-          peek.querySelector(".peek-name").textContent = c.name;
-          var badges = peek.querySelectorAll(".peek-badge");
+        function fillGhost(ghost, c) {
+          ghost.querySelector(".peek-name").textContent = c.name;
+          var badges = ghost.querySelectorAll(".peek-badge");
           badges[0].textContent = c.source;
           badges[0].hidden = !c.source;
           badges[1].textContent = c.pos ? "book " + c.pos : "";
           badges[1].hidden = !c.pos;
-          peek.hidden = false;
+          // The candidates are identities for the same books, so the ghost
+          // wears the same cover as the card.
+          var img = ghost.querySelector(".ghost-cover");
+          if (cover) { img.src = cover.src; }
+          img.hidden = !cover;
+          ghost.hidden = false;
         }
 
         function render(dir) {
@@ -505,8 +520,8 @@
           // the wheel goes before turning it. With two candidates there is
           // only one other place to go, shown below.
           var n = cands.length;
-          fillPeek(prevPeek, cands[(i - 1 + n) % n].dataset);
-          fillPeek(nextPeek, cands[(i + 1) % n].dataset);
+          fillGhost(prevGhost, cands[(i - 1 + n) % n].dataset);
+          fillGhost(nextGhost, cands[(i + 1) % n].dataset);
 
           if (dir) {
             item.classList.remove("roll-up", "roll-down");
@@ -534,9 +549,10 @@
           row.classList.add("spinning");
           drawer.classList.add("dimmed");
           openRow = row;
+          row.scrollIntoView({ block: "center", behavior: "smooth" });
         });
-        prevPeek.addEventListener("click", function () { cycle(-1); });
-        nextPeek.addEventListener("click", function () { cycle(1); });
+        prevGhost.addEventListener("click", function () { cycle(-1); });
+        nextGhost.addEventListener("click", function () { cycle(1); });
         face.querySelector(".wheel-ok").addEventListener("click", confirm);
         face.querySelector(".wheel-cancel").addEventListener("click", close);
         row.addEventListener("keydown", function (e) {
@@ -649,9 +665,6 @@
         {{/* The wheel face the script swaps candidates through, in the row's
              own footprint. Hidden until the row is spun. */}}
         <div class="wheel-face">
-          <button type="button" class="wheel-peek wheel-prev" aria-label="Previous series" hidden>
-            <span class="peek-name"></span><span class="peek-badge switch-source" hidden></span><span class="peek-badge switch-pos" hidden></span>
-          </button>
           <div class="wheel-item">
             <span class="wheel-name drawer-name"></span>
             <span class="wheel-meta">
@@ -660,9 +673,6 @@
             </span>
             <span class="wheel-desc switch-desc" hidden></span>
           </div>
-          <button type="button" class="wheel-peek wheel-next" aria-label="Next series" hidden>
-            <span class="peek-name"></span><span class="peek-badge switch-source" hidden></span><span class="peek-badge switch-pos" hidden></span>
-          </button>
           <div class="wheel-controls">
             <button type="button" class="wheel-ok">Use this</button>
             <button type="button" class="wheel-cancel" aria-label="Cancel">✕</button>
@@ -671,6 +681,28 @@
         {{end}}
       </div>
       {{if .Alternatives}}
+      {{/* The ghost cards the selection moves between: rendered above and
+           below the lifted card, smaller and darkened for depth. */}}
+      <button type="button" class="wheel-ghost wheel-prev" aria-label="Previous series" hidden>
+        <img class="ghost-cover" alt="" hidden>
+        <span class="ghost-text">
+          <span class="peek-name"></span>
+          <span class="ghost-badges">
+            <span class="peek-badge switch-source" hidden></span>
+            <span class="peek-badge switch-pos" hidden></span>
+          </span>
+        </span>
+      </button>
+      <button type="button" class="wheel-ghost wheel-next" aria-label="Next series" hidden>
+        <img class="ghost-cover" alt="" hidden>
+        <span class="ghost-text">
+          <span class="peek-name"></span>
+          <span class="ghost-badges">
+            <span class="peek-badge switch-source" hidden></span>
+            <span class="peek-badge switch-pos" hidden></span>
+          </span>
+        </span>
+      </button>
       <button class="switcher-btn" type="button" title="Track under a different series" aria-label="Switch series">⇄</button>
       <div hidden>
         <span class="wheel-candidate" data-to="" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-desc="Currently tracked."></span>
