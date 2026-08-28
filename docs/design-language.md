@@ -5,8 +5,9 @@ feeling, built like modern software. It grew out of the original dark forest-gre
 selector page and keeps that heritage — the leaf, the green, the serif — while
 tightening everything around one quiet, book-ish gesture.
 
-The reference implementation is `internal/web/select.html`; every token below is
-defined in its `:root` block.
+The reference implementation is `internal/web/layout.html`, which holds the shell
+and the stylesheet, with `internal/web/view.html` for the card and drawer markup.
+Every token below is defined in layout.html's `:root` block.
 
 ## Principles
 
