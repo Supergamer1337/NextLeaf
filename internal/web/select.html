@@ -272,11 +272,15 @@
       font: inherit; color: var(--ink); cursor: pointer;
       background: var(--card); border: 1px solid var(--line); border-radius: 10px;
       padding: 0.45rem 0.55rem;
-      opacity: 0.55; filter: brightness(0.82); transform: scale(0.92);
-      transition: opacity 0.15s ease, transform 0.15s ease, filter 0.15s ease;
+      /* Depth without transparency: a see-through card over the dimmed
+         backdrop goes muddy, so the ghosts stay opaque and step back through
+         size and a slightly darker surface instead. */
+      filter: brightness(0.86); transform: scale(0.92);
+      box-shadow: 0 8px 20px -14px var(--shadow-c);
+      transition: transform 0.15s ease, filter 0.15s ease;
     }
     .spinning .wheel-ghost { display: flex; }
-    .wheel-ghost:hover { opacity: 0.85; filter: brightness(0.95); transform: scale(0.96); }
+    .wheel-ghost:hover { filter: brightness(1); transform: scale(0.96); }
     .wheel-prev { bottom: calc(100% + 0.4rem); }
     .wheel-next { top: calc(100% + 0.4rem); }
     .ghost-cover { width: 1.8rem; height: 2.7rem; object-fit: cover; border-radius: 3px; flex: none; }
