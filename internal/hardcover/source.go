@@ -302,7 +302,6 @@ const bookFields = `
       release_year
       release_date
       compilation
-      default_physical_edition { language { code3 } }
       pages
       cached_tags
       image { url }

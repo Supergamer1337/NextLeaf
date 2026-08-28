@@ -237,10 +237,8 @@ const translations = `{"data":{"book_series":[
   {"position": 3, "book": {"title": "Myrskynsilma", "release_year": 2025,
     "book_series": [{"position": 3, "featured": true, "series": {"name": "The Empyrean"}}]}},
   {"position": 3, "book": {"title": "The Empyrean Bundle", "editions": [{"id": 1}], "release_year": 2025, "compilation": true,
-    "default_physical_edition": {"language": {"code3": "eng"}},
     "book_series": [{"position": 3, "featured": true, "series": {"name": "The Empyrean"}}]}},
   {"position": 3, "book": {"title": "Onyx Storm", "editions": [{"id": 1}], "editions": [{"id": 1}], "release_year": 2025,
-    "default_physical_edition": {"language": {"code3": "eng"}},
     "book_series": [{"position": 3, "featured": true, "series": {"name": "The Empyrean"}}]}}
 ]}}`
 
@@ -263,10 +261,8 @@ func TestNextInSeriesPrefersTheEnglishEditionOverTranslations(t *testing.T) {
 // omnibusOnly offers a compilation and a single novel at the same position.
 const omnibusOnly = `{"data":{"book_series":[
   {"position": 2, "book": {"title": "Dune Messiah & Children of Dune", "editions": [{"id": 1}], "release_year": 1969, "compilation": true,
-    "default_physical_edition": {"language": {"code3": "eng"}},
     "book_series": [{"position": 2, "featured": true, "series": {"name": "Dune"}}]}},
   {"position": 2, "book": {"title": "Dune Messiah", "editions": [{"id": 1}], "editions": [{"id": 1}], "release_year": 1969,
-    "default_physical_edition": {"language": {"code3": "eng"}},
     "book_series": [{"position": 2, "featured": true, "series": {"name": "Dune"}}]}}
 ]}}`
 
