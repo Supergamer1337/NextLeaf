@@ -16,9 +16,14 @@ type Group struct {
 	Source    string   // backend asserting the display membership
 	Slug      string   // display membership's own identifier, if any
 	Completed bool     // the author has ended the series
-	Position  *float64 // furthest slot read in the display ordering; nil if unplaced
-	CoverURL  string   // cover of the furthest book read
-	Decision  Decision // standing decision after spent statements expire
+	Position  *float64 // furthest slot reached in the display ordering; nil if unplaced
+	// PositionReading marks Position as a book still in progress rather than
+	// one behind the reader.
+	PositionReading bool
+	// Length is how many books the series holds, 0 when no backend counts.
+	Length   int
+	CoverURL string   // cover of the furthest book read
+	Decision Decision // standing decision after spent statements expire
 
 	// Next describes the next book: from the shelf when NextFromShelf, else
 	// filled by the engine from a catalogue lookup.
@@ -61,6 +66,27 @@ type Alternative struct {
 	// CoverURL is the face the row would wear if tracked under this
 	// identity: the cover of the furthest book read in that ordering.
 	CoverURL string
+}
+
+// PositionLabel states where the reader stands in the series: a slot they have
+// finished, or the one they are in the middle of. Empty when unplaced.
+func (g Group) PositionLabel() string {
+	if g.Position == nil {
+		return ""
+	}
+	if g.PositionReading {
+		return "reading book " + formatPos(*g.Position)
+	}
+	return "read to book " + formatPos(*g.Position)
+}
+
+// PositionLabel states where the reader stands under this identity. Only
+// finished books place them here, so it never speaks of one in progress.
+func (a Alternative) PositionLabel() string {
+	if a.Position == nil {
+		return ""
+	}
+	return "read to book " + formatPos(*a.Position)
 }
 
 // View is the computed state of every series the reader has read into.
@@ -539,12 +565,15 @@ func finish(g *Group, books []*book, prefs picker.Prefs) {
 			continue
 		}
 		readSlots[pos] = true
-		if furthest == nil || pos > *furthest {
+		// A finished book owns a slot it shares with an in-progress one.
+		tie := furthest != nil && pos == *furthest && b.read && !furthestBook.read
+		if furthest == nil || pos > *furthest || tie {
 			v := pos
 			furthest, furthestBook = &v, b
 		}
 	}
 	g.Position = furthest
+	g.PositionReading = furthestBook != nil && !furthestBook.read
 	switch {
 	case furthestBook != nil && furthestBook.cover != "":
 		g.CoverURL = furthestBook.cover
