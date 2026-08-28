@@ -221,3 +221,34 @@ func TestDecidingOnAnUnknownSeriesIsRefused(t *testing.T) {
 		t.Errorf("err = %v, want ErrUnknownSeries", err)
 	}
 }
+
+// A decision's response is rendered on a zero lookup budget, so recording a
+// park or a drop never waits on the catalogue. Cached answers stay free, which
+// is what keeps the drawer useful between warm passes.
+func TestAZeroBudgetSpendsNoFreshLookups(t *testing.T) {
+	src := &resolvingSource{
+		fakeSource: fakeSource{reads: []library.Entry{read("Book 3", "Mistborn", 3, day0)}},
+		next:       entry("The Alloy of Law", "Mistborn", 4, "hardcover"), found: true,
+	}
+	if _, _, err := testEngine(t, src).RecommendWithin(context.Background(), false, 0); err != nil {
+		t.Fatalf("RecommendWithin: %v", err)
+	}
+	if src.calls != 0 {
+		t.Errorf("asked the catalogue %d times on a zero budget, want 0", src.calls)
+	}
+}
+
+// The ordinary path still spends its budget, so a page load fills the drawer
+// in even when the warm pass has not reached a series yet.
+func TestTheDefaultBudgetStillAsksTheCatalogue(t *testing.T) {
+	src := &resolvingSource{
+		fakeSource: fakeSource{reads: []library.Entry{read("Book 3", "Mistborn", 3, day0)}},
+		next:       entry("The Alloy of Law", "Mistborn", 4, "hardcover"), found: true,
+	}
+	if _, _, err := testEngine(t, src).Recommend(context.Background(), false); err != nil {
+		t.Fatalf("Recommend: %v", err)
+	}
+	if src.calls == 0 {
+		t.Error("the default budget asked the catalogue 0 times, want at least one")
+	}
+}

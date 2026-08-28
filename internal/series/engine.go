@@ -52,12 +52,18 @@ func NewEngine(store *Store, src library.Source, prefs picker.Prefs) *Engine {
 // View computes the current series view and enriches it with cached catalogue
 // answers, spending at most maxRequestLookups fresh queries.
 func (e *Engine) View(ctx context.Context) (View, error) {
+	return e.viewWithin(ctx, maxRequestLookups)
+}
+
+// viewWithin is View with the lookup budget named. A budget of zero still uses
+// every cached answer, so it costs nothing beyond the sources View reads anyway.
+func (e *Engine) viewWithin(ctx context.Context, budget int) (View, error) {
 	in, err := e.input(ctx)
 	if err != nil {
 		return View{}, err
 	}
 	v := Compute(in)
-	e.enrich(ctx, &v, maxRequestLookups, 0)
+	e.enrich(ctx, &v, budget, 0)
 	return v, nil
 }
 
@@ -164,7 +170,14 @@ type Recommendation struct {
 // series has anything to offer). It also returns the view it worked from, so
 // the caller renders exactly what was decided on.
 func (e *Engine) Recommend(ctx context.Context, reroll bool) (Recommendation, View, error) {
-	v, err := e.View(ctx)
+	return e.RecommendWithin(ctx, reroll, maxRequestLookups)
+}
+
+// RecommendWithin is Recommend with the catalogue lookup budget named. The
+// decision handler passes zero: a park or a drop is recorded and re-rendered
+// without waiting on a catalogue that may be slow.
+func (e *Engine) RecommendWithin(ctx context.Context, reroll bool, budget int) (Recommendation, View, error) {
+	v, err := e.viewWithin(ctx, budget)
 	if err != nil {
 		return Recommendation{}, View{}, err
 	}
