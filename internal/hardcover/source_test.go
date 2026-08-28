@@ -21,6 +21,7 @@ const readsResponse = `{"data":{"user_books":[
     "date_added": "2022-01-15",
     "last_read_date": "2024-03-20",
     "book": {
+      "id": 101,
       "title": "The Fifth Season",
       "subtitle": "",
       "description": "A world ends in ash.",
@@ -101,7 +102,7 @@ func TestRecentReadsMapsData(t *testing.T) {
 	if got := e.FinishedAt.Format("2006-01-02"); got != "2024-03-20" {
 		t.Errorf("FinishedAt = %q, want 2024-03-20", got)
 	}
-	wantRef := library.SourceRef{Name: "hardcover", URL: "https://hardcover.app/books/the-fifth-season"}
+	wantRef := library.SourceRef{Name: "hardcover", URL: "https://hardcover.app/books/the-fifth-season", ID: "101"}
 	if len(e.Sources) != 1 || e.Sources[0] != wantRef {
 		t.Errorf("Sources = %v, want [%v]", e.Sources, wantRef)
 	}
@@ -137,7 +138,7 @@ func TestRecentReadsMapsData(t *testing.T) {
 	if len(b.Genres) != 2 || b.Genres[0] != "Fantasy" || b.Genres[1] != "Science Fiction" {
 		t.Errorf("Genres = %v, want [Fantasy, Science Fiction]", b.Genres)
 	}
-	if b.Series == nil || b.Series.Name != "The Broken Earth" || b.Series.Position != 1 {
+	if b.Series == nil || b.Series.Name != "The Broken Earth" || *b.Series.Position != 1 {
 		t.Errorf("Series = %+v, want The Broken Earth #1 (featured)", b.Series)
 	}
 	if b.PageCount != 512 {
@@ -272,7 +273,8 @@ func TestToReadOrdersByDateAddedNoLimit(t *testing.T) {
 const nextInSeriesResponse = `{"data":{"book_series":[
   {
     "book": {
-      "title": "The Obelisk Gate",
+      "id": 202,
+      "title": "The Obelisk Gate", "editions": [{"id": 1}],
       "subtitle": "",
       "slug": "the-obelisk-gate",
       "release_year": 2016,
@@ -300,7 +302,7 @@ func TestNextInSeriesReturnsNextBook(t *testing.T) {
 	defer srv.Close()
 
 	c := New("tok", WithEndpoint(srv.URL))
-	entry, found, err := c.NextInSeries(context.Background(), library.Series{Name: "The Broken Earth", Position: 1})
+	entry, found, err := c.NextInSeries(context.Background(), library.SeriesQuery{Series: library.Series{Name: "The Broken Earth", Position: library.At(1)}})
 	if err != nil {
 		t.Fatalf("NextInSeries: %v", err)
 	}
@@ -314,10 +316,10 @@ func TestNextInSeriesReturnsNextBook(t *testing.T) {
 	if book.URL != "https://hardcover.app/books/the-obelisk-gate" {
 		t.Errorf("URL = %q", book.URL)
 	}
-	if book.Series == nil || book.Series.Position != 2 {
+	if book.Series == nil || book.Series.Position == nil || *book.Series.Position != 2 {
 		t.Errorf("Series = %+v, want position 2", book.Series)
 	}
-	wantRef := library.SourceRef{Name: "hardcover", URL: "https://hardcover.app/books/the-obelisk-gate"}
+	wantRef := library.SourceRef{Name: "hardcover", URL: "https://hardcover.app/books/the-obelisk-gate", ID: "202"}
 	if len(entry.Sources) != 1 || entry.Sources[0] != wantRef {
 		t.Errorf("Sources = %v, want [%v] (the resolver knows where it looked)", entry.Sources, wantRef)
 	}
@@ -344,7 +346,7 @@ func TestNextInSeriesNoLaterBook(t *testing.T) {
 	defer srv.Close()
 
 	c := New("tok", WithEndpoint(srv.URL))
-	_, found, err := c.NextInSeries(context.Background(), library.Series{Name: "Ended", Position: 9})
+	_, found, err := c.NextInSeries(context.Background(), library.SeriesQuery{Series: library.Series{Name: "Ended", Position: library.At(9)}})
 	if err != nil {
 		t.Fatalf("NextInSeries: %v", err)
 	}
@@ -361,11 +363,11 @@ func TestNextInSeriesSkipsQueryWhenUnresolvable(t *testing.T) {
 
 	c := New("tok", WithEndpoint(srv.URL))
 	cases := []library.Series{
-		{Position: 1},   // missing name
-		{Name: "Known"}, // unknown position (0)
+		{Position: library.At(1)}, // missing name
+		{Name: "Known"},           // unplaced: no slot to count from
 	}
 	for _, s := range cases {
-		if _, found, err := c.NextInSeries(context.Background(), s); err != nil || found {
+		if _, found, err := c.NextInSeries(context.Background(), library.SeriesQuery{Series: s}); err != nil || found {
 			t.Errorf("NextInSeries(%+v) = (found %v, err %v), want (false, nil)", s, found, err)
 		}
 	}

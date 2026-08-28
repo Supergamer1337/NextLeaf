@@ -142,6 +142,198 @@
     .btn:hover { transform: translateY(-1px); filter: brightness(1.07); }
     :is(.btn, .theme-toggle):focus-visible { outline: 2px solid var(--moss); outline-offset: 3px; }
 
+    /* Series decisions */
+    .btn--quiet {
+      color: var(--ink); background: transparent; border: 1px solid var(--line);
+      padding: 0.5rem 1rem; font-weight: 500;
+    }
+    .btn--quiet:hover { filter: none; border-color: var(--moss); color: var(--moss); }
+    .decide { display: contents; }
+
+    /* Series drawer */
+    .drawer-toggle {
+      position: fixed; top: 1.4rem; right: 1.4rem; z-index: 3;
+      display: inline-flex; align-items: center; gap: 0.45rem;
+      font: inherit; font-size: 0.82rem; font-weight: 600; color: var(--ink);
+      background: var(--card); border: 1px solid var(--line); border-radius: 999px;
+      padding: 0.5rem 1rem; cursor: pointer; text-decoration: none;
+      box-shadow: 0 10px 24px -18px var(--shadow-c);
+    }
+    .drawer-toggle:hover { border-color: var(--moss); color: var(--moss); }
+    .drawer-count {
+      font-size: 0.72rem; color: var(--muted); background: var(--tint);
+      border-radius: 999px; padding: 0.05rem 0.45rem;
+    }
+
+    /* The drawer is open when the URL carries #series, so it needs no script. */
+    .drawer {
+      --drawer-w: min(23rem, 100vw);
+      position: fixed; top: 0; right: calc(-1 * var(--drawer-w)); z-index: 5;
+      width: var(--drawer-w); height: 100vh;
+      display: flex; flex-direction: column;
+      background: var(--card); border-left: 1px solid var(--line);
+      box-shadow: -24px 0 48px -32px var(--shadow-c);
+      visibility: hidden;
+      /* Position, not transform: a transform would become the containing
+         block for the fixed overlay below and trap it inside the drawer. */
+      transition: right 0.22s ease, visibility 0.22s;
+    }
+    /* :target for the script-free path; the script mirrors the hash into a
+       class, since Chromium can drop :target matching after DOM morphing. */
+    .drawer:target, .drawer.open { right: 0; visibility: visible; }
+    .drawer-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 1rem; padding: 1.3rem 1.4rem 0.9rem; border-bottom: 1px solid var(--line);
+    }
+    .drawer-title { margin: 0; font-family: var(--serif); font-size: 1.15rem; font-weight: 600; }
+    .drawer-close { color: var(--muted); text-decoration: none; font-size: 1.4rem; line-height: 1; }
+    .drawer-close:hover { color: var(--moss); }
+    .drawer-body { overflow-y: auto; padding: 1rem 1.4rem 2rem; }
+
+    .drawer-group + .drawer-group { margin-top: 1.4rem; }
+    .drawer-label {
+      font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+    }
+    .drawer-summary {
+      cursor: pointer; list-style: none; padding: 0.15rem 0;
+      display: flex; align-items: center; gap: 0.4rem;
+    }
+    .drawer-summary::-webkit-details-marker { display: none; }
+    .drawer-summary::before { content: "\25B8"; font-size: 0.7em; }
+    details[open] > .drawer-summary::before { content: "\25BE"; }
+    .drawer-summary:hover { color: var(--moss); }
+    .drawer-tally {
+      font-size: 0.68rem; color: var(--muted); background: var(--tint);
+      border-radius: 999px; padding: 0.02rem 0.4rem;
+    }
+    .drawer-list { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+    .drawer-row {
+      display: grid; grid-template-columns: 2.6rem 1fr; gap: 0.7rem;
+      padding: 0.7rem 0; border-top: 1px solid var(--line);
+    }
+    .drawer-list li:first-child .drawer-row { border-top: none; }
+    .drawer-cover {
+      width: 2.6rem; height: 3.9rem; object-fit: cover; border-radius: 3px;
+      background: var(--tint);
+    }
+    .drawer-cover--blank { border: 1px dashed var(--line); }
+    .drawer-name { font-size: 0.88rem; font-weight: 600; }
+    .row-head { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; padding-right: 2.2rem; }
+    .drawer-group--flat > .drawer-label { display: block; padding: 0.15rem 0; }
+    .drawer-next, .drawer-pos { display: block; color: var(--muted); font-size: 0.75rem; margin-top: 0.1rem; }
+    .drawer-acts { display: flex; gap: 0.7rem; margin-top: 0.4rem; flex-wrap: wrap; }
+    .drawer-act {
+      font: inherit; font-size: 0.75rem; color: var(--muted);
+      background: none; border: none; padding: 0; cursor: pointer;
+      text-decoration: underline; text-underline-offset: 3px;
+    }
+    .drawer-act:hover { color: var(--moss); }
+    .drawer-act--go { color: var(--moss); }
+    /* Switching which series a row is tracked under: the row itself becomes
+       the wheel. It lifts in place over a dimmed drawer, candidates roll
+       through its footprint, and it settles back once one is chosen. */
+    .drawer-dim {
+      /* On the drawer itself, not the scrollable body: the dim must cover
+         the panel wherever the reader has scrolled to. */
+      position: absolute; inset: 0; z-index: 4;
+      background: light-dark(rgba(36,49,42,0.35), rgba(0,0,0,0.55));
+      opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+    }
+    .drawer.dimmed .drawer-dim { opacity: 1; pointer-events: auto; }
+
+    .drawer-row { position: relative; transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease; }
+    .drawer-row.spinning {
+      z-index: 5; background: var(--card);
+      transform: scale(1.03); border-radius: 10px;
+      box-shadow: 0 16px 36px -18px var(--shadow-c);
+      padding-left: 0.45rem; padding-right: 0.45rem;
+    }
+
+    .switcher-btn {
+      position: absolute; top: 50%; right: 0; z-index: 6;
+      display: grid; place-items: center; width: 2.1rem; height: 2.1rem;
+      font: inherit; font-size: 1.15rem; line-height: 1; cursor: pointer;
+      color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 8px;
+      transform: translateY(-50%);
+      transition: transform 0.25s ease, color 0.15s ease, background 0.15s ease;
+    }
+    .switcher-btn:hover { color: var(--moss); border-color: var(--moss); }
+    .spinning .switcher-btn {
+      color: var(--moss); background: var(--tint); border-color: var(--moss);
+      transform: translateY(-50%) rotate(180deg);
+    }
+
+    .wheel-face { display: none; }
+    .spinning .row-body { display: none; }
+    .spinning .wheel-face { display: grid; gap: 0.45rem; animation: wheel-in 0.18s ease-out; }
+    @keyframes wheel-in {
+      from { opacity: 0; transform: translateY(0.25rem); }
+      to   { opacity: 1; transform: none; }
+    }
+    .wheel-ghost {
+      display: none; position: absolute; left: 0; right: 0; z-index: 5;
+      align-items: center; gap: 0.6rem; text-align: left;
+      font: inherit; color: var(--ink); cursor: pointer;
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      padding: 0.45rem 0.55rem;
+      /* Depth without transparency: a see-through card over the dimmed
+         backdrop goes muddy, so the ghosts stay opaque and step back through
+         size and a slightly darker surface instead. */
+      filter: brightness(0.86); transform: scale(0.92);
+      box-shadow: 0 8px 20px -14px var(--shadow-c);
+      transition: transform 0.15s ease, filter 0.15s ease;
+    }
+    /* :not([hidden]) matters: the hidden attribute is plain display:none in
+       the UA sheet, which this rule would otherwise override — leaving an
+       empty card forced visible. */
+    .spinning .wheel-ghost:not([hidden]) { display: flex; }
+    .wheel-ghost:hover { filter: brightness(1); transform: scale(0.96); }
+    .wheel-prev { bottom: calc(100% + 0.4rem); }
+    .wheel-next { top: calc(100% + 0.4rem); }
+    .ghost-cover { width: 1.8rem; height: 2.7rem; object-fit: cover; border-radius: 3px; flex: none; }
+    .ghost-text { display: grid; gap: 0.15rem; min-width: 0; }
+    .peek-name {
+      font-size: 0.8rem; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .ghost-badges { display: flex; gap: 0.35rem; }
+    .wheel-item { display: grid; gap: 0.15rem; min-height: 3rem; align-content: center; width: calc(100% - 2.4rem); }
+    .wheel-item.roll-up   { animation: roll-up 0.16s ease-out; }
+    .wheel-item.roll-down { animation: roll-down 0.16s ease-out; }
+    @keyframes roll-up {
+      from { opacity: 0; transform: translateY(0.5rem); }
+      to   { opacity: 1; transform: none; }
+    }
+    @keyframes roll-down {
+      from { opacity: 0; transform: translateY(-0.5rem); }
+      to   { opacity: 1; transform: none; }
+    }
+    .wheel-meta { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+    .switch-source, .switch-pos {
+      font-size: 0.62rem; letter-spacing: 0.04em; text-transform: uppercase;
+      color: var(--muted); background: var(--tint); border-radius: 999px; padding: 0.03rem 0.4rem;
+    }
+    .switch-desc {
+      font-size: 0.72rem; color: var(--muted); line-height: 1.4;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .wheel-controls { display: flex; align-items: center; gap: 0.4rem; }
+    .wheel-step, .wheel-cancel {
+      display: grid; place-items: center; width: 1.7rem; height: 1.7rem;
+      font: inherit; font-size: 0.72rem; cursor: pointer;
+      color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    }
+    .wheel-step:hover, .wheel-cancel:hover { color: var(--moss); border-color: var(--moss); }
+    .wheel-ok {
+      font: inherit; font-size: 0.78rem; font-weight: 600; cursor: pointer;
+      color: var(--on-moss); background: var(--moss); border: none; border-radius: 999px;
+      padding: 0.28rem 0.9rem; margin-left: auto;
+    }
+    .wheel-ok:hover { filter: brightness(1.07); }
+    .switching .wheel-ok { opacity: 0.7; cursor: wait; }
+    .switching .wheel-ghost { pointer-events: none; filter: brightness(0.75); }
+    .wheel-cancel { margin-left: 0.1rem; }
+
     /* Notices */
     .notice {
       margin-top: 1.6rem; background: var(--card); border: 1px solid var(--line);
@@ -178,7 +370,11 @@
       <p class="notice">No reading source connected. Set <code>HARDCOVER_TOKEN</code> and restart to get a recommendation.</p>
     {{else if .Error}}
       <p class="notice notice--error">Couldn’t reach your library: {{.Error}}</p>
-    {{else if not .HasRec}}
+    {{else}}
+      {{range .Stale}}
+      <p class="notice">{{ucfirst .Source}} couldn’t be reached — showing its data from {{.Since.Format "15:04"}}. Recommendations may be out of date.</p>
+      {{end}}
+      {{if not .HasRec}}
       <p class="lede">Nothing to recommend yet.</p>
       <p class="notice">Your Want-to-Read list is empty — add a few books and come back.</p>
     {{else}}
@@ -235,13 +431,224 @@
 
       <div class="actions">
         <a class="btn" href="/?another=1">Pick another</a>
+        {{if $.Decidable}}
+        {{$name := $.Decide}}
+        <form class="decide" method="post" action="/series/pin">
+          <input type="hidden" name="name" value="{{$name}}">
+          <button class="btn btn--quiet" type="submit">Reading this next</button>
+        </form>
+        <form class="decide" method="post" action="/series/park">
+          <input type="hidden" name="name" value="{{$name}}">
+          <button class="btn btn--quiet" type="submit">Park for one book</button>
+        </form>
+        <form class="decide" method="post" action="/series/drop">
+          <input type="hidden" name="name" value="{{$name}}">
+          <button class="btn btn--quiet" type="submit">Drop this series</button>
+        </form>
+        {{end}}
       </div>
       {{end}}
+      {{end}}
+
     {{end}}
   </main>
 
+  {{if .Panel.Any}}
+  <a class="drawer-toggle" href="#series">Series <span class="drawer-count">{{.Panel.Count}}</span></a>
+  <aside class="drawer" id="series" aria-label="Series you're tracking">
+    <div class="drawer-head">
+      <h2 class="drawer-title">Series</h2>
+      <a class="drawer-close" href="#" aria-label="Close">&times;</a>
+    </div>
+    <div class="drawer-dim"></div>
+    <div class="drawer-body">
+      {{template "drawerGroup" dict "Label" "Reading next — pinned" "Items" .Panel.Pinned "Undo" "Unpin" "Flat" true}}
+      {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Undo" "" "Open" true}}
+      {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now"}}
+      {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "Undo" ""}}
+      {{template "drawerGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
+    </div>
+  </aside>
+  {{end}}
+
   <script>
+    // The series wheel and the seamless form posts. The server stays a
+    // plain form-and-redirect app; this layer follows the redirect with
+    // fetch and swaps the fresh HTML in place, so the page never visibly
+    // reloads. Without the script, every form still works the classic way.
     (function () {
+      var drawer = document.querySelector(".drawer");
+      if (!drawer) return;
+      var dim = drawer.querySelector(".drawer-dim");
+      var openRow = null;
+
+      function syncDrawer() {
+        drawer.classList.toggle("open", location.hash === "#series");
+      }
+      window.addEventListener("hashchange", syncDrawer);
+      syncDrawer();
+
+      function close() {
+        if (!openRow) return;
+        var img = openRow.querySelector("img.drawer-cover");
+        if (img && img.dataset.original) { img.src = img.dataset.original; }
+        openRow.classList.remove("spinning");
+        drawer.classList.remove("dimmed");
+        openRow = null;
+      }
+      dim.addEventListener("click", close);
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") close();
+      });
+
+      // seamless posts a series form and morphs the page from the response
+      // the redirect lands on, keeping the drawer's fold state and scroll.
+      function seamless(form) {
+        var body = drawer.querySelector(".drawer-body");
+        var openLabels = [];
+        body.querySelectorAll("details.drawer-group[open]").forEach(function (d) {
+          openLabels.push(d.querySelector(".drawer-label").textContent);
+        });
+        var scroll = body.scrollTop;
+
+        return fetch(form.action, {
+          method: "POST",
+          body: new URLSearchParams(new FormData(form)),
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        }).then(function (resp) {
+          if (!resp.ok) throw new Error(resp.status);
+          return resp.text();
+        }).then(function (html) {
+          var doc = new DOMParser().parseFromString(html, "text/html");
+          var newMain = doc.querySelector("main.wrap");
+          var newBody = doc.querySelector(".drawer-body");
+          if (!newMain || !newBody) throw new Error("unexpected page");
+          close();
+          document.querySelector("main.wrap").innerHTML = newMain.innerHTML;
+          body.innerHTML = newBody.innerHTML;
+          body.querySelectorAll("details.drawer-group").forEach(function (d) {
+            var label = d.querySelector(".drawer-label").textContent;
+            d.open = openLabels.indexOf(label) >= 0 || d.hasAttribute("open");
+          });
+          body.scrollTop = scroll;
+          wireWheels();
+          wireTheme();
+        }, function () {
+          form.submit(); // the POST never landed; the classic path retries it
+        }).catch(function () {
+          // The decision was recorded but the morph failed; reload to show
+          // the truth without posting it a second time.
+          window.location.reload();
+        });
+      }
+
+      // Every series form on the page posts seamlessly, wherever it lives.
+      document.addEventListener("submit", function (e) {
+        var form = e.target;
+        if (form.getAttribute("action") && form.getAttribute("action").indexOf("/series/") === 0) {
+          e.preventDefault();
+          seamless(form);
+        }
+      });
+
+      function wireWheels() {
+        drawer.querySelectorAll(".drawer-row").forEach(function (row) {
+          var btn = row.querySelector(".switcher-btn");
+          if (!btn) return;
+          var cands = Array.prototype.slice.call(row.querySelectorAll(".wheel-candidate"));
+          var face = row.querySelector(".wheel-face");
+          var form = row.querySelector(".wheel-form");
+          var item = face.querySelector(".wheel-item");
+          var prevGhost = row.querySelector(".wheel-prev");
+          var nextGhost = row.querySelector(".wheel-next");
+          var cover = row.querySelector("img.drawer-cover");
+          var i = 0;
+
+          var originalCover = cover ? cover.src : "";
+
+          function fillGhost(ghost, c) {
+            ghost.querySelector(".peek-name").textContent = c.name;
+            var badges = ghost.querySelectorAll(".peek-badge");
+            badges[0].textContent = c.source;
+            badges[0].hidden = !c.source;
+            badges[1].textContent = c.pos ? "book " + c.pos : "";
+            badges[1].hidden = !c.pos;
+            // Each identity wears the face the row would have if picked.
+            var img = ghost.querySelector(".ghost-cover");
+            var src = c.cover || originalCover;
+            if (src) { img.src = src; }
+            img.hidden = !src;
+            ghost.hidden = false;
+          }
+
+          function render(dir) {
+            var c = cands[i].dataset;
+            item.querySelector(".wheel-name").textContent = c.name;
+            var src = item.querySelector(".wheel-source");
+            src.textContent = c.source;
+            src.hidden = !c.source;
+            var pos = item.querySelector(".wheel-pos");
+            pos.textContent = c.pos ? "You're at book " + c.pos : "";
+            pos.hidden = !c.pos;
+            var desc = item.querySelector(".wheel-desc");
+            desc.textContent = c.desc;
+            desc.hidden = !c.desc;
+            if (cover) { cover.src = c.cover || originalCover; }
+            // The wheel loops, so both directions always show where they
+            // lead — with two candidates that is the same place, and the
+            // same card above and below is the honest picture of a loop.
+            var n = cands.length;
+            fillGhost(prevGhost, cands[(i - 1 + n) % n].dataset);
+            fillGhost(nextGhost, cands[(i + 1) % n].dataset);
+            if (dir) {
+              item.classList.remove("roll-up", "roll-down");
+              void item.offsetWidth; // restart the animation
+              item.classList.add(dir > 0 ? "roll-up" : "roll-down");
+            }
+          }
+          function cycle(d) {
+            i = (i + d + cands.length) % cands.length;
+            render(d);
+          }
+          function confirm() {
+            var to = cands[i].dataset.to;
+            if (!to) { close(); return; } // kept the current identity
+            form.querySelector("input[name=to]").value = to;
+            // Settle showing the chosen identity; the morph makes it real.
+            var nameEl = row.querySelector(".row-body .drawer-name");
+            if (nameEl) nameEl.textContent = cands[i].dataset.name;
+            seamless(form);
+          }
+
+          btn.addEventListener("click", function () {
+            if (openRow === row) { close(); return; }
+            close();
+            if (cover) { cover.dataset.original = originalCover; }
+            i = 0;
+            render();
+            row.classList.add("spinning");
+            drawer.classList.add("dimmed");
+            openRow = row;
+            row.scrollIntoView({ block: "center", behavior: "smooth" });
+          });
+          prevGhost.addEventListener("click", function () { cycle(-1); });
+          nextGhost.addEventListener("click", function () { cycle(1); });
+          face.querySelector(".wheel-ok").addEventListener("click", confirm);
+          face.querySelector(".wheel-cancel").addEventListener("click", close);
+          row.addEventListener("keydown", function (e) {
+            if (openRow !== row) return;
+            if (e.key === "Escape") close();
+            if (e.key === "ArrowDown") { e.preventDefault(); cycle(1); }
+            if (e.key === "ArrowUp") { e.preventDefault(); cycle(-1); }
+            if (e.key === "Enter") { e.preventDefault(); confirm(); }
+          });
+        });
+      }
+      wireWheels();
+      window.wireWheels = wireWheels;
+    })();
+
+    function wireTheme() {
       var btn = document.getElementById("theme-toggle");
       function system() {
         return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -260,7 +667,8 @@
           localStorage.setItem("theme", next);
         }
       });
-    })();
+    }
+    wireTheme();
   </script>
 </body>
 </html>
@@ -274,3 +682,130 @@
 {{end}}
 
 {{define "authors"}}{{range $i, $a := .}}{{if $i}}, {{end}}{{$a}}{{end}}{{end}}
+
+{{define "drawerGroup"}}
+{{if .Items}}
+{{if .Flat}}
+<div class="drawer-group drawer-group--flat">
+  <span class="drawer-label">{{.Label}}</span>
+  {{template "drawerRows" .}}
+</div>
+{{else}}
+<details class="drawer-group"{{if .Open}} open{{end}}>
+  <summary class="drawer-label drawer-summary">{{.Label}} <span class="drawer-tally">{{len .Items}}</span></summary>
+  {{template "drawerRows" .}}
+</details>
+{{end}}
+{{end}}
+{{end}}
+
+{{define "drawerRows"}}
+<ul class="drawer-list">
+  {{range .Items}}
+  {{$tracked := .Name}}
+  <li>
+    <div class="drawer-row">
+      {{/* The next book when there is one, else the last book read. */}}
+      {{if or .NextCoverURL .CoverURL}}
+      <img class="drawer-cover" src="{{or .NextCoverURL .CoverURL}}" alt="" loading="lazy">
+      {{else}}
+      <span class="drawer-cover drawer-cover--blank" aria-hidden="true"></span>
+      {{end}}
+      <div class="drawer-cell">
+        <div class="row-body">
+          <span class="row-head">
+            <span class="drawer-name">{{.Name}}</span>
+            {{if .Source}}<span class="row-badge switch-source">{{ucfirst .Source}}</span>{{end}}
+            {{if .Position}}<span class="row-badge switch-pos">book {{.Position}}</span>{{end}}
+          </span>
+          {{if .NextTitle}}
+            <span class="drawer-next">Next: {{.NextTitle}}</span>
+          {{else if .CaughtUp}}
+            <span class="drawer-next">Nothing left to read</span>
+          {{end}}
+          <div class="drawer-acts">
+            {{if and .NextTitle (and (ne $.Label "Reading next — pinned") (ne $.Label "Dropped"))}}
+            <form method="post" action="/series/pin">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <button class="drawer-act drawer-act--go" type="submit">Pick this</button>
+            </form>
+            {{end}}
+            {{if eq $.Label "Current"}}
+            <form method="post" action="/series/park">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <button class="drawer-act" type="submit">Park</button>
+            </form>
+            {{end}}
+            {{if ne $.Label "Dropped"}}
+            <form method="post" action="/series/drop">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <button class="drawer-act" type="submit">Drop</button>
+            </form>
+            {{end}}
+            {{if $.Undo}}
+            <form method="post" action="/series/clear">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <button class="drawer-act" type="submit">{{$.Undo}}</button>
+            </form>
+            {{end}}
+          </div>
+        </div>
+        {{if .Alternatives}}
+        {{/* The wheel face the script swaps candidates through, in the row's
+             own footprint. Hidden until the row is spun. */}}
+        <div class="wheel-face">
+          <div class="wheel-item">
+            <span class="wheel-name drawer-name"></span>
+            <span class="wheel-meta">
+              <span class="wheel-source switch-source" hidden></span>
+              <span class="wheel-pos switch-pos" hidden></span>
+            </span>
+            <span class="wheel-desc switch-desc" hidden></span>
+          </div>
+          <div class="wheel-controls">
+            <button type="button" class="wheel-ok">Use this</button>
+            <button type="button" class="wheel-cancel" aria-label="Cancel">✕</button>
+          </div>
+        </div>
+        {{end}}
+      </div>
+      {{if .Alternatives}}
+      {{/* The ghost cards the selection moves between: rendered above and
+           below the lifted card, smaller and darkened for depth. */}}
+      <button type="button" class="wheel-ghost wheel-prev" aria-label="Previous series" hidden>
+        <img class="ghost-cover" alt="" hidden>
+        <span class="ghost-text">
+          <span class="peek-name"></span>
+          <span class="ghost-badges">
+            <span class="peek-badge switch-source" hidden></span>
+            <span class="peek-badge switch-pos" hidden></span>
+          </span>
+        </span>
+      </button>
+      <button type="button" class="wheel-ghost wheel-next" aria-label="Next series" hidden>
+        <img class="ghost-cover" alt="" hidden>
+        <span class="ghost-text">
+          <span class="peek-name"></span>
+          <span class="ghost-badges">
+            <span class="peek-badge switch-source" hidden></span>
+            <span class="peek-badge switch-pos" hidden></span>
+          </span>
+        </span>
+      </button>
+      <button class="switcher-btn" type="button" title="Track under a different series" aria-label="Switch series">⇄</button>
+      <div hidden>
+        <span class="wheel-candidate" data-to="" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-desc="Currently tracked." data-cover="{{or .NextCoverURL .CoverURL}}"></span>
+        {{range .Alternatives}}
+        <span class="wheel-candidate" data-to="{{.Name}}" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-desc="{{.Description}}" data-cover="{{.CoverURL}}"></span>
+        {{end}}
+        <form method="post" action="/series/switch" class="wheel-form">
+          <input type="hidden" name="name" value="{{$tracked}}">
+          <input type="hidden" name="to" value="">
+        </form>
+      </div>
+      {{end}}
+    </div>
+  </li>
+  {{end}}
+</ul>
+{{end}}

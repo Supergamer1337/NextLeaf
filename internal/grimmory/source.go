@@ -124,7 +124,7 @@ func (c *Client) mapEntry(b book) library.Entry {
 		Rating:     b.PersonalRating / 2, // Grimmory rates 0-10, the neutral model 0-5
 		DateAdded:  parseInstant(b.AddedOn),
 		FinishedAt: parseInstant(b.DateFinished),
-		Sources:    []library.SourceRef{{Name: c.Name(), URL: page}},
+		Sources:    []library.SourceRef{{Name: c.Name(), URL: page, ID: strconv.Itoa(b.ID)}},
 		Available:  true, // a Grimmory library holds the files themselves
 	}
 	return e
@@ -145,11 +145,20 @@ func (c *Client) mapBook(b book) library.Book {
 	out.Genres = m.Categories
 	out.Moods = m.Moods
 	out.ReleaseYear = parseYear(m.PublishedDate)
+	out.ReleaseDate = parseDay(m.PublishedDate)
 	out.PageCount = m.PageCount
+	for _, isbn := range []string{m.ISBN13, m.ISBN10} {
+		if isbn != "" {
+			out.ISBNs = append(out.ISBNs, isbn)
+		}
+	}
 	out.URL = m.ExternalURL
 	out.CoverURL = c.coverURL(b.ID, m)
 	if m.SeriesName != "" {
-		out.Series = &library.Series{Name: m.SeriesName, Position: m.SeriesNumber}
+		// A book can belong to a series without a number of its own — The
+		// Hobbit in The Lord of the Rings — so an absent seriesNumber leaves
+		// the book unplaced rather than at position zero.
+		out.Series = &library.Series{Name: m.SeriesName, Position: m.SeriesNumber, Source: "grimmory"}
 	}
 	return out
 }
@@ -200,6 +209,17 @@ func parseInstant(s string) time.Time {
 		return time.Time{}
 	}
 	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// parseDay reads Grimmory's full publication date. Many books carry only a
+// year or a year-month, which yields the zero time so callers fall back to
+// ReleaseYear rather than assuming the 1st of January.
+func parseDay(s string) time.Time {
+	t, err := time.Parse("2006-01-02", s)
 	if err != nil {
 		return time.Time{}
 	}

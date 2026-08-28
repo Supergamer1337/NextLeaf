@@ -5,3 +5,7 @@ coverage.out
 
 # Local, machine-specific preview launch config (e.g. the nix develop wrapper)
 .claude/launch.json
+
+# Local series database
+nextleaf.db
+nextleaf.db-*

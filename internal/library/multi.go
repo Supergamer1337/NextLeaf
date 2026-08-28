@@ -156,15 +156,56 @@ func dedup(all []Entry) []Entry {
 	return out
 }
 
+// mergeSeries unions the series two sources file the same book under. The
+// first source's pick stays the tracked one; everything else becomes an
+// alternative the reader can switch to, since the sources name franchises
+// differently and each only knows its own.
+func mergeSeries(base Book, dup Book) (*Series, []Series) {
+	all := make([]Series, 0, 2+len(base.OtherSeries)+len(dup.OtherSeries))
+	for _, b := range []Book{base, dup} {
+		if b.Series != nil {
+			all = append(all, *b.Series)
+		}
+		all = append(all, b.OtherSeries...)
+	}
+	if len(all) == 0 {
+		return nil, nil
+	}
+
+	chosen := all[0]
+	var others []Series
+	seen := map[string]bool{normalize(chosen.Name): true}
+	for _, s := range all[1:] {
+		key := normalize(s.Name)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		others = append(others, s)
+	}
+	return &chosen, others
+}
+
+// BookKey identifies a book across sources: normalized title plus first
+// author. It is the stable key statements are anchored to, and the fallback
+// join for books without a shared identifier. Empty means "never merge".
+func BookKey(e Entry) string { return dedupKey(e) }
+
 // dedupKey identifies a book for deduplication; empty means "never merge".
+// The author component is the lexicographically smallest credit, not the
+// first: sources order collaborators differently (one credits the
+// illustrator first), and the book is the same book either way.
 func dedupKey(e Entry) string {
 	title := normalize(e.Book.Title)
 	if title == "" {
 		return ""
 	}
 	author := ""
-	if len(e.Book.Authors) > 0 {
-		author = normalize(e.Book.Authors[0])
+	for _, a := range e.Book.Authors {
+		n := normalize(a)
+		if n != "" && (author == "" || n < author) {
+			author = n
+		}
 	}
 	return title + "\x00" + author
 }
@@ -216,9 +257,7 @@ func mergeEntry(base, dup Entry) Entry {
 	if b.Moods == nil {
 		b.Moods = d.Moods
 	}
-	if b.Series == nil {
-		b.Series = d.Series
-	}
+	b.Series, b.OtherSeries = mergeSeries(base.Book, d)
 	if b.ReleaseYear == 0 {
 		b.ReleaseYear = d.ReleaseYear
 	}
@@ -233,6 +272,12 @@ func mergeEntry(base, dup Entry) Entry {
 	}
 	if b.URL == "" {
 		b.URL = d.URL
+	}
+	// ISBNs union: each source may know different editions' numbers.
+	for _, isbn := range d.ISBNs {
+		if !slices.Contains(b.ISBNs, isbn) {
+			b.ISBNs = append(append([]string(nil), b.ISBNs...), isbn)
+		}
 	}
 	return base
 }

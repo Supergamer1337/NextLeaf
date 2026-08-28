@@ -5,9 +5,9 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"errors"
 	"html/template"
 	"io"
-	"math/rand"
 	"mime"
 	"net/http"
 	"strings"
@@ -16,6 +16,7 @@ import (
 
 	"nextleaf/internal/library"
 	"nextleaf/internal/picker"
+	"nextleaf/internal/series"
 )
 
 //go:embed select.html
@@ -49,6 +50,15 @@ var selectFuncs = template.FuncMap{
 		}
 		return s
 	},
+	// dict builds a map for passing several values into a sub-template.
+	"dict": func(pairs ...any) map[string]any {
+		m := make(map[string]any, len(pairs)/2)
+		for i := 0; i+1 < len(pairs); i += 2 {
+			key, _ := pairs[i].(string)
+			m[key] = pairs[i+1]
+		}
+		return m
+	},
 	// ucfirst capitalises the first letter so reason fragments read as sentences.
 	"ucfirst": func(s string) string {
 		if s == "" {
@@ -66,24 +76,75 @@ var selectTmpl = template.Must(
 	template.New("select.html").Funcs(selectFuncs).ParseFS(templateFS, "select.html"),
 )
 
-// server holds the handler's dependencies.
-type server struct {
-	src library.Source // reading-data source; nil when unconfigured
+// Deps are the handler's collaborators. Engine may be nil, in which case the
+// app behaves as it did before series tracking: variety picks only.
+type Deps struct {
+	Source library.Source // reading-data source; nil when unconfigured
+	Engine *series.Engine
 }
 
-// NewHandler returns the application's HTTP handler. src may be nil, in which
-// case the selector explains that no source is configured.
-func NewHandler(src library.Source) http.Handler {
-	s := &server{src: src}
+// server holds the handler's dependencies.
+type server struct {
+	src    library.Source
+	engine *series.Engine
+}
+
+// NewHandler returns the application's HTTP handler. d.Source may be nil, in
+// which case the selector explains that no source is configured.
+func NewHandler(d Deps) http.Handler {
+	s := &server{src: d.Source, engine: d.Engine}
+
 	mux := http.NewServeMux()
 	// {$} matches "/" exactly, so unknown paths fall through to 404 instead of
 	// being swallowed by a catch-all root pattern.
 	mux.HandleFunc("GET /{$}", s.handleSelect)
+	mux.HandleFunc("POST /series/{action}", s.handleSeriesDecision)
 	mux.HandleFunc("GET /cover/{source}/{id}", s.handleCover)
 	mux.HandleFunc("GET /healthcheck", handleHealthcheck)
 	// Paths line up with the embed, so no prefix stripping is needed.
 	mux.Handle("GET /static/", http.FileServerFS(staticFS))
 	return mux
+}
+
+// handleSeriesDecision records a statement from the recommendation card or
+// the series drawer, then redirects back so a refresh cannot repeat it.
+func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
+	if s.engine == nil {
+		http.NotFound(w, r)
+		return
+	}
+	// NextLeaf has no login, so any page on the web could otherwise post a
+	// decision through the reader's own browser. Browsers stamp cross-site
+	// requests with Sec-Fetch-Site; its absence (curl, old browsers) is not
+	// evidence of one.
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "cross-site", "same-site":
+		http.Error(w, "cross-origin requests are refused", http.StatusForbidden)
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		http.Error(w, "a series name is required", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	err := s.engine.Decide(ctx, r.PathValue("action"), name, strings.TrimSpace(r.FormValue("to")))
+	switch {
+	case errors.Is(err, series.ErrUnknownAction):
+		http.NotFound(w, r)
+		return
+	case errors.Is(err, series.ErrUnknownSeries), errors.Is(err, series.ErrNotAnAlternative):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	case err != nil:
+		http.Error(w, "could not record that decision", http.StatusInternalServerError)
+		return
+	}
+	// Back into the drawer: the reader was in it when they decided.
+	http.Redirect(w, r, "/#series", http.StatusSeeOther)
 }
 
 // handleCover relays a cover image from the source holding it, for providers
@@ -120,18 +181,79 @@ type selectData struct {
 	Error      string
 	Rec        picker.Recommendation
 	HasRec     bool // false when there's nothing to recommend (empty list)
+	// Stale lists sources whose fetch failed, so the page can say the data
+	// shown for them is old rather than quietly pretending it is fresh.
+	Stale []library.Health
+	// Decidable is true when the recommended book belongs to a series the
+	// reader has actually read into, which is what makes park/drop/pin
+	// meaningful for it. Decide names that series, which is not always the one
+	// the book itself is labelled with.
+	Decidable bool
+	Decide    string
+	Panel     panel
+}
+
+// panel is the series drawer: every tracked series, grouped by what applies
+// to it. Finished sits last because it is a record of what is done, not a
+// list of anything to act on.
+type panel struct {
+	Pinned   []series.Group
+	Active   []series.Group
+	Parked   []series.Group
+	Dropped  []series.Group
+	Finished []series.Group
+}
+
+// Count is how many series the drawer holds, for the toggle's label.
+func (p panel) Count() int {
+	return len(p.Pinned) + len(p.Active) + len(p.Parked) + len(p.Dropped) + len(p.Finished)
+}
+
+// Any reports whether there is anything worth opening the drawer for.
+func (p panel) Any() bool { return p.Count() > 0 }
+
+// group sorts the view's series into the drawer's sections. Being caught up
+// is a fact rather than a decision, so it only files a series under Finished
+// when the reader has made no decision of their own about it.
+func group(v series.View) panel {
+	var p panel
+	for _, g := range v.Groups {
+		switch {
+		case g.Decision == series.Pinned:
+			p.Pinned = append(p.Pinned, g)
+		case g.Decision == series.Parked:
+			p.Parked = append(p.Parked, g)
+		case g.Decision == series.Dropped:
+			p.Dropped = append(p.Dropped, g)
+		case g.CaughtUp:
+			p.Finished = append(p.Finished, g)
+		default:
+			p.Active = append(p.Active, g)
+		}
+	}
+	return p
 }
 
 func (s *server) handleSelect(w http.ResponseWriter, r *http.Request) {
 	data := selectData{Configured: s.src != nil}
 
-	if s.src != nil {
+	if s.src != nil && s.engine != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+
 		// "another" flips from the series continuation to a variety pick.
-		rec, ok, err := s.recommend(r.Context(), r.URL.Query().Has("another"))
+		rec, view, err := s.engine.Recommend(ctx, r.URL.Query().Has("another"))
 		if err != nil {
 			data.Error = err.Error()
 		} else {
-			data.Rec, data.HasRec = rec, ok
+			data.Rec, data.HasRec = rec.Rec, rec.OK
+			data.Decidable, data.Decide = rec.Decidable, rec.Group
+			data.Panel = group(view)
+		}
+		for _, h := range library.HealthOf(s.src) {
+			if h.Stale {
+				data.Stale = append(data.Stale, h)
+			}
 		}
 	}
 
@@ -144,77 +266,6 @@ func (s *server) handleSelect(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = buf.WriteTo(w)
-}
-
-// recommend gathers the reading data and produces one recommendation: continue
-// an active series (initial load), or a variety-weighted pick (reroll, or when
-// no series is in progress).
-func (s *server) recommend(ctx context.Context, reroll bool) (picker.Recommendation, bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	toRead, err := s.src.ToRead(ctx)
-	if err != nil {
-		return picker.Recommendation{}, false, err
-	}
-	reads, err := s.src.RecentReads(ctx, picker.RecentWindow)
-	if err != nil {
-		return picker.Recommendation{}, false, err
-	}
-	reading, err := s.src.CurrentlyReading(ctx)
-	if err != nil {
-		return picker.Recommendation{}, false, err
-	}
-
-	if !reroll {
-		rec, ok, err := s.continueSeries(ctx, reading, reads, toRead)
-		if err != nil {
-			return picker.Recommendation{}, false, err
-		}
-		if ok {
-			return rec, true, nil
-		}
-	}
-
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	rec, ok := picker.Pick(rng, toRead, reads, reading)
-	return rec, ok, nil
-}
-
-// continueSeries recommends the next book of the series the user is partway
-// through, preferring one already on the TBR and otherwise asking the source's
-// optional SeriesResolver. ok is false when no series is active or has a next
-// book.
-func (s *server) continueSeries(ctx context.Context, reading, reads, toRead []library.Entry) (picker.Recommendation, bool, error) {
-	anchor, ok := picker.ActiveSeries(reading, reads)
-	if !ok {
-		return picker.Recommendation{}, false, nil
-	}
-	// Only push a series the reader actually liked; unrated is allowed.
-	if anchor.Rating > 0 && anchor.Rating < picker.SeriesRatingGate {
-		return picker.Recommendation{}, false, nil
-	}
-	series := *anchor.Book.Series
-	// Without a known position we can't tell what "next" is; don't guess.
-	if series.Position == 0 {
-		return picker.Recommendation{}, false, nil
-	}
-
-	if entry, ok := picker.NextOnShelves(series, toRead); ok {
-		return picker.ContinueSeries(entry, anchor.Rating), true, nil
-	}
-
-	if resolver, ok := library.AsSeriesResolver(s.src); ok {
-		entry, found, err := resolver.NextInSeries(ctx, series)
-		if err != nil {
-			return picker.Recommendation{}, false, err
-		}
-		if found {
-			return picker.ContinueSeries(entry, anchor.Rating), true, nil
-		}
-	}
-
-	return picker.Recommendation{}, false, nil
 }
 
 func handleHealthcheck(w http.ResponseWriter, _ *http.Request) {

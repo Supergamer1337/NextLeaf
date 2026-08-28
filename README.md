@@ -11,11 +11,54 @@ shot. Configured sources are merged, so one pick draws on all of them — and a
 book you've read or are reading in any source is dropped from the pool, even
 if another source still lists it as to-read.
 
+## Series tracking
+
+Every series you read into is remembered, along with how far you got. Finish a
+book and the next one is what you're offered first, whether or not it's on your
+reading list — including a volume published years after you finished the series,
+which is the case a to-read list can't cover. Each recommendation carries three
+decisions:
+
+- **Reading this next** pins the series to the front of the queue until you
+  start that book.
+- **Park for one book** steps over the series once. It comes back as soon as
+  you finish anything else, so a park costs exactly the one instance it says.
+- **Drop this series** retires it: no more continuations, and its books leave
+  the variety pool too. Adding one of its books back to your reading list undoes
+  it.
+
+A side drawer lists every series you're tracking, badged with the backend it
+comes from and how far you've read, with the cover of its next book and
+**Pick this**, **Park** and **Drop** on each row plus the undo that fits its
+state. The pinned series sits on top; series you're caught up with fold into
+a **Finished** group at the bottom and move back out on their own when a new
+book appears. When the same books belong to several series — a franchise and
+its chronological reordering, or two backends naming it differently — a ⇄
+control spins the row in place like a wheel, previewing each identity with
+its own cover, and one pick refiles the series.
+
+Nothing about your series is stored: the view is recomputed from your sources
+on every look, so it follows whatever they say now — renamed series, corrected
+positions, a prequel added behind you. The only thing NextLeaf keeps is what
+you said (park, drop, pin, and which series you meant), anchored to the books
+themselves so a metadata change can never orphan a decision. If a source is
+unreachable, the page shows its last known data and says so.
+
+Books that aren't out yet are never recommended, and novellas at half-positions
+(book 3.5) are offered unless you turn them off. Translations, split editions
+and omnibus bundles are filtered out: Hardcover files all of them at the same
+series position, so NextLeaf picks the one with an English edition.
+
 ![NextLeaf recommending a book in light mode](docs/screenshots/light.png)
-*A variety-weighted pick, and why it was chosen.*
+*Continuing a series: the next book, why it was picked, and the standing
+decisions right on the card.*
 
 ![NextLeaf recommending a book in dark mode](docs/screenshots/dark.png)
-*Dark mode, following the system theme. Any trade-offs of a pick are shown too.*
+*Dark mode, following the system theme.*
+
+![The series drawer](docs/screenshots/drawer.png)
+*The series drawer: everything you're in, badged by backend and position,
+with the pinned series on top.*
 
 ## Configuration
 
@@ -29,6 +72,8 @@ Everything is configured through environment variables. In development a local
 | `GRIMMORY_USERNAME` | *(optional)* | Grimmory account username.                      |
 | `GRIMMORY_PASSWORD` | *(optional)* | Grimmory account password (local login).        |
 | `ADDR`              | `:8080`      | Address the server listens on.                  |
+| `DATA_DIR`          | `.`          | Directory holding the series database.          |
+| `INCLUDE_NOVELLAS`  | `true`       | Offer novellas at half-positions (book 3.5).    |
 
 At least one source is needed for recommendations; without any the app still
 starts and the home page shows a setup hint instead. Grimmory needs all three
@@ -40,6 +85,10 @@ long-lived API keys; NextLeaf logs in and refreshes its session by itself).
 Grimmory covers sit behind its login, so NextLeaf relays them at
 `/cover/grimmory/{id}` — credentials stay server-side and browsers cache the
 images for a day.
+
+Series tracking keeps a small SQLite database in `DATA_DIR` holding only your
+decisions — everything else is recomputed from the sources. Set
+`INCLUDE_NOVELLAS=false` if you'd rather be pointed at book 4 than book 3.5.
 
 ## Deployment
 
@@ -54,12 +103,17 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
+    volumes:
+      - nextleaf-data:/data
     environment:
       HARDCOVER_TOKEN: your-token
       # Or (also works alongside Hardcover):
       # GRIMMORY_URL: https://grimmory.example.com
       # GRIMMORY_USERNAME: your-user
       # GRIMMORY_PASSWORD: your-password
+
+volumes:
+  nextleaf-data:
 ```
 
 ```sh
@@ -71,11 +125,13 @@ A plain `docker run` works just as well:
 ```sh
 docker run -d --name nextleaf --restart unless-stopped \
   -p 8080:8080 -e HARDCOVER_TOKEN=your-token \
+  -v nextleaf-data:/data \
   ghcr.io/supergamer1337/nextleaf:latest
 ```
 
-Either way the app is now at `http://localhost:8080`. There is no state to
-persist, so no volumes are needed. `/healthcheck` returns 200 when the server
+Either way the app is now at `http://localhost:8080`. The volume holds your
+series decisions and reading positions; without it they are lost every time the
+container is replaced. `/healthcheck` returns 200 when the server
 is up, which is handy for a reverse proxy or uptime monitor — but check it
 from outside the container: the image is built `FROM scratch` (just the static
 binary and CA certificates), so there is no shell or curl inside for a
@@ -96,4 +152,5 @@ Tests:
 go test ./...
 ```
 
-For now, NextLeaf uses no external dependencies.
+NextLeaf's only dependency is `modernc.org/sqlite`, a pure-Go SQLite driver, so
+the build stays CGO-free. Everything else is the standard library.

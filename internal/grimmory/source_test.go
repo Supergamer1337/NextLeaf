@@ -26,6 +26,9 @@ const statusFixture = `[
 	{"id":13,"title":"Mystery","readStatus":"SOMETHING_NEW"}
 ]`
 
+// ptr is the address of v, for the optional fields Grimmory may omit.
+func ptr(v float64) *float64 { return &v }
+
 func statusClient(t *testing.T) *Client {
 	t.Helper()
 	f := &fake{books: acceptLatest(statusFixture)}
@@ -140,7 +143,7 @@ func TestMapEntryFullMetadata(t *testing.T) {
 			Description:   "Seven pilgrims journey to the Time Tombs.",
 			PublishedDate: "1989-05-26",
 			SeriesName:    "Hyperion Cantos",
-			SeriesNumber:  1,
+			SeriesNumber:  ptr(1),
 			PageCount:     482,
 			Authors:       []string{"Dan    Simmons "},
 			Categories:    []string{"Science Fiction"},
@@ -157,7 +160,7 @@ func TestMapEntryFullMetadata(t *testing.T) {
 	if b.Description != "Seven pilgrims journey to the Time Tombs." {
 		t.Errorf("Description = %q, want mapped from metadata", b.Description)
 	}
-	if b.Series == nil || b.Series.Name != "Hyperion Cantos" || b.Series.Position != 1 {
+	if b.Series == nil || b.Series.Name != "Hyperion Cantos" || b.Series.Position == nil || *b.Series.Position != 1 {
 		t.Errorf("Series = %+v, want Hyperion Cantos #1", b.Series)
 	}
 	if b.ReleaseYear != 1989 {
@@ -284,7 +287,7 @@ func TestMapEntryStampsProvenance(t *testing.T) {
 	c := New("http://gm.local", "u", "p")
 	e := c.mapEntry(book{ID: 7, Title: "Bare Book"})
 
-	want := library.SourceRef{Name: "grimmory", URL: "http://gm.local/book/7"}
+	want := library.SourceRef{Name: "grimmory", URL: "http://gm.local/book/7", ID: "7"}
 	if len(e.Sources) != 1 || e.Sources[0] != want {
 		t.Errorf("Sources = %v, want [%v]", e.Sources, want)
 	}
@@ -314,7 +317,7 @@ func TestMapEntryURLFallsBackToInstancePage(t *testing.T) {
 
 func TestSeriesNamelessDropped(t *testing.T) {
 	c := New("http://gm.local", "u", "p")
-	e := c.mapEntry(book{Metadata: &metadata{Title: "Solo", SeriesNumber: 3}})
+	e := c.mapEntry(book{Metadata: &metadata{Title: "Solo", SeriesNumber: ptr(3)}})
 	if e.Book.Series != nil {
 		t.Errorf("Series = %+v, want nil when the name is empty", e.Book.Series)
 	}
