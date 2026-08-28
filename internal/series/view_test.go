@@ -513,3 +513,32 @@ func TestAStatementWithDeadAnchorsFallsBackToItsName(t *testing.T) {
 		t.Errorf("Decision = %v, want the drop to survive via its name", g.Decision)
 	}
 }
+
+func TestEachAlternativeCarriesItsOwnProspectiveCover(t *testing.T) {
+	// Two orderings put different books furthest, so each identity has its
+	// own face: the wheel must show what the row would look like if picked.
+	a := library.Entry{Book: library.Book{
+		Title: "Book A", CoverURL: "https://covers.example/a.jpg",
+		Series:      &library.Series{Name: "Chrono", Position: library.At(2), Source: "hardcover"},
+		OtherSeries: []library.Series{{Name: "Published", Position: library.At(1), Source: "hardcover"}},
+	}, Status: library.StatusRead}
+	a.FinishedAt = day0
+	b := library.Entry{Book: library.Book{
+		Title: "Book B", CoverURL: "https://covers.example/b.jpg",
+		Series:      &library.Series{Name: "Chrono", Position: library.At(1), Source: "hardcover"},
+		OtherSeries: []library.Series{{Name: "Published", Position: library.At(2), Source: "hardcover"}},
+	}, Status: library.StatusRead}
+	b.FinishedAt = day0
+
+	v := Compute(Input{Reads: []library.Entry{a, b}, SourceOrder: []string{"hardcover"}})
+	g := groupNamed(t, v, "Chrono")
+	if g.CoverURL != "https://covers.example/a.jpg" {
+		t.Errorf("group cover = %q, want chrono's furthest (Book A)", g.CoverURL)
+	}
+	if len(g.Alternatives) != 1 {
+		t.Fatalf("alternatives = %+v, want Published", g.Alternatives)
+	}
+	if got := g.Alternatives[0].CoverURL; got != "https://covers.example/b.jpg" {
+		t.Errorf("alternative cover = %q, want published's furthest (Book B)", got)
+	}
+}

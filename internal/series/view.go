@@ -58,6 +58,9 @@ type Alternative struct {
 	Source      string
 	Description string
 	Position    *float64
+	// CoverURL is the face the row would wear if tracked under this
+	// identity: the cover of the furthest book read in that ordering.
+	CoverURL string
 }
 
 // View is the computed state of every series the reader has read into.
@@ -131,6 +134,7 @@ func Compute(in Input) View {
 				Source:      out[j].Source,
 				Description: "Tracked separately by " + out[j].Source + ". Switching folds the two rows into one.",
 				Position:    out[j].Position,
+				CoverURL:    out[j].CoverURL,
 			}
 			exists := false
 			for _, alt := range out[i].Alternatives {
@@ -604,11 +608,17 @@ func finish(g *Group, books []*book, prefs picker.Prefs) {
 				if bm.Source == m.Source && key(bm.Name) == key(m.Name) && bm.Position != nil {
 					if at == nil || *bm.Position > *at {
 						at = bm.Position
+						if b.cover != "" {
+							alt.CoverURL = b.cover
+						}
 					}
 				}
 			}
 		}
 		alt.Position = at
+		if alt.CoverURL == "" {
+			alt.CoverURL = g.CoverURL
+		}
 		g.Alternatives = append(g.Alternatives, alt)
 	}
 	sort.SliceStable(g.Alternatives, func(i, j int) bool {

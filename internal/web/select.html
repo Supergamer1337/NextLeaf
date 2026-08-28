@@ -490,6 +490,8 @@
 
       function close() {
         if (!openRow) return;
+        var img = openRow.querySelector("img.drawer-cover");
+        if (img && img.dataset.original) { img.src = img.dataset.original; }
         openRow.classList.remove("spinning");
         drawer.classList.remove("dimmed");
         openRow = null;
@@ -558,6 +560,8 @@
           var cover = row.querySelector("img.drawer-cover");
           var i = 0;
 
+          var originalCover = cover ? cover.src : "";
+
           function fillGhost(ghost, c) {
             ghost.querySelector(".peek-name").textContent = c.name;
             var badges = ghost.querySelectorAll(".peek-badge");
@@ -565,9 +569,11 @@
             badges[0].hidden = !c.source;
             badges[1].textContent = c.pos ? "book " + c.pos : "";
             badges[1].hidden = !c.pos;
+            // Each identity wears the face the row would have if picked.
             var img = ghost.querySelector(".ghost-cover");
-            if (cover) { img.src = cover.src; }
-            img.hidden = !cover;
+            var src = c.cover || originalCover;
+            if (src) { img.src = src; }
+            img.hidden = !src;
             ghost.hidden = false;
           }
 
@@ -583,6 +589,7 @@
             var desc = item.querySelector(".wheel-desc");
             desc.textContent = c.desc;
             desc.hidden = !c.desc;
+            if (cover) { cover.src = c.cover || originalCover; }
             // The wheel loops, so both directions always show where they
             // lead — with two candidates that is the same place, and the
             // same card above and below is the honest picture of a loop.
@@ -612,6 +619,7 @@
           btn.addEventListener("click", function () {
             if (openRow === row) { close(); return; }
             close();
+            if (cover) { cover.dataset.original = originalCover; }
             i = 0;
             render();
             row.classList.add("spinning");
@@ -782,9 +790,9 @@
       </button>
       <button class="switcher-btn" type="button" title="Track under a different series" aria-label="Switch series">⇄</button>
       <div hidden>
-        <span class="wheel-candidate" data-to="" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-desc="Currently tracked."></span>
+        <span class="wheel-candidate" data-to="" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-desc="Currently tracked." data-cover="{{or .NextCoverURL .CoverURL}}"></span>
         {{range .Alternatives}}
-        <span class="wheel-candidate" data-to="{{.Name}}" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-desc="{{.Description}}"></span>
+        <span class="wheel-candidate" data-to="{{.Name}}" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-desc="{{.Description}}" data-cover="{{.CoverURL}}"></span>
         {{end}}
         <form method="post" action="/series/switch" class="wheel-form">
           <input type="hidden" name="name" value="{{$tracked}}">
