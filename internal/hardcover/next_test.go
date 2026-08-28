@@ -578,3 +578,34 @@ func TestSeriesCarryTheirDescriptionAndSource(t *testing.T) {
 		t.Errorf("Source = %q, want hardcover", got.Source)
 	}
 }
+
+func TestAPrequelNovellaAtANegativeHalfSlotIsOffered(t *testing.T) {
+	// Series file prequel novellas below zero; -0.5 is a novella, not a
+	// split edition, and must follow the novella preference.
+	const prequelNovella = `{"data":{"book_series":[
+	  {"position": -0.5, "book": {"title": "The Prequel Novella", "editions": [{"id": 1}], "release_year": 2000,
+	    "book_series": [{"position": -0.5, "featured": true, "series": {"name": "Saga"}}]}},
+	  {"position": 1, "book": {"title": "Volume One", "editions": [{"id": 1}], "release_year": 2001,
+	    "book_series": [{"position": 1, "featured": true, "series": {"name": "Saga"}}]}}
+	]}}`
+	srv := candidateServer(t, prequelNovella)
+	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
+
+	q := library.SeriesQuery{Series: library.Series{Name: "Saga", Position: library.At(-1)}, IncludeNovellas: true}
+	entry, found, err := c.NextInSeries(context.Background(), q)
+	if err != nil || !found {
+		t.Fatalf("NextInSeries = (_, %v, %v), want found", found, err)
+	}
+	if entry.Book.Title != "The Prequel Novella" {
+		t.Errorf("Title = %q, want the prequel novella when novellas are welcome", entry.Book.Title)
+	}
+
+	q.IncludeNovellas = false
+	entry, found, err = c.NextInSeries(context.Background(), q)
+	if err != nil || !found {
+		t.Fatalf("NextInSeries = (_, %v, %v), want found", found, err)
+	}
+	if entry.Book.Title != "Volume One" {
+		t.Errorf("Title = %q, want the novella skipped as a novella, not as a split edition", entry.Book.Title)
+	}
+}

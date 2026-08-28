@@ -222,11 +222,13 @@ func isSplitEdition(pos float64) bool {
 	return f != 0 && f != 0.5
 }
 
-// fraction is the part of a series position after the decimal point, rounded to
-// two places so 1.1 does not arrive as 1.10000000000000009.
+// fraction is the magnitude of a series position's part after the decimal
+// point, rounded to two places so 1.1 does not arrive as 1.10000000000000009.
+// The magnitude, because prequels sit below zero: -0.5 is a novella exactly
+// as 3.5 is.
 func fraction(pos float64) float64 {
 	whole := float64(int64(pos))
-	return math.Round((pos-whole)*100) / 100
+	return math.Abs(math.Round((pos-whole)*100) / 100)
 }
 
 // released reports whether a book is out yet, so an announced sequel is never
