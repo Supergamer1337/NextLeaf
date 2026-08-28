@@ -27,10 +27,15 @@ decisions:
   the variety pool too. Adding one of its books back to your reading list undoes
   it.
 
-A side drawer lists every series you're tracking with the cover of its next
-book, and carries **Pick this** and **Drop** on each row plus the undo that
-fits its state. Series you're caught up with sit in a **Finished** drawer at
-the bottom, and move back out on their own when a new book appears.
+A side drawer lists every series you're tracking, badged with the backend it
+comes from and how far you've read, with the cover of its next book and
+**Pick this**, **Park** and **Drop** on each row plus the undo that fits its
+state. The pinned series sits on top; series you're caught up with fold into
+a **Finished** group at the bottom and move back out on their own when a new
+book appears. When the same books belong to several series — a franchise and
+its chronological reordering, or two backends naming it differently — a ⇄
+control spins the row in place like a wheel, previewing each identity with
+its own cover, and one pick refiles the series.
 
 Nothing about your series is stored: the view is recomputed from your sources
 on every look, so it follows whatever they say now — renamed series, corrected
@@ -45,10 +50,15 @@ and omnibus bundles are filtered out: Hardcover files all of them at the same
 series position, so NextLeaf picks the one with an English edition.
 
 ![NextLeaf recommending a book in light mode](docs/screenshots/light.png)
-*A variety-weighted pick, and why it was chosen.*
+*Continuing a series: the next book, why it was picked, and the standing
+decisions right on the card.*
 
 ![NextLeaf recommending a book in dark mode](docs/screenshots/dark.png)
-*Dark mode, following the system theme. Any trade-offs of a pick are shown too.*
+*Dark mode, following the system theme.*
+
+![The series drawer](docs/screenshots/drawer.png)
+*The series drawer: everything you're in, badged by backend and position,
+with the pinned series on top.*
 
 ## Configuration
 
