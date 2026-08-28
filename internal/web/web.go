@@ -6,7 +6,6 @@ import (
 	"context"
 	"embed"
 	"errors"
-	"fmt"
 	"html/template"
 	"io"
 	"mime"
@@ -50,17 +49,6 @@ var selectFuncs = template.FuncMap{
 			return s[:n]
 		}
 		return s
-	},
-	// anchorID builds a URL-safe, unique id for a row's overlay, so the
-	// overlay can be opened by :target without any script.
-	"anchorID": func(group string, i int) string {
-		var b strings.Builder
-		for _, r := range strings.ToLower(group) {
-			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-				b.WriteRune(r)
-			}
-		}
-		return fmt.Sprintf("switch-%s-%d", b.String(), i)
 	},
 	// dict builds a map for passing several values into a sub-template.
 	"dict": func(pairs ...any) map[string]any {

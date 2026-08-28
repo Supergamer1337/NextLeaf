@@ -353,22 +353,31 @@ func switchSource() stubSource {
 	return stubSource{reads: []library.Entry{book}}
 }
 
-func TestTheSwitcherOpensAnOverlayNamingSourceAndBlurb(t *testing.T) {
+func TestTheSwitcherExpandsInPlaceNamingSourceAndBlurb(t *testing.T) {
 	h := ready(t, switchSource(), testStore(t))
 	body := getBody(t, h, "/")
 
-	i := strings.Index(body, `class="switcher-toggle" href="#`)
+	// The options expand inside the row rather than opening a modal, and the
+	// control is a bare icon: its purpose is told by tooltip and label, not
+	// by permanent text on every row.
+	i := strings.Index(body, `<details class="switcher"`)
 	if i < 0 {
-		t.Fatal("no switch control on a row with alternatives")
+		t.Fatal("no in-place switcher on a row with alternatives")
+	}
+	if openTag, _, _ := strings.Cut(body[i:], ">"); strings.Contains(openTag, " open") {
+		t.Errorf("the switcher starts open: %q", openTag)
+	}
+	if strings.Contains(body, ">Switch series<") {
+		t.Error("the switcher still carries its text label")
+	}
+	if strings.Contains(body, "switch-modal") || strings.Contains(body, "switch-backdrop") {
+		t.Error("modal markup survived the move to in-place expansion")
 	}
 	if !strings.Contains(body, "Published order.") {
-		t.Error("the overlay does not show an alternative's description")
+		t.Error("the options do not show an alternative's description")
 	}
 	if !strings.Contains(body, ">Hardcover<") {
-		t.Error("the overlay does not say which backend an alternative comes from")
-	}
-	if !strings.Contains(body, "switch-backdrop") {
-		t.Error("the overlay cannot be dismissed")
+		t.Error("the options do not say which backend an alternative comes from")
 	}
 }
 
