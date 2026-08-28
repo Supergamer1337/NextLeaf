@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0003
 ---
 
 # Backfill the full read history on first run
@@ -25,3 +25,7 @@ one, so it was rejected.
   disabling series tracking for good.
 - First start is slower and hits the source's API harder than any later start,
   so the calls are throttled.
+
+> Superseded: the backfill existed because history was assumed expensive to
+> fetch. Measurement showed one request per source, so ADR 0003 recomputes the
+> view from full data per request and the import machinery is gone.

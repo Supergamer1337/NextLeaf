@@ -31,10 +31,18 @@ _Avoid_: random pick, reroll, shuffle
 ### Series
 
 **Tracked series**:
-A series NextLeaf remembers across restarts, together with the furthest position
-you have read in it and your standing decision about it. A series becomes
-tracked the moment you read any book in it; you never add one by hand.
+A series you have read into, shown with your progress and standing decision.
+Computed fresh from the sources on every look — never stored — so it follows
+whatever the sources say now. A series becomes tracked the moment you read any
+book in it; you never add one by hand.
 _Avoid_: followed series, subscription, watched series
+
+**Statement**:
+One appended record of something you said: park, drop, pin, clear, or a series
+preference. Statements are the only reader-owned state NextLeaf keeps. They are
+anchored to books, never to series names, and they are never edited — a
+statement simply stops applying when the library outgrows it.
+_Avoid_: record, row, setting, flag
 
 **Position**:
 A book's numbered slot in a series. Series number their volumes as they
@@ -79,12 +87,6 @@ until a new volume appears. Distinct from the series itself being *completed*,
 which is a fact about the author having ended it. The drawer files these under
 "Finished".
 _Avoid_: finished, completed, done, exhausted
-
-**Backfill**:
-The one-time import of your complete read history from every source, run once so
-that series you finished long before installing NextLeaf are tracked. Until it
-finishes, continuations are unavailable and the app says so.
-_Avoid_: sync, initial load, seeding
 
 **Parked**:
 A standing decision to skip one turn of a tracked series: you want to read
