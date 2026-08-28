@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"io"
 	"math/rand"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -19,6 +20,25 @@ import (
 
 //go:embed select.html
 var templateFS embed.FS
+
+//go:embed static
+var staticFS embed.FS
+
+func init() {
+	// Not in Go's built-in table, and browsers reject a manifest served as
+	// text/plain.
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
+
+// markSVG is the masthead logo, inlined from the same file browsers fetch for
+// the tab icon so the two cannot drift apart.
+var markSVG = template.HTML(func() []byte {
+	b, err := staticFS.ReadFile("static/icon.svg")
+	if err != nil {
+		panic(err) // embedded: missing means a broken build, not a runtime fault
+	}
+	return b
+}())
 
 // selectFuncs are template helpers for the selector page.
 var selectFuncs = template.FuncMap{
@@ -38,6 +58,8 @@ var selectFuncs = template.FuncMap{
 		r[0] = unicode.ToUpper(r[0])
 		return string(r)
 	},
+	// mark renders the logo inline, so it inherits the page's theme colour.
+	"mark": func() template.HTML { return markSVG },
 }
 
 var selectTmpl = template.Must(
@@ -59,6 +81,8 @@ func NewHandler(src library.Source) http.Handler {
 	mux.HandleFunc("GET /{$}", s.handleSelect)
 	mux.HandleFunc("GET /cover/{source}/{id}", s.handleCover)
 	mux.HandleFunc("GET /healthcheck", handleHealthcheck)
+	// Paths line up with the embed, so no prefix stripping is needed.
+	mux.Handle("GET /static/", http.FileServerFS(staticFS))
 	return mux
 }
 

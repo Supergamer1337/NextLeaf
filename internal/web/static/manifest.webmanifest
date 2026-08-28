@@ -1,0 +1,13 @@
+{
+  "name": "Nextleaf",
+  "short_name": "Nextleaf",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#eef0e6",
+  "theme_color": "#3f7d54",
+  "icons": [
+    { "src": "/static/icon.svg", "type": "image/svg+xml", "sizes": "any" },
+    { "src": "/static/icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "/static/icon-512.png", "type": "image/png", "sizes": "512x512" }
+  ]
+}

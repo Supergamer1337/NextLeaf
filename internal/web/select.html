@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Nextleaf</title>
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+  <link rel="alternate icon" href="/static/icon-192.png">
+  <link rel="apple-touch-icon" href="/static/icon-180.png">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <meta name="theme-color" content="#3f7d54">
   <script>
     // Apply a saved theme override before first paint to avoid a flash.
     (function () {
@@ -159,10 +164,7 @@
 <body>
   <main class="wrap">
     <header class="masthead">
-      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M12 21c0-6 3-11 9-13-1 8-4 12-9 13Z" fill="currentColor" opacity="0.9"/>
-        <path d="M12 21C7 20 4 16 3 8c6 2 9 7 9 13Z" fill="currentColor" opacity="0.45"/>
-      </svg>
+      {{ mark }}
       <h1>Nextleaf</h1>
       <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch between light and dark">
         <svg viewBox="0 0 24 24" aria-hidden="true">
