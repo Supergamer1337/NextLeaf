@@ -60,6 +60,8 @@ func (r *Refresher) Run(ctx context.Context) {
 			return
 		}
 
+		// worthAsking has already established the series is placed.
+		queried, _ := t.Slot()
 		q := library.SeriesQuery{
 			Series:          library.Series{Name: t.Name, Position: t.Position, Slug: t.Slug},
 			IncludeNovellas: r.includeNovellas,
@@ -77,7 +79,7 @@ func (r *Refresher) Run(ctx context.Context) {
 			log.Printf("series refresh: looking up %q: %v", t.Name, err)
 			continue
 		}
-		if err := r.store.SetNext(ctx, t.Name, t.Position, entry, found, time.Now()); err != nil {
+		if err := r.store.SetNext(ctx, t.Name, queried, entry, found, time.Now()); err != nil {
 			log.Printf("series refresh: recording %q: %v", t.Name, err)
 		}
 	}
@@ -97,13 +99,17 @@ func (r *Refresher) wait(ctx context.Context, d time.Duration) bool {
 }
 
 // worthAsking skips series a lookup could tell us nothing useful about: one the
-// reader dropped, one with no known position, and one the author has ended
+// reader dropped, one they are only unplaced in, and one the author has ended
 // where the reader is already caught up.
+//
+// An unplaced series is deliberately left to the reader's own shelf: asking a
+// catalogue what follows nothing would answer with the series' first volume,
+// which would nag anyone whose source merely lost the position.
 func (r *Refresher) worthAsking(t Tracked) bool {
 	switch {
 	case t.Decision == Dropped:
 		return false
-	case t.Position == 0:
+	case !t.Placed():
 		return false
 	case t.Completed && t.CaughtUp:
 		return false

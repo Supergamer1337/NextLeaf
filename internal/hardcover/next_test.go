@@ -80,7 +80,7 @@ func TestNextInSeriesOffersANovellaWhenTheyAreIncluded(t *testing.T) {
 	srv := candidateServer(t, seriesCandidates)
 	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
 
-	q := library.SeriesQuery{Series: library.Series{Name: "Mistborn", Position: 3}, IncludeNovellas: true}
+	q := library.SeriesQuery{Series: library.Series{Name: "Mistborn", Position: library.At(3)}, IncludeNovellas: true}
 	entry, found, err := c.NextInSeries(context.Background(), q)
 	if err != nil || !found {
 		t.Fatalf("NextInSeries = (_, %v, %v), want found", found, err)
@@ -94,7 +94,7 @@ func TestNextInSeriesSkipsANovellaWhenTheyAreExcluded(t *testing.T) {
 	srv := candidateServer(t, seriesCandidates)
 	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
 
-	q := library.SeriesQuery{Series: library.Series{Name: "Mistborn", Position: 3}, IncludeNovellas: false}
+	q := library.SeriesQuery{Series: library.Series{Name: "Mistborn", Position: library.At(3)}, IncludeNovellas: false}
 	entry, found, err := c.NextInSeries(context.Background(), q)
 	if err != nil || !found {
 		t.Fatalf("NextInSeries = (_, %v, %v), want found", found, err)
@@ -110,7 +110,7 @@ func TestNextInSeriesWithholdsABookThatIsNotOutYet(t *testing.T) {
 
 	// Past book 4, only the unreleased book 5 remains: recommending it would
 	// send the reader after a book they cannot buy.
-	q := library.SeriesQuery{Series: library.Series{Name: "Mistborn", Position: 4}, IncludeNovellas: true}
+	q := library.SeriesQuery{Series: library.Series{Name: "Mistborn", Position: library.At(4)}, IncludeNovellas: true}
 	_, found, err := c.NextInSeries(context.Background(), q)
 	if err != nil {
 		t.Fatalf("NextInSeries: %v", err)
@@ -124,7 +124,7 @@ func TestNextInSeriesCarriesSeriesIdentityAndReleaseDate(t *testing.T) {
 	srv := candidateServer(t, seriesCandidates)
 	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
 
-	q := library.SeriesQuery{Series: library.Series{Name: "Mistborn", Position: 3}, IncludeNovellas: true}
+	q := library.SeriesQuery{Series: library.Series{Name: "Mistborn", Position: library.At(3)}, IncludeNovellas: true}
 	entry, found, err := c.NextInSeries(context.Background(), q)
 	if err != nil || !found {
 		t.Fatalf("NextInSeries = (_, %v, %v), want found", found, err)
@@ -179,7 +179,7 @@ func TestNextInSeriesSkipsHalvesOfABookAlreadyRead(t *testing.T) {
 
 	// Book 1 split into parts is not a next read, whatever the novella
 	// preference says; only a genuine half-position volume is.
-	q := library.SeriesQuery{Series: library.Series{Name: "The Wheel of Time", Position: 1}, IncludeNovellas: true}
+	q := library.SeriesQuery{Series: library.Series{Name: "The Wheel of Time", Position: library.At(1)}, IncludeNovellas: true}
 	entry, found, err := c.NextInSeries(context.Background(), q)
 	if err != nil || !found {
 		t.Fatalf("NextInSeries = (_, %v, %v), want found", found, err)
@@ -193,7 +193,7 @@ func TestNextInSeriesSkipsSplitEditionsAndNovellasTogether(t *testing.T) {
 	srv := candidateServer(t, splitEditions)
 	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
 
-	q := library.SeriesQuery{Series: library.Series{Name: "The Wheel of Time", Position: 1}, IncludeNovellas: false}
+	q := library.SeriesQuery{Series: library.Series{Name: "The Wheel of Time", Position: library.At(1)}, IncludeNovellas: false}
 	entry, found, err := c.NextInSeries(context.Background(), q)
 	if err != nil || !found {
 		t.Fatalf("NextInSeries = (_, %v, %v), want found", found, err)
@@ -217,7 +217,7 @@ func TestNextInSeriesAsksOnlyForTheCanonicalBookAtEachPosition(t *testing.T) {
 	defer srv.Close()
 
 	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
-	q := library.SeriesQuery{Series: library.Series{Name: "The Wheel of Time", Position: 1}}
+	q := library.SeriesQuery{Series: library.Series{Name: "The Wheel of Time", Position: library.At(1)}}
 	if _, _, err := c.NextInSeries(context.Background(), q); err != nil {
 		t.Fatalf("NextInSeries: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestNextInSeriesPrefersTheEnglishEditionOverTranslations(t *testing.T) {
 
 	// Every translation shares the position and is flagged featured, so only
 	// the edition's language tells them apart.
-	q := library.SeriesQuery{Series: library.Series{Name: "The Empyrean", Position: 2}, IncludeNovellas: true}
+	q := library.SeriesQuery{Series: library.Series{Name: "The Empyrean", Position: library.At(2)}, IncludeNovellas: true}
 	entry, found, err := c.NextInSeries(context.Background(), q)
 	if err != nil || !found {
 		t.Fatalf("NextInSeries = (_, %v, %v), want found", found, err)
@@ -270,7 +270,7 @@ func TestNextInSeriesPrefersASingleNovelOverAnOmnibus(t *testing.T) {
 	srv := candidateServer(t, omnibusOnly)
 	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
 
-	q := library.SeriesQuery{Series: library.Series{Name: "Dune", Position: 1}, IncludeNovellas: true}
+	q := library.SeriesQuery{Series: library.Series{Name: "Dune", Position: library.At(1)}, IncludeNovellas: true}
 	entry, found, err := c.NextInSeries(context.Background(), q)
 	if err != nil || !found {
 		t.Fatalf("NextInSeries = (_, %v, %v), want found", found, err)
@@ -297,7 +297,7 @@ func TestNextInSeriesPassesOverAPositionWithNoEditionItCanRead(t *testing.T) {
 	srv := candidateServer(t, noEnglishEdition)
 	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
 
-	q := library.SeriesQuery{Series: library.Series{Name: "Middle Earth", Position: 1}, IncludeNovellas: true}
+	q := library.SeriesQuery{Series: library.Series{Name: "Middle Earth", Position: library.At(1)}, IncludeNovellas: true}
 	entry, found, err := c.NextInSeries(context.Background(), q)
 	if err != nil || !found {
 		t.Fatalf("NextInSeries = (_, %v, %v), want found", found, err)
@@ -315,7 +315,7 @@ func TestNextInSeriesOffersNothingWhenNoPositionHasAReadableEdition(t *testing.T
 	srv := candidateServer(t, translationsOnly)
 	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
 
-	q := library.SeriesQuery{Series: library.Series{Name: "Middle Earth", Position: 1}, IncludeNovellas: true}
+	q := library.SeriesQuery{Series: library.Series{Name: "Middle Earth", Position: library.At(1)}, IncludeNovellas: true}
 	_, found, err := c.NextInSeries(context.Background(), q)
 	if err != nil {
 		t.Fatalf("NextInSeries: %v", err)
@@ -335,7 +335,7 @@ func TestNextInSeriesSkipsAnUnnamedAnnouncement(t *testing.T) {
 	srv := candidateServer(t, untitled)
 	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
 
-	q := library.SeriesQuery{Series: library.Series{Name: "The Empyrean", Position: 3}, IncludeNovellas: true}
+	q := library.SeriesQuery{Series: library.Series{Name: "The Empyrean", Position: library.At(3)}, IncludeNovellas: true}
 	entry, found, err := c.NextInSeries(context.Background(), q)
 	if err != nil || !found {
 		t.Fatalf("NextInSeries = (_, %v, %v), want found", found, err)
@@ -406,7 +406,7 @@ func TestNextInSeriesPagesPastAWallOfUnreadableRows(t *testing.T) {
 	srv := api.server(t)
 
 	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
-	q := library.SeriesQuery{Series: library.Series{Name: "Paged", Position: 1}, IncludeNovellas: true}
+	q := library.SeriesQuery{Series: library.Series{Name: "Paged", Position: library.At(1)}, IncludeNovellas: true}
 	entry, found, err := c.NextInSeries(context.Background(), q)
 	if err != nil || !found {
 		t.Fatalf("NextInSeries = (_, %v, %v), want the book on the second page", found, err)
@@ -430,7 +430,7 @@ func TestNextInSeriesReportsAnErrorAtThePageBoundNotACaughtUpSeries(t *testing.T
 	srv := api.server(t)
 
 	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
-	q := library.SeriesQuery{Series: library.Series{Name: "Paged", Position: 1}, IncludeNovellas: true}
+	q := library.SeriesQuery{Series: library.Series{Name: "Paged", Position: library.At(1)}, IncludeNovellas: true}
 	_, found, err := c.NextInSeries(context.Background(), q)
 	if err == nil {
 		t.Fatalf("err = nil (found=%v), want an error once the page bound is hit", found)
@@ -444,7 +444,7 @@ func TestNextInSeriesStillReportsExhaustionAsNoContinuation(t *testing.T) {
 	srv := api.server(t)
 
 	c := New("tok", WithEndpoint(srv.URL), withClock(on2026))
-	q := library.SeriesQuery{Series: library.Series{Name: "Paged", Position: 1}, IncludeNovellas: true}
+	q := library.SeriesQuery{Series: library.Series{Name: "Paged", Position: library.At(1)}, IncludeNovellas: true}
 	_, found, err := c.NextInSeries(context.Background(), q)
 	if err != nil {
 		t.Fatalf("NextInSeries: %v", err)

@@ -14,7 +14,7 @@ import (
 // readEntry is a finished book at a position in a series.
 func readEntry(name string, pos float64) library.Entry {
 	return library.Entry{
-		Book:   library.Book{Title: name + " " + formatPos(pos), Series: &library.Series{Name: name, Position: pos}},
+		Book:   library.Book{Title: name + " " + formatPos(pos), Series: &library.Series{Name: name, Position: library.At(pos)}},
 		Status: library.StatusRead,
 	}
 }
@@ -48,7 +48,7 @@ func TestReconcileTracksSeriesFromReads(t *testing.T) {
 	if tracked[0].Name != "Mistborn" {
 		t.Errorf("Name = %q, want %q", tracked[0].Name, "Mistborn")
 	}
-	if tracked[0].Position != 3 {
+	if pos, _ := tracked[0].Slot(); pos != 3 {
 		t.Errorf("Position = %v, want 3", tracked[0].Position)
 	}
 	if tracked[0].Decision != Active {
@@ -73,7 +73,7 @@ func TestReconcileKeepsFurthestPositionRead(t *testing.T) {
 	if len(tracked) != 1 {
 		t.Fatalf("got %d tracked series, want 1 (both books are one series)", len(tracked))
 	}
-	if tracked[0].Position != 5 {
+	if pos, _ := tracked[0].Slot(); pos != 5 {
 		t.Errorf("Position = %v, want 5", tracked[0].Position)
 	}
 }
@@ -130,7 +130,7 @@ func TestSeriesNamesMatchCaseInsensitively(t *testing.T) {
 	if len(tracked) != 1 {
 		t.Fatalf("got %d tracked series, want 1", len(tracked))
 	}
-	if tracked[0].Position != 2 {
+	if pos, _ := tracked[0].Slot(); pos != 2 {
 		t.Errorf("Position = %v, want 2", tracked[0].Position)
 	}
 }
@@ -184,7 +184,7 @@ func TestSeriesIdentityHintsAreNotErasedBySourcesThatLackThem(t *testing.T) {
 func nextBook(title string) library.Entry {
 	return library.Entry{Book: library.Book{
 		Title:    title,
-		Series:   &library.Series{Name: "Mistborn", Position: 4},
+		Series:   &library.Series{Name: "Mistborn", Position: library.At(4)},
 		CoverURL: "https://covers.example/" + title + ".jpg",
 		URL:      "https://hardcover.app/books/" + title,
 	}}

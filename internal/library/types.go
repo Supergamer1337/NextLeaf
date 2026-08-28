@@ -23,10 +23,30 @@ const (
 // source can supply, so it is what NextLeaf matches on; Slug and Completed are
 // hints a richer source may add (see CONTEXT.md).
 type Series struct {
-	Name      string
-	Position  float64
+	Name string
+	// Position is the book's numbered slot, or nil when the book is unplaced:
+	// it belongs to the series without occupying a slot. That is a different
+	// thing from a position of 0, since series really do number prequels 0 or
+	// below, and it is also what a source reports when it simply does not know.
+	Position  *float64
 	Slug      string // source-specific series identifier; "" if unknown
 	Completed bool   // the series is finished, so no later book can appear
+}
+
+// At returns a position for a book that occupies a numbered slot. Any number is
+// valid, including zero and negatives.
+func At(pos float64) *float64 { return &pos }
+
+// Placed reports whether the book occupies a numbered slot in its series.
+func (s Series) Placed() bool { return s.Position != nil }
+
+// Slot returns the book's numbered position, and whether it has one. Callers
+// that order books must respect ok: an unplaced book sorts nowhere.
+func (s Series) Slot() (float64, bool) {
+	if s.Position == nil {
+		return 0, false
+	}
+	return *s.Position, true
 }
 
 // SeriesQuery asks a SeriesResolver for the book following a position, carrying

@@ -43,7 +43,8 @@ func NewLookahead(resolver library.SeriesResolver, ttl time.Duration) *Lookahead
 func (l *Lookahead) Next(ctx context.Context, q library.SeriesQuery) (library.Entry, bool, error) {
 	// The position is part of the key, so finishing a book asks a new question
 	// rather than reading back the answer for the previous one.
-	k := key(q.Series.Name) + "\x00" + formatPos(q.Series.Position)
+	pos, _ := q.Series.Slot()
+	k := key(q.Series.Name) + "\x00" + formatPos(pos)
 
 	l.mu.Lock()
 	cached, ok := l.answers[k]

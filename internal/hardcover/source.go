@@ -82,15 +82,17 @@ const (
 // It satisfies library.SeriesResolver.
 func (c *Client) NextInSeries(ctx context.Context, q library.SeriesQuery) (library.Entry, bool, error) {
 	s := q.Series
-	// A missing name or unknown position (0) has no well-defined "next".
-	if s.Name == "" || s.Position == 0 {
+	// An unplaced book says nothing about what follows it, and a catalogue
+	// asked "what comes after nothing" would answer with the series' first
+	// volume — which would nag a reader who has in fact finished it.
+	after, placed := s.Slot()
+	if s.Name == "" || !placed {
 		return library.Entry{}, false, nil
 	}
 
 	// Filtering happens after the fetch, so a page can be consumed entirely by
 	// translations and split editions. Page until the source runs dry rather
 	// than mistaking a truncated read for the end of the series.
-	after := s.Position
 	for page := 0; page < maxSeriesPages; page++ {
 		rows, err := c.seriesPage(ctx, s.Name, after)
 		if err != nil {
@@ -446,15 +448,14 @@ func series(b bookData) *library.Series {
 	if chosen.Series == nil || chosen.Series.Name == "" {
 		return nil
 	}
-	s := &library.Series{
+	// A nil position is left nil: the book belongs to the series without
+	// occupying a numbered slot.
+	return &library.Series{
 		Name:      chosen.Series.Name,
 		Slug:      chosen.Series.Slug,
 		Completed: chosen.Series.Completed,
+		Position:  chosen.Position,
 	}
-	if chosen.Position != nil {
-		s.Position = *chosen.Position
-	}
-	return s
 }
 
 // tagCategory extracts one category's tag names (e.g. "Genre", "Mood") from

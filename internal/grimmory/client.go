@@ -254,7 +254,7 @@ type metadata struct {
 	Description    string   `json:"description"`
 	PublishedDate  string   `json:"publishedDate"` // "2006-01-02"
 	SeriesName     string   `json:"seriesName"`
-	SeriesNumber   float64  `json:"seriesNumber"`
+	SeriesNumber   *float64 `json:"seriesNumber"`
 	PageCount      int      `json:"pageCount"`
 	Authors        []string `json:"authors"`
 	Categories     []string `json:"categories"`

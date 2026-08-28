@@ -27,7 +27,7 @@ func equal(a, b []string) bool {
 }
 
 func TestOrderPutsMostRecentlyFinishedSeriesFirst(t *testing.T) {
-	tracked := []Tracked{{Name: "Mistborn", Position: 3}, {Name: "Wheel of Time", Position: 1}}
+	tracked := []Tracked{{Name: "Mistborn", Position: library.At(3)}, {Name: "Wheel of Time", Position: library.At(1)}}
 	reads := []library.Entry{finished("Wheel of Time", 1, day2), finished("Mistborn", 3, day0)}
 
 	got := names(Order(tracked, reads, nil))
@@ -38,8 +38,8 @@ func TestOrderPutsMostRecentlyFinishedSeriesFirst(t *testing.T) {
 
 func TestOrderPutsAPinnedSeriesAboveEverything(t *testing.T) {
 	tracked := []Tracked{
-		{Name: "Mistborn", Position: 3, Decision: Pinned, PinnedPosition: 4},
-		{Name: "Wheel of Time", Position: 1},
+		{Name: "Mistborn", Position: library.At(3), Decision: Pinned, PinnedPosition: 4},
+		{Name: "Wheel of Time", Position: library.At(1)},
 	}
 	// Wheel of Time was finished more recently, but the pin outranks that.
 	reads := []library.Entry{finished("Wheel of Time", 1, day2), finished("Mistborn", 3, day0)}
@@ -52,9 +52,9 @@ func TestOrderPutsAPinnedSeriesAboveEverything(t *testing.T) {
 
 func TestOrderExcludesParkedAndDroppedSeries(t *testing.T) {
 	tracked := []Tracked{
-		{Name: "Dune", Position: 1, Decision: Dropped},
-		{Name: "Mistborn", Position: 3, Decision: Parked},
-		{Name: "Wheel of Time", Position: 1},
+		{Name: "Dune", Position: library.At(1), Decision: Dropped},
+		{Name: "Mistborn", Position: library.At(3), Decision: Parked},
+		{Name: "Wheel of Time", Position: library.At(1)},
 	}
 	reads := []library.Entry{finished("Mistborn", 3, day2), finished("Dune", 1, day1), finished("Wheel of Time", 1, day0)}
 
@@ -67,7 +67,7 @@ func TestOrderExcludesParkedAndDroppedSeries(t *testing.T) {
 func TestOrderKeepsSeriesOutsideTheRecentWindowAsNewReleaseCandidates(t *testing.T) {
 	// Stormlight was finished years ago and is nowhere in the recent reads, but
 	// a new book could still have come out; it ranks below anything current.
-	tracked := []Tracked{{Name: "Stormlight", Position: 4}, {Name: "Mistborn", Position: 3}}
+	tracked := []Tracked{{Name: "Stormlight", Position: library.At(4)}, {Name: "Mistborn", Position: library.At(3)}}
 	reads := []library.Entry{finished("Mistborn", 3, day0)}
 
 	got := names(Order(tracked, reads, nil))
@@ -79,7 +79,7 @@ func TestOrderKeepsSeriesOutsideTheRecentWindowAsNewReleaseCandidates(t *testing
 func TestOrderRanksAnInProgressSeriesBelowAFinishedOne(t *testing.T) {
 	// A book you are already holding needs no recommendation, so a series you
 	// merely have open ranks under one you just finished.
-	tracked := []Tracked{{Name: "Mistborn", Position: 3}, {Name: "Wheel of Time", Position: 1}}
+	tracked := []Tracked{{Name: "Mistborn", Position: library.At(3)}, {Name: "Wheel of Time", Position: library.At(1)}}
 	reads := []library.Entry{finished("Wheel of Time", 1, day0)}
 	reading := []library.Entry{readEntry("Mistborn", 4)}
 

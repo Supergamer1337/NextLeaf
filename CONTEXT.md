@@ -36,6 +36,19 @@ you have read in it and your standing decision about it. A series becomes
 tracked the moment you read any book in it; you never add one by hand.
 _Avoid_: followed series, subscription, watched series
 
+**Position**:
+A book's numbered slot in a series. Series number their volumes as they
+please: halves for novellas, zero or negative numbers for prequels. A position
+is therefore any number, and "no position" is not one of them.
+_Avoid_: index, order, number, volume
+
+**Unplaced**:
+Belonging to a series without occupying a numbered slot — a prequel, a
+companion volume, or simply a book whose source never said where it sits. An
+unplaced book cannot say what follows it, so it anchors nothing; the series can
+still be continued from volumes on the reader's own shelf.
+_Avoid_: position zero, unnumbered, missing position
+
 **Anchor**:
 The read or in-progress book that decides which series is up for continuation,
 and whose position defines what "next" means.

@@ -37,21 +37,30 @@ type Recommendation struct {
 // its last-read Position, so the caller can continue without hitting the
 // provider. ok is false when no later book is on the shelf.
 func NextOnShelves(series library.Series, toRead []library.Entry, prefs Prefs) (library.Entry, bool) {
+	// An unplaced anchor gives nothing to count from, so every shelved volume
+	// is still ahead of the reader: the earliest one is the answer.
+	anchor, placed := series.Slot()
+
 	var next library.Entry
+	var nextPos float64
 	found := false
 	for _, e := range toRead {
 		s := e.Book.Series
 		if s == nil || !strings.EqualFold(s.Name, series.Name) {
 			continue
 		}
-		if s.Position <= series.Position {
+		pos, ok := s.Slot()
+		if !ok {
+			continue // an unplaced volume cannot be shown to come next
+		}
+		if placed && pos <= anchor {
 			continue
 		}
-		if !prefs.IncludeNovellas && isNovella(s.Position) {
+		if !prefs.IncludeNovellas && isNovella(pos) {
 			continue
 		}
-		if !found || s.Position < next.Book.Series.Position {
-			next, found = e, true
+		if !found || pos < nextPos {
+			next, nextPos, found = e, pos, true
 		}
 	}
 	return next, found
@@ -67,8 +76,8 @@ func ContinueSeries(e library.Entry, lastRating float64) Recommendation {
 		return r
 	}
 	pro := "Continues " + e.Book.Series.Name
-	if e.Book.Series.Position != 0 {
-		pro += " — book " + formatPos(e.Book.Series.Position)
+	if pos, ok := e.Book.Series.Slot(); ok {
+		pro += " — book " + formatPos(pos)
 	}
 	if lastRating > 0 {
 		pro += fmt.Sprintf(" (you rated the last one %s★)", formatRating(lastRating))
@@ -118,22 +127,31 @@ func Pick(rng *rand.Rand, prefs Prefs, candidates, recent, reading []library.Ent
 func collapseSeries(candidates []library.Entry, prefs Prefs) []library.Entry {
 	out := make([]library.Entry, 0, len(candidates))
 	bySeries := make(map[string]int)
+	positions := make(map[string]float64)
 	for _, e := range candidates {
 		s := e.Book.Series
-		if s == nil || s.Name == "" || s.Position <= 0 {
+		// An unplaced volume cannot be ordered against its siblings, so it
+		// competes on its own rather than standing for the whole series.
+		if s == nil || s.Name == "" {
 			out = append(out, e)
 			continue
 		}
-		if !prefs.IncludeNovellas && isNovella(s.Position) {
+		pos, placed := s.Slot()
+		if !placed {
+			out = append(out, e)
+			continue
+		}
+		if !prefs.IncludeNovellas && isNovella(pos) {
 			continue
 		}
 		key := strings.ToLower(s.Name)
 		if i, ok := bySeries[key]; ok {
-			if s.Position < out[i].Book.Series.Position {
-				out[i] = e
+			if pos < positions[key] {
+				out[i], positions[key] = e, pos
 			}
 			continue
 		}
+		positions[key] = pos
 		bySeries[key] = len(out)
 		out = append(out, e)
 	}

@@ -38,7 +38,7 @@ func TestAsSeriesResolverSeesThroughCache(t *testing.T) {
 	if !ok {
 		t.Fatal("AsSeriesResolver should see through Cached to a capable source")
 	}
-	entry, found, err := r.NextInSeries(context.Background(), SeriesQuery{Series: Series{Name: "S", Position: 1}})
+	entry, found, err := r.NextInSeries(context.Background(), SeriesQuery{Series: Series{Name: "S", Position: At(1)}})
 	if err != nil || !found || entry.Book.Title != "Book 2" {
 		t.Errorf("NextInSeries = (%+v, %v, %v), want Book 2/true/nil", entry, found, err)
 	}

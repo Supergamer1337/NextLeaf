@@ -31,6 +31,15 @@ func quick(r *Refresher) *Refresher {
 	return r
 }
 
+// unplacedEntry is a finished book that belongs to a series without occupying
+// a numbered slot in it, as a prequel or companion volume does.
+func unplacedEntry(name string) library.Entry {
+	return library.Entry{
+		Book:   library.Book{Title: name + " (unplaced)", Series: &library.Series{Name: name}},
+		Status: library.StatusRead,
+	}
+}
+
 func trackedStore(t *testing.T, reads ...library.Entry) *Store {
 	t.Helper()
 	st := openStore(t)
@@ -93,7 +102,12 @@ func TestRefreshLeavesTheOtherSeriesAloneWhenOneLookupFails(t *testing.T) {
 
 func TestRefreshDoesNotAskAboutSeriesThatCannotHaveANextBook(t *testing.T) {
 	ctx := context.Background()
-	st := trackedStore(t, readEntry("Mistborn", 3), readEntry("Dune", 1), readEntry("Unknown", 0))
+	st := trackedStore(t,
+		readEntry("Mistborn", 3),
+		readEntry("Dune", 1),
+		unplacedEntry("The Lord of the Rings"),
+		readEntry("Prequel First", 0),
+	)
 	if err := st.Drop(ctx, "Dune", day0); err != nil {
 		t.Fatalf("Drop: %v", err)
 	}
@@ -101,16 +115,24 @@ func TestRefreshDoesNotAskAboutSeriesThatCannotHaveANextBook(t *testing.T) {
 
 	quick(NewRefresher(st, NewLookahead(r, 0), true)).Run(ctx)
 
+	asked := map[string]bool{}
 	for _, name := range r.asked {
-		if name == "Dune" {
-			t.Error("asked about a dropped series")
-		}
-		if name == "Unknown" {
-			t.Error("asked about a series with no known position")
-		}
+		asked[name] = true
 	}
-	if len(r.asked) != 1 {
-		t.Errorf("asked about %v, want only Mistborn", r.asked)
+	if asked["Dune"] {
+		t.Error("asked about a dropped series")
+	}
+	// An unplaced book says nothing about what follows it, so there is no
+	// question to put to the catalogue.
+	if asked["The Lord of the Rings"] {
+		t.Error("asked about a series the reader is only unplaced in")
+	}
+	// Position zero is a real slot, though — series number prequels that way.
+	if !asked["Prequel First"] {
+		t.Error("skipped a series read to position zero, which is a real position")
+	}
+	if !asked["Mistborn"] {
+		t.Error("skipped an ordinary placed series")
 	}
 }
 
@@ -118,8 +140,8 @@ func TestOrderLeavesOutSeriesTheReaderIsCaughtUpWith(t *testing.T) {
 	// Nothing left to read means nothing to recommend; the drawer lists it
 	// under Finished instead.
 	tracked := []Tracked{
-		{Name: "Mistborn", Position: 3, CaughtUp: true},
-		{Name: "Stormlight", Position: 4},
+		{Name: "Mistborn", Position: library.At(3), CaughtUp: true},
+		{Name: "Stormlight", Position: library.At(4)},
 	}
 	got := names(Order(tracked, nil, nil))
 	if len(got) != 1 || got[0] != "Stormlight" {

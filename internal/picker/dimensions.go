@@ -320,7 +320,7 @@ func seriesDim(cand library.Entry, p profile) Verdict {
 	if s == nil {
 		return Verdict{Weight: standaloneBoost, Pro: "A standalone, after a long series run"}
 	}
-	if !strings.EqualFold(s.Name, p.seriesName) && s.Position != 0 && s.Position <= 1 {
+	if pos, ok := s.Slot(); !strings.EqualFold(s.Name, p.seriesName) && ok && pos <= 1 {
 		return Verdict{Weight: seriesNewDamp, Con: "Starts a new series right after a long run"}
 	}
 	return Verdict{Weight: 1}

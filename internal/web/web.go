@@ -390,18 +390,18 @@ func (s *server) continueSeries(ctx context.Context, tracked []series.Tracked, r
 
 	lookups := 0
 	for _, t := range series.Order(tracked, reads, reading) {
-		// Without a known position there is no well-defined "next".
-		if t.Position == 0 {
-			continue
-		}
 		target := library.Series{Name: t.Name, Position: t.Position, Slug: t.Slug, Completed: t.Completed}
 
+		// The shelf can answer even for an unplaced series: books the reader
+		// put there are evidence of intent, so the earliest is next.
 		if entry, ok := picker.NextOnShelves(target, toRead, s.prefs); ok {
 			return picker.ContinueSeries(entry, lastRating(t.Name, reads)), t, true, nil
 		}
 
-		// A finished series can never gain a book, so it is worth no lookup.
-		if s.lookahead == nil || t.Completed || lookups >= maxSeriesLookups {
+		// A catalogue cannot: asked what follows nothing it would answer with
+		// the series' first volume. A finished series can never gain a book,
+		// so it is worth no lookup either.
+		if s.lookahead == nil || !t.Placed() || t.Completed || lookups >= maxSeriesLookups {
 			continue
 		}
 		lookups++
@@ -460,7 +460,7 @@ func trackedFor(rec picker.Recommendation, tracked []series.Tracked) (series.Tra
 		return series.Tracked{}, false
 	}
 	for _, t := range tracked {
-		if series.Key(t.Name) == series.Key(rec.Entry.Book.Series.Name) && t.Position > 0 {
+		if series.Key(t.Name) == series.Key(rec.Entry.Book.Series.Name) {
 			return t, true
 		}
 	}

@@ -13,7 +13,12 @@ func book(title string, genres, authors []string) library.Book {
 }
 
 func seriesBook(title, series string, pos float64) library.Book {
-	return library.Book{Title: title, Series: &library.Series{Name: series, Position: pos}}
+	return library.Book{Title: title, Series: &library.Series{Name: series, Position: library.At(pos)}}
+}
+
+// unplacedBook belongs to a series without occupying a numbered slot.
+func unplacedBook(title, series string) library.Book {
+	return library.Book{Title: title, Series: &library.Series{Name: series}}
 }
 
 func TestPickEmptyCandidates(t *testing.T) {
@@ -99,16 +104,17 @@ func TestCollapseSeries(t *testing.T) {
 		{Book: seriesBook("Vol 5", "Saga", 5)},
 		{Book: book("Standalone", nil, nil)},
 		{Book: seriesBook("Vol 3", "Saga", 3)},
-		{Book: seriesBook("Unknown Pos", "Saga", 0)},
+		{Book: unplacedBook("Unplaced", "Saga")},
 		{Book: seriesBook("Other 1", "other saga", 1)},
 		{Book: seriesBook("Other 2", "OTHER SAGA", 2)},
 	}
 
 	got := collapseSeries(entries, Prefs{IncludeNovellas: true})
 
-	// Saga is one candidate (its earliest volume), position-0 and standalones
-	// pass through, and grouping is case-insensitive. Original order is kept.
-	want := []string{"Vol 3", "Standalone", "Unknown Pos", "Other 1"}
+	// Saga is one candidate (its earliest volume). An unplaced volume cannot be
+	// ordered against its siblings, so it competes on its own, as standalones
+	// do. Grouping is case-insensitive, and the original order is kept.
+	want := []string{"Vol 3", "Standalone", "Unplaced", "Other 1"}
 	if len(got) != len(want) {
 		t.Fatalf("titles = %v, want %v", entryTitles(got), want)
 	}
@@ -181,7 +187,7 @@ func TestNextOnShelvesFindsEarliestLaterBook(t *testing.T) {
 		{Book: seriesBook("Book 3", "Broken Earth", 3)},
 		{Book: seriesBook("Other", "Different", 1)},
 	}
-	got, ok := NextOnShelves(library.Series{Name: "Broken Earth", Position: 2}, toRead, Prefs{IncludeNovellas: true})
+	got, ok := NextOnShelves(library.Series{Name: "Broken Earth", Position: library.At(2)}, toRead, Prefs{IncludeNovellas: true})
 	if !ok || got.Book.Title != "Book 3" {
 		t.Errorf("NextOnShelves = (%q, %v), want Book 3", got.Book.Title, ok)
 	}
@@ -189,7 +195,7 @@ func TestNextOnShelvesFindsEarliestLaterBook(t *testing.T) {
 
 func TestNextOnShelvesAbsent(t *testing.T) {
 	toRead := []library.Entry{{Book: seriesBook("Book 1", "Broken Earth", 1)}}
-	if _, ok := NextOnShelves(library.Series{Name: "Broken Earth", Position: 2}, toRead, Prefs{IncludeNovellas: true}); ok {
+	if _, ok := NextOnShelves(library.Series{Name: "Broken Earth", Position: library.At(2)}, toRead, Prefs{IncludeNovellas: true}); ok {
 		t.Error("NextOnShelves should be false when no later book is on the shelf")
 	}
 }

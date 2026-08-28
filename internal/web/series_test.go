@@ -336,7 +336,7 @@ func caughtUpStore(t *testing.T) *series.Store {
 	}
 	next := library.Entry{Book: library.Book{
 		Title:    "The Alloy of Law",
-		Series:   &library.Series{Name: "Mistborn", Position: 4},
+		Series:   &library.Series{Name: "Mistborn", Position: library.At(4)},
 		CoverURL: "https://covers.example/alloy.jpg",
 	}}
 	if err := st.SetNext(ctx, "Mistborn", 3, next, true, time.Now()); err != nil {
@@ -567,7 +567,7 @@ func TestTheNextBooksCoverWinsOverTheSeriesOwn(t *testing.T) {
 	}
 	next := library.Entry{Book: library.Book{
 		Title:    "The Alloy of Law",
-		Series:   &library.Series{Name: "Mistborn", Position: 4},
+		Series:   &library.Series{Name: "Mistborn", Position: library.At(4)},
 		CoverURL: "https://covers.example/next.jpg",
 	}}
 	if err := st.SetNext(ctx, "Mistborn", 3, next, true, time.Now()); err != nil {
@@ -580,5 +580,83 @@ func TestTheNextBooksCoverWinsOverTheSeriesOwn(t *testing.T) {
 	}
 	if strings.Contains(body, "read.jpg") {
 		t.Error("the already-read cover is shown alongside the next book")
+	}
+}
+
+func TestAnUnplacedAnchorStillContinuesFromTheShelf(t *testing.T) {
+	// The Hobbit belongs to The Lord of the Rings without a number of its own,
+	// yet all three volumes sit on the shelf: the earliest is plainly next.
+	hobbit := library.Entry{Book: library.Book{
+		Title:  "The Hobbit",
+		Series: &library.Series{Name: "The Lord of the Rings"},
+	}}
+	hobbit.FinishedAt = time.Now().Add(-24 * time.Hour)
+	src := stubSource{
+		reads: []library.Entry{hobbit},
+		toRead: []library.Entry{
+			seriesEntry("The Two Towers", "The Lord of the Rings", 2),
+			seriesEntry("The Fellowship of the Ring", "The Lord of the Rings", 1),
+		},
+	}
+
+	body := getBody(t, ready(t, src, testStore(t)), "/")
+	if !strings.Contains(body, "The Fellowship of the Ring") {
+		t.Errorf("an unplaced anchor blocked a continuation its shelf could answer:\n%s", body)
+	}
+}
+
+func TestAnUnplacedSeriesIsNotAskedOfTheCatalogue(t *testing.T) {
+	// Asking "what follows nothing" returns the series' first volume, which
+	// would nag a reader whose source merely lost the position.
+	hobbit := library.Entry{Book: library.Book{
+		Title:  "The Hobbit",
+		Series: &library.Series{Name: "The Lord of the Rings"},
+	}}
+	hobbit.FinishedAt = time.Now().Add(-24 * time.Hour)
+	src := &countingResolver{stubSource: stubSource{
+		reads:  []library.Entry{hobbit},
+		toRead: []library.Entry{{Book: library.Book{Title: "Standalone"}}},
+	}}
+
+	getBody(t, ready(t, src, testStore(t)), "/")
+	if src.calls != 0 {
+		t.Errorf("asked the catalogue about an unplaced series %d times, want 0", src.calls)
+	}
+}
+
+func TestPositionsRenderAsNumbersNotPointers(t *testing.T) {
+	st := testStore(t)
+	read := seriesEntry("Book 3", "Mistborn", 3)
+	read.FinishedAt = time.Now().Add(-24 * time.Hour)
+	src := stubSource{
+		reads:  []library.Entry{read},
+		toRead: []library.Entry{seriesEntry("Book 4", "Mistborn", 4)},
+	}
+
+	body := getBody(t, ready(t, src, st), "/")
+	// A pointer rendered raw would show an address like 0xc000123456.
+	if strings.Contains(body, "0xc0") {
+		t.Error("a position rendered as a pointer address")
+	}
+	if !strings.Contains(body, "Book 4") {
+		t.Fatal("no continuation to check")
+	}
+	// The pin form must carry a usable number for the store to record.
+	if !strings.Contains(body, `name="position" value="4"`) {
+		i := strings.Index(body, `name="position"`)
+		t.Errorf("pin form position is not a plain number: %q", body[i:min(i+60, len(body))])
+	}
+}
+
+func TestAnUnplacedSeriesShowsNoPositionRatherThanZero(t *testing.T) {
+	st := testStore(t)
+	read := library.Entry{Book: library.Book{Title: "The Hobbit", Series: &library.Series{Name: "The Lord of the Rings"}}}
+	if err := st.Reconcile(context.Background(), series.Snapshot{Reads: []library.Entry{read}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	body := getBody(t, ready(t, stubSource{}, st), "/")
+	if strings.Contains(body, "Read to book 0") {
+		t.Error("an unplaced series claims to be read to book 0")
 	}
 }

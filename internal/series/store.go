@@ -14,8 +14,9 @@ import (
 )
 
 // migrations are applied in order, each step advancing PRAGMA user_version by
-// one. Never edit a shipped step: append a new one.
-var migrations = []string{
+// one. A step may hold several statements, which run in one transaction. Never
+// edit a shipped step: append a new one.
+var migrations = [][]string{{
 	`CREATE TABLE tracked_series (
 		name            TEXT PRIMARY KEY,
 		display_name    TEXT NOT NULL,
@@ -34,7 +35,37 @@ var migrations = []string{
 	`ALTER TABLE tracked_series ADD COLUMN next_position REAL NOT NULL DEFAULT 0`,
 	`ALTER TABLE tracked_series ADD COLUMN checked_at INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE tracked_series ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''`,
-}
+}, {
+	// position becomes nullable, so a book that belongs to a series without
+	// occupying a numbered slot is no longer indistinguishable from one at
+	// position zero — series really do number prequels 0 or below. Every
+	// stored zero meant "unknown" under the old rules, so it maps to NULL.
+	`ALTER TABLE tracked_series RENAME TO tracked_series_old`,
+	`CREATE TABLE tracked_series (
+		name            TEXT PRIMARY KEY,
+		display_name    TEXT NOT NULL,
+		position        REAL,
+		decision        TEXT NOT NULL DEFAULT 'active',
+		decided_at      INTEGER NOT NULL DEFAULT 0,
+		parked_after    INTEGER NOT NULL DEFAULT 0,
+		pinned_position REAL NOT NULL DEFAULT 0,
+		slug            TEXT NOT NULL DEFAULT '',
+		completed       INTEGER NOT NULL DEFAULT 0,
+		caught_up       INTEGER NOT NULL DEFAULT 0,
+		next_title      TEXT NOT NULL DEFAULT '',
+		next_cover_url  TEXT NOT NULL DEFAULT '',
+		next_url        TEXT NOT NULL DEFAULT '',
+		next_position   REAL NOT NULL DEFAULT 0,
+		checked_at      INTEGER NOT NULL DEFAULT 0,
+		cover_url       TEXT NOT NULL DEFAULT ''
+	)`,
+	`INSERT INTO tracked_series
+	 SELECT name, display_name, NULLIF(position, 0), decision, decided_at,
+	        parked_after, pinned_position, slug, completed, caught_up,
+	        next_title, next_cover_url, next_url, next_position, checked_at, cover_url
+	 FROM tracked_series_old`,
+	`DROP TABLE tracked_series_old`,
+}}
 
 // Store is the durable record of tracked series and standing decisions.
 type Store struct {
@@ -83,9 +114,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("migration %d: %w", i+1, err)
 		}
-		if _, err := tx.ExecContext(ctx, migrations[i]); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("migration %d: %w", i+1, err)
+		for _, stmt := range migrations[i] {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("migration %d: %w", i+1, err)
+			}
 		}
 		// PRAGMA takes no bind parameters, and i is loop-bounded, not user input.
 		if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", i+1)); err != nil {
@@ -137,12 +170,16 @@ func (s *Store) Reconcile(ctx context.Context, snap Snapshot) error {
 // observe records a series at the furthest position seen. A position never goes
 // backwards: rereading book 2 of a series finished at book 5 is not a regression.
 func observe(ctx context.Context, tx *sql.Tx, s library.Series, cover string) error {
+	// An unplaced book records the series without claiming a slot in it.
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO tracked_series (name, display_name, position, slug, completed, cover_url)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			display_name = excluded.display_name,
-			position = MAX(position, excluded.position),
+			position = CASE
+				WHEN excluded.position IS NULL THEN position
+				WHEN position IS NULL THEN excluded.position
+				ELSE MAX(position, excluded.position) END,
 			-- A source that knows no slug must not blank one another supplied.
 			slug = CASE WHEN excluded.slug != '' THEN excluded.slug ELSE slug END,
 			completed = MAX(completed, excluded.completed),
@@ -154,7 +191,10 @@ func observe(ctx context.Context, tx *sql.Tx, s library.Series, cover string) er
 			-- The series wears the face of the furthest book read, so an
 			-- earlier reread does not roll it backwards.
 			cover_url = CASE
-				WHEN excluded.cover_url != '' AND excluded.position >= position THEN excluded.cover_url
+				WHEN excluded.cover_url = '' THEN cover_url
+				WHEN cover_url = '' THEN excluded.cover_url
+				WHEN excluded.position IS NOT NULL AND (position IS NULL OR excluded.position >= position)
+					THEN excluded.cover_url
 				ELSE cover_url END`,
 		key(s.Name), s.Name, s.Position, s.Slug, boolToInt(s.Completed), cover)
 	if err != nil {
@@ -177,7 +217,7 @@ func (s *Store) SetNext(ctx context.Context, name string, queried float64, next 
 	if found {
 		title, cover, url = next.Book.Title, next.Book.CoverURL, next.Book.URL
 		if next.Book.Series != nil {
-			pos = next.Book.Series.Position
+			pos, _ = next.Book.Series.Slot()
 		}
 	}
 	_, err := s.db.ExecContext(ctx, `

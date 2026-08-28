@@ -58,8 +58,10 @@ func parseDecision(s string) Decision {
 // Tracked is a series the reader has read into, with the furthest position they
 // reached and their standing decision about it.
 type Tracked struct {
-	Name     string  // as last seen from a source, for display
-	Position float64 // furthest position read
+	Name string // as last seen from a source, for display
+	// Position is the furthest numbered slot read, or nil when every book read
+	// in the series was unplaced (see CONTEXT.md).
+	Position *float64
 	Decision Decision
 	// DecidedAt is when the current decision was made; zero when Active.
 	DecidedAt time.Time
@@ -96,6 +98,18 @@ type Tracked struct {
 // Key normalises a series name the way the store matches on it, so callers
 // comparing names against tracked series agree with the database.
 func Key(name string) string { return key(name) }
+
+// Placed reports whether the reader has read a numbered volume of the series,
+// which is what makes "the next one" a question with an answer.
+func (t Tracked) Placed() bool { return t.Position != nil }
+
+// Slot returns the furthest position read, and whether there is one.
+func (t Tracked) Slot() (float64, bool) {
+	if t.Position == nil {
+		return 0, false
+	}
+	return *t.Position, true
+}
 
 // key normalises a series name into its storage key. Names are the only
 // identifier Hardcover and Grimmory share, so matching is case- and

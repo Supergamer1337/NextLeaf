@@ -27,7 +27,7 @@ func mistborn4() library.Entry {
 }
 
 func query(name string, pos float64) library.SeriesQuery {
-	return library.SeriesQuery{Series: library.Series{Name: name, Position: pos}, IncludeNovellas: true}
+	return library.SeriesQuery{Series: library.Series{Name: name, Position: library.At(pos)}, IncludeNovellas: true}
 }
 
 func TestLookaheadAsksTheResolverOncePerSeries(t *testing.T) {

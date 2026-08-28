@@ -396,7 +396,7 @@ func TestFetchBooksDecoding(t *testing.T) {
 	if m == nil {
 		t.Fatal("full book metadata = nil, want populated")
 	}
-	if m.Title != "Hyperion" || m.SeriesName != "Hyperion Cantos" || m.SeriesNumber != 1 ||
+	if m.Title != "Hyperion" || m.SeriesName != "Hyperion Cantos" || m.SeriesNumber == nil || *m.SeriesNumber != 1 ||
 		m.PageCount != 482 || len(m.Authors) != 1 || len(m.Categories) != 1 || len(m.Moods) != 1 ||
 		m.PublishedDate != "1989-05-26" || m.ThumbnailURL == "" || m.ExternalURL == "" {
 		t.Errorf("metadata = %+v, missing expected fields", m)

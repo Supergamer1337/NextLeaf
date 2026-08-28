@@ -44,7 +44,7 @@ func (s resolverStub) NextInSeries(_ context.Context, _ library.SeriesQuery) (li
 }
 
 func seriesEntry(title, series string, pos float64) library.Entry {
-	return library.Entry{Book: library.Book{Title: title, Series: &library.Series{Name: series, Position: pos}}}
+	return library.Entry{Book: library.Book{Title: title, Series: &library.Series{Name: series, Position: library.At(pos)}}}
 }
 
 // get exercises a fully configured app: a source, a series store, and a
@@ -192,7 +192,7 @@ func TestSelectorResolvesSeriesOffShelf(t *testing.T) {
 	// The next series book is on no shelf; the resolver supplies it.
 	src := resolverStub{
 		stubSource: stubSource{reads: []library.Entry{seriesEntry("The Fifth Season", "The Broken Earth", 1)}},
-		next:       library.Entry{Book: library.Book{Title: "The Obelisk Gate", Series: &library.Series{Name: "The Broken Earth", Position: 2}}},
+		next:       library.Entry{Book: library.Book{Title: "The Obelisk Gate", Series: &library.Series{Name: "The Broken Earth", Position: library.At(2)}}},
 		found:      true,
 	}
 	body := get(t, src, "/").Body.String()
@@ -236,19 +236,6 @@ func TestSelectorShowsTradeOffs(t *testing.T) {
 	}
 	if !strings.Contains(body, "Leans into Fantasy") {
 		t.Errorf("trade-off reason should be present:\n%s", body)
-	}
-}
-
-func TestSelectorSkipsUnknownSeriesPosition(t *testing.T) {
-	// The anchor's series position is unknown (0), so "next" is undefined —
-	// don't guess a continuation.
-	src := stubSource{
-		reads:  []library.Entry{{Book: library.Book{Title: "Anchor", Series: &library.Series{Name: "S"}}}},
-		toRead: []library.Entry{{Book: library.Book{Title: "S Book Two", Series: &library.Series{Name: "S", Position: 2}}}},
-	}
-	body := get(t, src, "/").Body.String()
-	if strings.Contains(body, "Continues") {
-		t.Errorf("an unknown anchor position should not continue a series:\n%s", body)
 	}
 }
 
@@ -378,7 +365,7 @@ func TestSelectorResolverPickShowsSourceWithoutBadge(t *testing.T) {
 			reads: []library.Entry{seriesEntry("Book One", "Saga", 1)},
 		},
 		next: library.Entry{
-			Book:    library.Book{Title: "Off-Shelf Two", Series: &library.Series{Name: "Saga", Position: 2}},
+			Book:    library.Book{Title: "Off-Shelf Two", Series: &library.Series{Name: "Saga", Position: library.At(2)}},
 			Sources: []library.SourceRef{{Name: "hardcover", URL: "https://hardcover.app/books/two"}},
 		},
 		found: true,
