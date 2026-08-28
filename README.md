@@ -153,6 +153,4 @@ go test ./...
 ```
 
 NextLeaf's only dependency is `modernc.org/sqlite`, a pure-Go SQLite driver, so
-the build stays CGO-free. Everything else is the standard library. See
-[docs/adr/0001-sqlite-for-series-state.md](docs/adr/0001-sqlite-for-series-state.md)
-for why that dependency was taken.
+the build stays CGO-free. Everything else is the standard library.

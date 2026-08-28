@@ -21,7 +21,7 @@ const (
 
 // Series locates a book within a series. Name is the only identifier every
 // source can supply, so it is what NextLeaf matches on; Slug and Completed are
-// hints a richer source may add (see CONTEXT.md).
+// hints a richer source may add.
 type Series struct {
 	Name string
 	// Position is the book's numbered slot, or nil when the book is unplaced:
@@ -76,7 +76,7 @@ type Book struct {
 	Moods       []string // tone tags, e.g. "dark", "hopeful"; nil if unknown
 	// Series is the one series the book is tracked under. OtherSeries holds
 	// the alternatives it could be tracked under instead, best first — a
-	// franchise reordered chronologically, or a sub-series (see CONTEXT.md).
+	// franchise reordered chronologically, or a sub-series.
 	Series      *Series
 	OtherSeries []Series
 	ReleaseYear int

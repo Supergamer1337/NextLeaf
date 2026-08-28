@@ -1,7 +1,7 @@
 // Package series turns the reader's library into a live view of the series
 // they are in, and records their statements about those series. The view is
 // computed fresh from the sources on every look — nothing derived is stored —
-// and statements are the only owned state (see docs/adr/0003).
+// and statements are the only owned state.
 package series
 
 import (
