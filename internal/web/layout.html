@@ -149,7 +149,6 @@
       padding: 0.5rem 1rem; font-weight: 500;
     }
     .btn--quiet:hover { filter: none; border-color: var(--moss); color: var(--moss); }
-    .decide { display: contents; }
 
     /* Series drawer */
     .drawer-toggle {
@@ -293,13 +292,14 @@
       box-shadow: 0 8px 20px -14px var(--shadow-c);
       transition: transform 0.15s ease, filter 0.15s ease;
     }
-    /* :not([hidden]) matters: the hidden attribute is plain display:none in
-       the UA sheet, which this rule would otherwise override — leaving an
-       empty card forced visible. */
-    .spinning .wheel-ghost:not([hidden]) { display: flex; }
+    .spinning .wheel-ghost { display: flex; }
     .wheel-ghost:hover { filter: brightness(1); transform: scale(0.96); }
     .wheel-prev { bottom: calc(100% + 0.4rem); }
     .wheel-next { top: calc(100% + 0.4rem); }
+    /* Every candidate's peek is in the ghost; the script shows one. The
+       explicit display would otherwise defeat the hidden attribute. */
+    .wheel-peek { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+    .wheel-peek[hidden] { display: none; }
     .ghost-cover { width: 1.8rem; height: 2.7rem; object-fit: cover; border-radius: 3px; flex: none; }
     .ghost-text { display: grid; gap: 0.15rem; min-width: 0; }
     .peek-name {
@@ -308,6 +308,7 @@
     }
     .ghost-badges { display: flex; gap: 0.35rem; }
     .wheel-item { display: grid; gap: 0.15rem; min-height: 3rem; align-content: center; width: calc(100% - 2.4rem); }
+    .wheel-item[hidden] { display: none; }
     .wheel-item.roll-up   { animation: roll-up 0.16s ease-out; }
     .wheel-item.roll-down { animation: roll-down 0.16s ease-out; }
     @keyframes roll-up {
@@ -340,8 +341,7 @@
       padding: 0.28rem 0.9rem; margin-left: auto;
     }
     .wheel-ok:hover { filter: brightness(1.07); }
-    .switching .wheel-ok { opacity: 0.7; cursor: wait; }
-    .switching .wheel-ghost { pointer-events: none; filter: brightness(0.75); }
+    .wheel-ok:disabled { opacity: 0.7; cursor: wait; }
     .wheel-cancel { margin-left: 0.1rem; }
 
     /* Notices */
@@ -352,6 +352,9 @@
     }
     .notice code { color: var(--moss); background: var(--tint); padding: 0.1rem 0.35rem; border-radius: 4px; }
     .notice--error { border-color: var(--error); background: var(--error-tint); color: var(--error); box-shadow: none; }
+    /* A decision's quiet confirmation, with its undo riding along. */
+    .notice--done { border-color: var(--moss); box-shadow: none; padding: 0.7rem 1.3rem; }
+    .notice--done .drawer-act { margin-left: 0.4rem; }
 
     @media (max-width: 460px) {
       .rec { flex-direction: column; }
@@ -362,18 +365,15 @@
       .btn:hover { transform: none; }
     }
     /* The waiting card holds the real card's footprint, so nothing jumps
-       when the recommendation lands. Static by design: the motion floor caps
-       animation at sub-200ms micro-interactions. */
-    .deck > .waiting { display: none; }
-    .deck > .waiting--initial { display: block; }
+       when the recommendation lands. Only the shell carries it: once a card
+       is on screen it stays there and is morphed in place, dimmed while a
+       request is in flight rather than blanked. The dim comes in on a short
+       delay so a fast decision never flickers. */
+    .deck { transition: opacity 0.15s ease; }
+    #app.htmx-request .deck { opacity: 0.6; transition-delay: 0.2s; }
     /* A failed first load swaps the skeleton for the way out of it; a retry
        puts the skeleton back, so the deck is never left blank. */
     #app.failed .deck > .waiting--initial { display: none; }
-    #app.htmx-request .deck > .waiting--initial { display: block; }
-    #app.htmx-request .deck > .waiting { display: block; }
-    /* The drawer sits outside .deck, so a decision never blanks it out from
-       under a reader who is standing in it. */
-    #app.htmx-request .deck > :not(.waiting) { display: none; }
     .rec--waiting { opacity: 0.55; }
     .bone {
       display: block; height: 0.72rem; border-radius: 999px;
@@ -401,7 +401,7 @@
     </header>
 
     <div id="app" hx-get="/view" hx-trigger="load" aria-live="polite" aria-busy="true">
-      <div class="deck">
+      <div class="deck" id="deck">
         <div class="waiting waiting--initial" aria-hidden="true">{{template "waitingCard"}}</div>
         <p class="notice deck-error" hidden>Couldn't reach the server for a recommendation.
           <button class="btn btn--quiet" type="button" hx-get="/view" hx-disabled-elt="this">Try again</button></p>
@@ -449,54 +449,30 @@
       }
 
       // Wheel state lives on the row, not in a closure, so these handlers keep
-      // working against whatever the last morph left behind.
-      function cands(row) {
-        return Array.prototype.slice.call(row.querySelectorAll(".wheel-candidate"));
-      }
+      // working against whatever the last morph left behind. Every candidate
+      // arrives fully rendered from the server; render only chooses which
+      // item and which peeks show.
+      function items(row) { return row.querySelectorAll(".wheel-item"); }
       function at(row) { return parseInt(row.dataset.wheelAt || "0", 10); }
 
-      function fillGhost(ghost, c, fallback) {
-        ghost.querySelector(".peek-name").textContent = c.name;
-        var badges = ghost.querySelectorAll(".peek-badge");
-        badges[0].textContent = c.source;
-        badges[0].hidden = !c.source;
-        badges[1].textContent = c.pos ? "book " + c.pos : "";
-        badges[1].hidden = !c.pos;
-        // Each identity wears the face the row would have if picked.
-        var img = ghost.querySelector(".ghost-cover");
-        var src = c.cover || fallback;
-        if (src) { img.src = src; }
-        img.hidden = !src;
-        ghost.hidden = false;
+      function showAt(list, i) {
+        list.forEach(function (el, k) { el.hidden = k !== i; });
       }
 
       function render(row, dir) {
-        var list = cands(row), i = at(row);
-        var c = list[i].dataset;
-        var face = row.querySelector(".wheel-face");
-        var item = face.querySelector(".wheel-item");
+        var list = items(row), i = at(row), n = list.length;
+        showAt(list, i);
+        // The row wears the face it would have if the shown candidate were
+        // picked, falling back to its own cover for a coverless one.
         var cover = row.querySelector("img.drawer-cover");
-        var fallback = row.dataset.originalCover || "";
-
-        item.querySelector(".wheel-name").textContent = c.name;
-        var src = item.querySelector(".wheel-source");
-        src.textContent = c.source;
-        src.hidden = !c.source;
-        var pos = item.querySelector(".wheel-pos");
-        pos.textContent = c.posLabel || "";
-        pos.hidden = !c.posLabel;
-        var desc = item.querySelector(".wheel-desc");
-        desc.textContent = c.desc;
-        desc.hidden = !c.desc;
-        if (cover) { cover.src = c.cover || fallback; }
-
+        if (cover) { cover.src = list[i].dataset.cover || row.dataset.originalCover || ""; }
         // The wheel loops, so both directions always show where they lead:
         // with two candidates that is the same place, and the same card above
         // and below is the honest picture of a loop.
-        var n = list.length;
-        fillGhost(row.querySelector(".wheel-prev"), list[(i - 1 + n) % n].dataset, fallback);
-        fillGhost(row.querySelector(".wheel-next"), list[(i + 1) % n].dataset, fallback);
+        showAt(row.querySelector(".wheel-prev").querySelectorAll(".wheel-peek"), (i - 1 + n) % n);
+        showAt(row.querySelector(".wheel-next").querySelectorAll(".wheel-peek"), (i + 1) % n);
         if (dir) {
+          var item = list[i];
           item.classList.remove("roll-up", "roll-down");
           void item.offsetWidth; // restart the animation
           item.classList.add(dir > 0 ? "roll-up" : "roll-down");
@@ -504,7 +480,7 @@
       }
 
       function cycle(row, d) {
-        var n = cands(row).length;
+        var n = items(row).length;
         row.dataset.wheelAt = String((at(row) + d + n) % n);
         render(row, d);
       }
@@ -525,7 +501,7 @@
       }
 
       function confirmWheel(row) {
-        var list = cands(row), c = list[at(row)].dataset;
+        var c = items(row)[at(row)].dataset;
         if (!c.to) { closeWheel(); return; } // kept the current identity
         var form = row.querySelector(".wheel-form");
         form.querySelector("input[name=to]").value = c.to;

@@ -271,15 +271,19 @@ func groupFor(entry library.Entry, groups []Group) (Group, bool) {
 }
 
 // Decide records a statement about the named series. For "switch", to names
-// the alternative the reader wants the series tracked under.
+// the alternative the reader wants the series tracked under. The returned
+// uncached flag says the decision left the group with no cached next-in-series
+// answer — a switch keys the cache under a new name, and a cleared drop
+// revives a group enrich and Warm have been skipping — so re-rendering it
+// needs a lookup budget.
 //
 // It works from the unenriched view: recording a statement needs the group
 // and its anchors, never the catalogue, so a slow backend cannot stretch the
 // POST the reader is waiting on.
-func (e *Engine) Decide(ctx context.Context, action, name, to string) error {
+func (e *Engine) Decide(ctx context.Context, action, name, to string) (uncached bool, err error) {
 	in, err := e.input(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	v := Compute(in)
 	var group *Group
@@ -290,7 +294,7 @@ func (e *Engine) Decide(ctx context.Context, action, name, to string) error {
 		}
 	}
 	if group == nil {
-		return fmt.Errorf("%w: no tracked series named %q", ErrUnknownSeries, name)
+		return false, fmt.Errorf("%w: no tracked series named %q", ErrUnknownSeries, name)
 	}
 
 	st := Statement{MadeAt: e.now(), Name: group.Name, Anchors: anchors(group)}
@@ -303,16 +307,18 @@ func (e *Engine) Decide(ctx context.Context, action, name, to string) error {
 		st.Kind, st.PinnedBook = KindPin, group.NextKey
 	case "clear":
 		st.Kind = KindClear
+		uncached = group.Decision == Dropped
 	case "switch":
 		alt, ok := alternativeNamed(group, to)
 		if !ok {
-			return fmt.Errorf("%w: %q is not an alternative of %q", ErrNotAnAlternative, to, name)
+			return false, fmt.Errorf("%w: %q is not an alternative of %q", ErrNotAnAlternative, to, name)
 		}
 		st.Kind, st.PrefSource, st.PrefName, st.Name = KindPrefer, alt.Source, alt.Name, alt.Name
+		uncached = true
 	default:
-		return fmt.Errorf("%w: %q", ErrUnknownAction, action)
+		return false, fmt.Errorf("%w: %q", ErrUnknownAction, action)
 	}
-	return e.store.Append(ctx, st)
+	return uncached, e.store.Append(ctx, st)
 }
 
 // Sentinel errors let the web layer map refusals to the right status codes.
