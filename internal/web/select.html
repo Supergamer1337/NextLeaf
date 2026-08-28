@@ -178,7 +178,9 @@
          block for the fixed overlay below and trap it inside the drawer. */
       transition: right 0.22s ease, visibility 0.22s;
     }
-    .drawer:target { right: 0; visibility: visible; }
+    /* :target for the script-free path; the script mirrors the hash into a
+       class, since Chromium can drop :target matching after DOM morphing. */
+    .drawer:target, .drawer.open { right: 0; visibility: visible; }
     .drawer-head {
       display: flex; align-items: baseline; justify-content: space-between;
       gap: 1rem; padding: 1.3rem 1.4rem 0.9rem; border-bottom: 1px solid var(--line);
@@ -455,7 +457,7 @@
     </div>
     <div class="drawer-dim"></div>
     <div class="drawer-body">
-      {{template "drawerGroup" dict "Label" "Reading next" "Items" .Panel.Pinned "Undo" "Unpin"}}
+      {{template "drawerGroup" dict "Label" "Reading next — pinned" "Items" .Panel.Pinned "Undo" "Unpin" "Open" true}}
       {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Undo" "" "Open" true}}
       {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now"}}
       {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "Undo" ""}}
@@ -465,14 +467,21 @@
   {{end}}
 
   <script>
-    // The series wheel: a row with alternatives lifts in place over a dimmed
-    // drawer, candidates roll through its footprint, and choosing one submits
-    // the switch. Everything else on the page works without this script.
+    // The series wheel and the seamless form posts. The server stays a
+    // plain form-and-redirect app; this layer follows the redirect with
+    // fetch and swaps the fresh HTML in place, so the page never visibly
+    // reloads. Without the script, every form still works the classic way.
     (function () {
       var drawer = document.querySelector(".drawer");
       if (!drawer) return;
       var dim = drawer.querySelector(".drawer-dim");
       var openRow = null;
+
+      function syncDrawer() {
+        drawer.classList.toggle("open", location.hash === "#series");
+      }
+      window.addEventListener("hashchange", syncDrawer);
+      syncDrawer();
 
       function close() {
         if (!openRow) return;
@@ -480,105 +489,146 @@
         drawer.classList.remove("dimmed");
         openRow = null;
       }
-
-      document.querySelectorAll(".drawer-row").forEach(function (row) {
-        var btn = row.querySelector(".switcher-btn");
-        if (!btn) return;
-        var cands = Array.prototype.slice.call(row.querySelectorAll(".wheel-candidate"));
-        var face = row.querySelector(".wheel-face");
-        var form = row.querySelector(".wheel-form");
-        var item = face.querySelector(".wheel-item");
-        var i = 0;
-
-        var prevGhost = row.querySelector(".wheel-prev");
-        var nextGhost = row.querySelector(".wheel-next");
-        var cover = row.querySelector("img.drawer-cover");
-
-        function fillGhost(ghost, c) {
-          ghost.querySelector(".peek-name").textContent = c.name;
-          var badges = ghost.querySelectorAll(".peek-badge");
-          badges[0].textContent = c.source;
-          badges[0].hidden = !c.source;
-          badges[1].textContent = c.pos ? "book " + c.pos : "";
-          badges[1].hidden = !c.pos;
-          // The candidates are identities for the same books, so the ghost
-          // wears the same cover as the card.
-          var img = ghost.querySelector(".ghost-cover");
-          if (cover) { img.src = cover.src; }
-          img.hidden = !cover;
-          ghost.hidden = false;
-        }
-
-        function render(dir) {
-          var c = cands[i].dataset;
-          item.querySelector(".wheel-name").textContent = c.name;
-          var src = item.querySelector(".wheel-source");
-          src.textContent = c.source;
-          src.hidden = !c.source;
-          var pos = item.querySelector(".wheel-pos");
-          pos.textContent = c.pos ? "You're at book " + c.pos : "";
-          pos.hidden = !c.pos;
-          var desc = item.querySelector(".wheel-desc");
-          desc.textContent = c.desc;
-          desc.hidden = !c.desc;
-
-          // The neighbours peek above and below, so the reader can see where
-          // the wheel goes before turning it. With two candidates there is
-          // only one other place to go, shown below.
-          var n = cands.length;
-          fillGhost(prevGhost, cands[(i - 1 + n) % n].dataset);
-          fillGhost(nextGhost, cands[(i + 1) % n].dataset);
-
-          if (dir) {
-            item.classList.remove("roll-up", "roll-down");
-            void item.offsetWidth; // restart the animation
-            item.classList.add(dir > 0 ? "roll-up" : "roll-down");
-          }
-        }
-        function cycle(d) {
-          i = (i + d + cands.length) % cands.length;
-          render(d);
-        }
-        function confirm() {
-          var to = cands[i].dataset.to;
-          if (!to) { close(); return; } // kept the current identity
-          form.querySelector("input[name=to]").value = to;
-          // Stay lifted and say what is happening: the reload is the settle.
-          row.classList.add("switching");
-          face.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
-          face.querySelector(".wheel-ok").textContent = "Switching…";
-          form.submit();
-        }
-
-        btn.addEventListener("click", function () {
-          if (openRow === row) { close(); return; }
-          close();
-          i = 0;
-          render();
-          row.classList.add("spinning");
-          drawer.classList.add("dimmed");
-          openRow = row;
-          row.scrollIntoView({ block: "center", behavior: "smooth" });
-        });
-        prevGhost.addEventListener("click", function () { cycle(-1); });
-        nextGhost.addEventListener("click", function () { cycle(1); });
-        face.querySelector(".wheel-ok").addEventListener("click", confirm);
-        face.querySelector(".wheel-cancel").addEventListener("click", close);
-        row.addEventListener("keydown", function (e) {
-          if (openRow !== row) return;
-          if (e.key === "Escape") close();
-          if (e.key === "ArrowDown") { e.preventDefault(); cycle(1); }
-          if (e.key === "ArrowUp") { e.preventDefault(); cycle(-1); }
-          if (e.key === "Enter") { e.preventDefault(); confirm(); }
-        });
-      });
       dim.addEventListener("click", close);
       document.addEventListener("keydown", function (e) {
         if (e.key === "Escape") close();
       });
+
+      // seamless posts a series form and morphs the page from the response
+      // the redirect lands on, keeping the drawer's fold state and scroll.
+      function seamless(form) {
+        var body = drawer.querySelector(".drawer-body");
+        var openLabels = [];
+        body.querySelectorAll("details.drawer-group[open]").forEach(function (d) {
+          openLabels.push(d.querySelector(".drawer-label").textContent);
+        });
+        var scroll = body.scrollTop;
+
+        return fetch(form.action, {
+          method: "POST",
+          body: new URLSearchParams(new FormData(form)),
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        }).then(function (resp) {
+          if (!resp.ok) throw new Error(resp.status);
+          return resp.text();
+        }).then(function (html) {
+          var doc = new DOMParser().parseFromString(html, "text/html");
+          var newMain = doc.querySelector("main.wrap");
+          var newBody = doc.querySelector(".drawer-body");
+          if (!newMain || !newBody) throw new Error("unexpected page");
+          close();
+          document.querySelector("main.wrap").innerHTML = newMain.innerHTML;
+          body.innerHTML = newBody.innerHTML;
+          body.querySelectorAll("details.drawer-group").forEach(function (d) {
+            var label = d.querySelector(".drawer-label").textContent;
+            d.open = openLabels.indexOf(label) >= 0 || d.hasAttribute("open");
+          });
+          body.scrollTop = scroll;
+          wireWheels();
+          wireTheme();
+        }).catch(function () {
+          form.submit(); // the classic path still works
+        });
+      }
+
+      // Every series form on the page posts seamlessly, wherever it lives.
+      document.addEventListener("submit", function (e) {
+        var form = e.target;
+        if (form.getAttribute("action") && form.getAttribute("action").indexOf("/series/") === 0) {
+          e.preventDefault();
+          seamless(form);
+        }
+      });
+
+      function wireWheels() {
+        drawer.querySelectorAll(".drawer-row").forEach(function (row) {
+          var btn = row.querySelector(".switcher-btn");
+          if (!btn) return;
+          var cands = Array.prototype.slice.call(row.querySelectorAll(".wheel-candidate"));
+          var face = row.querySelector(".wheel-face");
+          var form = row.querySelector(".wheel-form");
+          var item = face.querySelector(".wheel-item");
+          var prevGhost = row.querySelector(".wheel-prev");
+          var nextGhost = row.querySelector(".wheel-next");
+          var cover = row.querySelector("img.drawer-cover");
+          var i = 0;
+
+          function fillGhost(ghost, c) {
+            ghost.querySelector(".peek-name").textContent = c.name;
+            var badges = ghost.querySelectorAll(".peek-badge");
+            badges[0].textContent = c.source;
+            badges[0].hidden = !c.source;
+            badges[1].textContent = c.pos ? "book " + c.pos : "";
+            badges[1].hidden = !c.pos;
+            var img = ghost.querySelector(".ghost-cover");
+            if (cover) { img.src = cover.src; }
+            img.hidden = !cover;
+            ghost.hidden = false;
+          }
+
+          function render(dir) {
+            var c = cands[i].dataset;
+            item.querySelector(".wheel-name").textContent = c.name;
+            var src = item.querySelector(".wheel-source");
+            src.textContent = c.source;
+            src.hidden = !c.source;
+            var pos = item.querySelector(".wheel-pos");
+            pos.textContent = c.pos ? "You're at book " + c.pos : "";
+            pos.hidden = !c.pos;
+            var desc = item.querySelector(".wheel-desc");
+            desc.textContent = c.desc;
+            desc.hidden = !c.desc;
+            var n = cands.length;
+            fillGhost(prevGhost, cands[(i - 1 + n) % n].dataset);
+            fillGhost(nextGhost, cands[(i + 1) % n].dataset);
+            if (dir) {
+              item.classList.remove("roll-up", "roll-down");
+              void item.offsetWidth; // restart the animation
+              item.classList.add(dir > 0 ? "roll-up" : "roll-down");
+            }
+          }
+          function cycle(d) {
+            i = (i + d + cands.length) % cands.length;
+            render(d);
+          }
+          function confirm() {
+            var to = cands[i].dataset.to;
+            if (!to) { close(); return; } // kept the current identity
+            form.querySelector("input[name=to]").value = to;
+            // Settle showing the chosen identity; the morph makes it real.
+            var nameEl = row.querySelector(".row-body .drawer-name");
+            if (nameEl) nameEl.textContent = cands[i].dataset.name;
+            seamless(form);
+          }
+
+          btn.addEventListener("click", function () {
+            if (openRow === row) { close(); return; }
+            close();
+            i = 0;
+            render();
+            row.classList.add("spinning");
+            drawer.classList.add("dimmed");
+            openRow = row;
+            row.scrollIntoView({ block: "center", behavior: "smooth" });
+          });
+          prevGhost.addEventListener("click", function () { cycle(-1); });
+          nextGhost.addEventListener("click", function () { cycle(1); });
+          face.querySelector(".wheel-ok").addEventListener("click", confirm);
+          face.querySelector(".wheel-cancel").addEventListener("click", close);
+          row.addEventListener("keydown", function (e) {
+            if (openRow !== row) return;
+            if (e.key === "Escape") close();
+            if (e.key === "ArrowDown") { e.preventDefault(); cycle(1); }
+            if (e.key === "ArrowUp") { e.preventDefault(); cycle(-1); }
+            if (e.key === "Enter") { e.preventDefault(); confirm(); }
+          });
+        });
+      }
+      wireWheels();
+      window.wireWheels = wireWheels;
     })();
 
-    (function () {
+    function wireTheme() {
       var btn = document.getElementById("theme-toggle");
       function system() {
         return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -597,7 +647,8 @@
           localStorage.setItem("theme", next);
         }
       });
-    })();
+    }
+    wireTheme();
   </script>
 </body>
 </html>
@@ -644,7 +695,7 @@
             <span class="drawer-pos">Read to book {{.Position}}</span>
           {{end}}
           <div class="drawer-acts">
-            {{if and .NextTitle (and (ne $.Label "Reading next") (ne $.Label "Dropped"))}}
+            {{if and .NextTitle (and (ne $.Label "Reading next — pinned") (ne $.Label "Dropped"))}}
             <form method="post" action="/series/pin">
               <input type="hidden" name="name" value="{{.Name}}">
               <button class="drawer-act drawer-act--go" type="submit">Pick this</button>

@@ -532,3 +532,21 @@ func (c *countingSlowResolver) NextInSeries(_ context.Context, _ library.SeriesQ
 	c.calls++
 	return library.Entry{}, false, nil
 }
+
+func TestThePinnedGroupIsOpenAndNamed(t *testing.T) {
+	h := ready(t, midSeries(), testStore(t))
+	if rec := post(t, h, "/series/pin", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /series/pin: status = %d, want 303", rec.Code)
+	}
+	body := getBody(t, h, "/")
+
+	// The pinned series is the one thing the reader explicitly asked for
+	// next: it stays in view, and the label says what pinning means.
+	block, ok := enclosingDetails(body, ">Reading next — pinned")
+	if !ok {
+		t.Fatal("no pinned group with an explanatory label")
+	}
+	if openTag, _, _ := strings.Cut(block, ">"); !strings.Contains(openTag, "open") {
+		t.Errorf("the pinned group does not start open: %q", openTag)
+	}
+}
