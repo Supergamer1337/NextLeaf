@@ -583,14 +583,11 @@
             var desc = item.querySelector(".wheel-desc");
             desc.textContent = c.desc;
             desc.hidden = !c.desc;
-            // With two candidates there is only one other place to go;
-            // showing it twice would read as a bug, so it peeks below only.
+            // The wheel loops, so both directions always show where they
+            // lead — with two candidates that is the same place, and the
+            // same card above and below is the honest picture of a loop.
             var n = cands.length;
-            if (n > 2) {
-              fillGhost(prevGhost, cands[(i - 1 + n) % n].dataset);
-            } else {
-              prevGhost.hidden = true;
-            }
+            fillGhost(prevGhost, cands[(i - 1 + n) % n].dataset);
             fillGhost(nextGhost, cands[(i + 1) % n].dataset);
             if (dir) {
               item.classList.remove("roll-up", "roll-down");
