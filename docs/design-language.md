@@ -21,8 +21,10 @@ defined in its `:root` block.
 4. **Variety is the voice.** Copy explains *why* a pick breaks or extends the
    reader's pattern ("In favour" / "Trade-offs"), in plain active sentences, from
    the reader's side of the screen.
-5. **Self-contained.** No external fonts, scripts, or styles. System font stacks
-   only; everything ships in the template. The app must render fully offline.
+5. **Self-contained.** Nothing is fetched from a CDN or a third-party host. System
+   font stacks only; styles ship inline in the template, and htmx and idiomorph are
+   vendored into `internal/web/static` and served from the binary. The app must
+   render fully offline.
 
 ## Color tokens
 
