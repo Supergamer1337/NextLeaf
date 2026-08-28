@@ -541,12 +541,34 @@ func TestThePinnedGroupIsOpenAndNamed(t *testing.T) {
 	body := getBody(t, h, "/")
 
 	// The pinned series is the one thing the reader explicitly asked for
-	// next: it stays in view, and the label says what pinning means.
-	block, ok := enclosingDetails(body, ">Reading next — pinned")
-	if !ok {
+	// next: at most one exists, so it is a plain section with nothing to
+	// fold, and the label says what pinning means.
+	i := strings.Index(body, "Reading next — pinned")
+	if i < 0 {
 		t.Fatal("no pinned group with an explanatory label")
 	}
-	if openTag, _, _ := strings.Cut(block, ">"); !strings.Contains(openTag, "open") {
-		t.Errorf("the pinned group does not start open: %q", openTag)
+	if _, ok := enclosingDetails(body, ">Reading next — pinned"); ok {
+		t.Error("the pinned group is foldable; a group of at most one has nothing to fold")
+	}
+	if !strings.Contains(body, `class="drawer-group drawer-group--flat"`) {
+		t.Error("the pinned group is not rendered as a flat section")
+	}
+}
+
+func TestRowsWearTheirIdentityBadges(t *testing.T) {
+	// The source and position show on the row itself, so two same-named rows
+	// are tellable apart without opening anything.
+	body := getBody(t, ready(t, switchSource(), testStore(t)), "/")
+
+	i := strings.Index(body, `class="row-head"`)
+	if i < 0 {
+		t.Fatal("rows have no identity line")
+	}
+	row := body[i:min(i+600, len(body))]
+	if !strings.Contains(row, ">Hardcover<") {
+		t.Errorf("the row does not name its source: %.300s", row)
+	}
+	if !strings.Contains(row, ">book 2<") {
+		t.Errorf("the row does not show the reader's position: %.300s", row)
 	}
 }

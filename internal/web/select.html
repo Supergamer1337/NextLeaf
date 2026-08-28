@@ -218,6 +218,8 @@
     }
     .drawer-cover--blank { border: 1px dashed var(--line); }
     .drawer-name { font-size: 0.88rem; font-weight: 600; }
+    .row-head { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; padding-right: 2.2rem; }
+    .drawer-group--flat > .drawer-label { display: block; padding: 0.15rem 0; }
     .drawer-next, .drawer-pos { display: block; color: var(--muted); font-size: 0.75rem; margin-top: 0.1rem; }
     .drawer-acts { display: flex; gap: 0.7rem; margin-top: 0.4rem; flex-wrap: wrap; }
     .drawer-act {
@@ -457,7 +459,7 @@
     </div>
     <div class="drawer-dim"></div>
     <div class="drawer-body">
-      {{template "drawerGroup" dict "Label" "Reading next — pinned" "Items" .Panel.Pinned "Undo" "Unpin" "Open" true}}
+      {{template "drawerGroup" dict "Label" "Reading next — pinned" "Items" .Panel.Pinned "Undo" "Unpin" "Flat" true}}
       {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Undo" "" "Open" true}}
       {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now"}}
       {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "Undo" ""}}
@@ -665,10 +667,17 @@
 
 {{define "drawerGroup"}}
 {{if .Items}}
+{{if .Flat}}
+<div class="drawer-group drawer-group--flat">
+  <span class="drawer-label">{{.Label}}</span>
+  {{template "drawerRows" .}}
+</div>
+{{else}}
 <details class="drawer-group"{{if .Open}} open{{end}}>
   <summary class="drawer-label drawer-summary">{{.Label}} <span class="drawer-tally">{{len .Items}}</span></summary>
   {{template "drawerRows" .}}
 </details>
+{{end}}
 {{end}}
 {{end}}
 
@@ -686,13 +695,15 @@
       {{end}}
       <div class="drawer-cell">
         <div class="row-body">
-          <span class="drawer-name">{{.Name}}</span>
+          <span class="row-head">
+            <span class="drawer-name">{{.Name}}</span>
+            {{if .Source}}<span class="row-badge switch-source">{{ucfirst .Source}}</span>{{end}}
+            {{if .Position}}<span class="row-badge switch-pos">book {{.Position}}</span>{{end}}
+          </span>
           {{if .NextTitle}}
             <span class="drawer-next">Next: {{.NextTitle}}</span>
           {{else if .CaughtUp}}
             <span class="drawer-next">Nothing left to read</span>
-          {{else if .Position}}
-            <span class="drawer-pos">Read to book {{.Position}}</span>
           {{end}}
           <div class="drawer-acts">
             {{if and .NextTitle (and (ne $.Label "Reading next — pinned") (ne $.Label "Dropped"))}}
