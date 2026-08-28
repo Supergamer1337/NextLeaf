@@ -27,10 +27,13 @@ sources' full data. NextLeaf persists only:
 - **Immutable facts**, such as an ISBN-to-book mapping, which cannot drift by
   definition.
 
-Cross-source identity comes only from neutral identifiers (ISBNs) or the
-reader's own statements. Name matching is a fallback heuristic whose failures
-are transient rendering artifacts, repaired by one statement, never persisted
-corruption.
+Cross-source identity is established by evidence, strongest first: a neutral
+identifier (ISBN) or the source's own book id; a normalized title-and-author
+book key as the fallback join; and, for series, a shared book that both
+sources file under the same name at the same slot. Anything weaker — a bare
+name match — only ever *suggests*, and the reader's statement confirms it.
+Heuristic failures are transient rendering artifacts, repaired by one
+statement, never persisted corruption.
 
 ## Consequences
 
@@ -42,4 +45,8 @@ corruption.
   old page.
 - The next-in-series lookup cache remains the only background machinery, and
   it is disposable: losing it costs a re-fetch, never reader data.
-- Backups reduce to one small table of statements.
+- Backups reduce to the statement log: the `statement` table and its
+  `statement_anchor` book keys, which travel together — anchors are what let
+  a statement survive renames, so a backup of one without the other changes
+  decisions after restore. The ISBN mapping is re-derivable source data, not
+  reader state.

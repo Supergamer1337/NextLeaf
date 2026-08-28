@@ -34,15 +34,21 @@ type Cached struct {
 	toReadAt time.Time
 	toReadOK bool
 
-	healthMu    sync.Mutex
-	lastSuccess time.Time
-	lastErr     error
-	servingOld  bool
+	healthMu sync.Mutex
+	// Staleness is per query: one query recovering must not mask another
+	// still serving fallback data.
+	stale   map[string]bool
+	success map[string]time.Time
+	lastErr error
 }
 
 // NewCached returns a Source that caches src's results for ttl.
 func NewCached(src Source, ttl time.Duration) *Cached {
-	return &Cached{src: src, ttl: ttl, now: time.Now}
+	return &Cached{
+		src: src, ttl: ttl, now: time.Now,
+		stale:   make(map[string]bool),
+		success: make(map[string]time.Time),
+	}
 }
 
 func (c *Cached) Name() string { return c.src.Name() }
@@ -55,28 +61,39 @@ func (c *Cached) fresh(at time.Time, ok bool) bool {
 	return ok && c.now().Sub(at) < c.ttl
 }
 
-// Health reports whether this source is being served from stale fallback data.
+// Health reports whether any of this source's queries is being served from
+// stale fallback data. Since is when the oldest such data was last fresh.
 func (c *Cached) Health() Health {
 	c.healthMu.Lock()
 	defer c.healthMu.Unlock()
-	h := Health{Source: c.src.Name(), Stale: c.servingOld, Since: c.lastSuccess}
-	if c.lastErr != nil {
+	h := Health{Source: c.src.Name()}
+	for query, isStale := range c.stale {
+		if !isStale {
+			continue
+		}
+		h.Stale = true
+		at := c.success[query]
+		if h.Since.IsZero() || at.Before(h.Since) {
+			h.Since = at
+		}
+	}
+	if h.Stale && c.lastErr != nil {
 		h.Err = c.lastErr.Error()
 	}
 	return h
 }
 
-// noteSuccess records a clean fetch, clearing any staleness.
-func (c *Cached) noteSuccess() {
+// noteSuccess records a clean fetch of one query, clearing its staleness.
+func (c *Cached) noteSuccess(query string) {
 	c.healthMu.Lock()
-	c.lastSuccess, c.lastErr, c.servingOld = c.now(), nil, false
+	c.success[query], c.stale[query] = c.now(), false
 	c.healthMu.Unlock()
 }
 
-// noteFallback records that err forced serving older data.
-func (c *Cached) noteFallback(err error) {
+// noteFallback records that err forced one query onto older data.
+func (c *Cached) noteFallback(query string, err error) {
 	c.healthMu.Lock()
-	c.lastErr, c.servingOld = err, true
+	c.lastErr, c.stale[query] = err, true
 	c.healthMu.Unlock()
 }
 
@@ -95,12 +112,12 @@ func (c *Cached) CurrentlyReading(ctx context.Context) ([]Entry, error) {
 		// A source that answered before is down, not gone: old data with a
 		// visible staleness flag beats an error page.
 		if c.readingOK {
-			c.noteFallback(err)
+			c.noteFallback("reading", err)
 			return c.reading, nil
 		}
 		return nil, err
 	}
-	c.noteSuccess()
+	c.noteSuccess("reading")
 	c.reading, c.readingAt, c.readingOK = entries, c.now(), true
 	return entries, nil
 }
@@ -112,21 +129,36 @@ func (c *Cached) RecentReads(ctx context.Context, limit int) ([]Entry, error) {
 	c.readsMu.Lock()
 	defer c.readsMu.Unlock()
 
-	if c.readsLimit == limit && c.fresh(c.readsAt, c.readsOK) {
-		return c.reads, nil
+	// The full history (limit 0) answers any cap by slicing; a capped result
+	// answers only its own cap. That lets the engine's full fetch and the
+	// picker's window share one cache entry instead of thrashing it.
+	servable := func() bool {
+		return c.readsOK && (c.readsLimit == limit || c.readsLimit == 0)
+	}
+	capped := func() []Entry {
+		if limit > 0 && limit < len(c.reads) {
+			return c.reads[:limit]
+		}
+		return c.reads
+	}
+
+	if servable() && c.fresh(c.readsAt, c.readsOK) {
+		return capped(), nil
 	}
 
 	entries, err := c.src.RecentReads(ctx, limit)
 	if err != nil {
 		// A source that answered before is down, not gone: old data with a
-		// visible staleness flag beats an error page.
-		if c.readsOK {
-			c.noteFallback(err)
-			return c.reads, nil
+		// visible staleness flag beats an error page — but only data that
+		// actually answers this limit; a capped cache cannot answer an
+		// uncapped request.
+		if servable() {
+			c.noteFallback("reads", err)
+			return capped(), nil
 		}
 		return nil, err
 	}
-	c.noteSuccess()
+	c.noteSuccess("reads")
 	c.reads, c.readsLimit, c.readsAt, c.readsOK = entries, limit, c.now(), true
 	return entries, nil
 }
@@ -146,12 +178,12 @@ func (c *Cached) ToRead(ctx context.Context) ([]Entry, error) {
 		// A source that answered before is down, not gone: old data with a
 		// visible staleness flag beats an error page.
 		if c.toReadOK {
-			c.noteFallback(err)
+			c.noteFallback("toRead", err)
 			return c.toRead, nil
 		}
 		return nil, err
 	}
-	c.noteSuccess()
+	c.noteSuccess("toRead")
 	c.toRead, c.toReadAt, c.toReadOK = entries, c.now(), true
 	return entries, nil
 }

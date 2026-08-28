@@ -37,11 +37,26 @@ func NewLookahead(resolver library.SeriesResolver, ttl time.Duration) *Lookahead
 	}
 }
 
+// keyFor identifies a question, carrying every dimension that changes the
+// answer: an unplaced series is not slot zero, and a novella-inclusive answer
+// does not serve a query that excludes them.
+func keyFor(q library.SeriesQuery) string {
+	pos, placed := q.Series.Slot()
+	slot := "unplaced"
+	if placed {
+		slot = formatPos(pos)
+	}
+	novellas := "novellas:no"
+	if q.IncludeNovellas {
+		novellas = "novellas:yes"
+	}
+	return key(q.Series.Name) + "\x00" + slot + "\x00" + novellas
+}
+
 // Cached reports whether a fresh answer for q is already held, so callers can
 // budget fresh queries separately from cache hits.
 func (l *Lookahead) Cached(q library.SeriesQuery) bool {
-	pos, _ := q.Series.Slot()
-	k := key(q.Series.Name) + "\x00" + formatPos(pos)
+	k := keyFor(q)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	cached, ok := l.answers[k]
@@ -54,8 +69,7 @@ func (l *Lookahead) Cached(q library.SeriesQuery) bool {
 func (l *Lookahead) Next(ctx context.Context, q library.SeriesQuery) (library.Entry, bool, error) {
 	// The position is part of the key, so finishing a book asks a new question
 	// rather than reading back the answer for the previous one.
-	pos, _ := q.Series.Slot()
-	k := key(q.Series.Name) + "\x00" + formatPos(pos)
+	k := keyFor(q)
 
 	l.mu.Lock()
 	cached, ok := l.answers[k]

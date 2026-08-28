@@ -132,3 +132,79 @@ func TestHealthOfIsCollectedThroughTheMerge(t *testing.T) {
 		t.Errorf("%d stale sources reported, want exactly the broken one", stale)
 	}
 }
+
+func TestStalenessIsTrackedPerQueryNotPerSource(t *testing.T) {
+	ctx := context.Background()
+	src := &flakyListSource{name: "gm", entries: []Entry{{Book: Book{Title: "X"}}}}
+	now := time.Now()
+	c := NewCached(src, time.Minute)
+	c.now = func() time.Time { return now }
+
+	if _, err := c.RecentReads(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	src.broken = true
+	now = now.Add(2 * time.Minute)
+	if _, err := c.RecentReads(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	// A different query recovering must not mask the reads still being stale.
+	src.broken = false
+	if _, err := c.CurrentlyReading(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if h := c.Health(); !h.Stale {
+		t.Error("Health = fresh while RecentReads still serves fallback data")
+	}
+
+	// The stale query itself recovering clears it.
+	if _, err := c.RecentReads(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if h := c.Health(); h.Stale {
+		t.Errorf("Health = %+v after every query recovered, want fresh", h)
+	}
+}
+
+func TestFallbackNeverAnswersADifferentLimit(t *testing.T) {
+	ctx := context.Background()
+	src := &flakyListSource{name: "gm", entries: []Entry{
+		{Book: Book{Title: "A"}}, {Book: Book{Title: "B"}}, {Book: Book{Title: "C"}},
+	}}
+	now := time.Now()
+	c := NewCached(src, time.Minute)
+	c.now = func() time.Time { return now }
+
+	if _, err := c.RecentReads(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	src.broken = true
+	now = now.Add(2 * time.Minute)
+	// Two capped entries are not an answer to "give me everything".
+	if _, err := c.RecentReads(ctx, 0); err == nil {
+		t.Error("a capped cache answered an uncapped request during an outage")
+	}
+}
+
+func TestAFullHistoryAnswersAnyCap(t *testing.T) {
+	ctx := context.Background()
+	src := &flakyListSource{name: "gm", entries: []Entry{
+		{Book: Book{Title: "A"}}, {Book: Book{Title: "B"}}, {Book: Book{Title: "C"}},
+	}}
+	now := time.Now()
+	c := NewCached(src, time.Minute)
+	c.now = func() time.Time { return now }
+
+	if _, err := c.RecentReads(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	// The engine asks for everything and the picker for a window; the full
+	// fetch satisfies both without a second round-trip.
+	got, err := c.RecentReads(ctx, 2)
+	if err != nil {
+		t.Fatalf("RecentReads(2) from a full cache: %v", err)
+	}
+	if len(got) != 2 || got[0].Book.Title != "A" {
+		t.Errorf("got %d entries, want the first 2 of the cached full history", len(got))
+	}
+}

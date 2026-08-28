@@ -101,3 +101,37 @@ func TestLookaheadDoesNotCacheFailures(t *testing.T) {
 		t.Errorf("resolver called %d times, want 2: errors must not be cached", r.calls)
 	}
 }
+
+func TestUnplacedAndSlotZeroDoNotShareACacheEntry(t *testing.T) {
+	ctx := context.Background()
+	r := &countingResolver{entry: mistborn4(), found: true}
+	l := NewLookahead(r, 24*time.Hour)
+	l.now = func() time.Time { return day0 }
+
+	placed := library.SeriesQuery{Series: library.Series{Name: "Saga", Position: library.At(0)}, IncludeNovellas: true}
+	unplaced := library.SeriesQuery{Series: library.Series{Name: "Saga"}, IncludeNovellas: true}
+	if _, _, err := l.Next(ctx, placed); err != nil {
+		t.Fatal(err)
+	}
+	if l.Cached(unplaced) {
+		t.Error("an unplaced query hits the slot-0 cache entry")
+	}
+}
+
+func TestTheNovellaPreferenceIsPartOfTheCacheKey(t *testing.T) {
+	ctx := context.Background()
+	r := &countingResolver{entry: mistborn4(), found: true}
+	l := NewLookahead(r, 24*time.Hour)
+	l.now = func() time.Time { return day0 }
+
+	with := library.SeriesQuery{Series: library.Series{Name: "Saga", Position: library.At(3)}, IncludeNovellas: true}
+	without := with
+	without.IncludeNovellas = false
+	if _, _, err := l.Next(ctx, with); err != nil {
+		t.Fatal(err)
+	}
+	// A novella-inclusive answer is not an answer to a query that excludes them.
+	if l.Cached(without) {
+		t.Error("a novella-excluding query hits the novella-inclusive cache entry")
+	}
+}
