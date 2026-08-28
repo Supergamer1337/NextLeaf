@@ -189,8 +189,8 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "could not record that decision", http.StatusInternalServerError)
 			return
 		}
-		if !ok || !slices.ContainsFunc(tracked.Alternatives, func(alt string) bool {
-			return series.Key(alt) == series.Key(to)
+		if !ok || !slices.ContainsFunc(tracked.Alternatives, func(alt series.Alternative) bool {
+			return series.Key(alt.Name) == series.Key(to)
 		}) {
 			http.Error(w, "that series is not an alternative of this one", http.StatusBadRequest)
 			return

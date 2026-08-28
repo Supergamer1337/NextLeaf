@@ -31,6 +31,12 @@ type Series struct {
 	Position  *float64
 	Slug      string // source-specific series identifier; "" if unknown
 	Completed bool   // the series is finished, so no later book can appear
+	// Description is the catalogue's blurb, which helps tell two orderings of
+	// one franchise apart. Empty when the source has none.
+	Description string
+	// Source names the backend that reported this membership, so a reader
+	// choosing between them can see who says what.
+	Source string
 }
 
 // At returns a position for a book that occupies a numbered slot. Any number is

@@ -84,6 +84,10 @@ var migrations = [][]string{
 	)`,
 		`ALTER TABLE tracked_series ADD COLUMN chosen INTEGER NOT NULL DEFAULT 0`,
 	},
+	// Two orderings of one franchise are told apart by their blurb, and by
+	// which backend claims them.
+	{`ALTER TABLE series_alternative ADD COLUMN description TEXT NOT NULL DEFAULT ''`},
+	{`ALTER TABLE series_alternative ADD COLUMN source TEXT NOT NULL DEFAULT ''`},
 }
 
 // Store is the durable record of tracked series and standing decisions.
@@ -298,9 +302,14 @@ func recordAlternatives(ctx context.Context, tx *sql.Tx, tracked library.Series,
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO series_alternative (name, alternative, display)
-			VALUES (?, ?, ?) ON CONFLICT(name, alternative) DO UPDATE SET display = excluded.display`,
-			key(tracked.Name), key(m.Name), m.Name); err != nil {
+			INSERT INTO series_alternative (name, alternative, display, description, source)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(name, alternative) DO UPDATE SET
+				display = excluded.display,
+				-- A source that knows no blurb must not erase one another gave.
+				description = CASE WHEN excluded.description != '' THEN excluded.description ELSE description END,
+				source = CASE WHEN excluded.source != '' THEN excluded.source ELSE source END`,
+			key(tracked.Name), key(m.Name), m.Name, m.Description, m.Source); err != nil {
 			return fmt.Errorf("recording alternatives of %q: %w", tracked.Name, err)
 		}
 	}
@@ -308,21 +317,22 @@ func recordAlternatives(ctx context.Context, tx *sql.Tx, tracked library.Series,
 }
 
 // alternatives lists the other series a tracked series' books belong to.
-func (s *Store) alternatives(ctx context.Context, name string) ([]string, error) {
+func (s *Store) alternatives(ctx context.Context, name string) ([]Alternative, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT display FROM series_alternative WHERE name = ? ORDER BY display`, key(name))
+		`SELECT display, description, source FROM series_alternative WHERE name = ? ORDER BY display`,
+		key(name))
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []string
+	var out []Alternative
 	for rows.Next() {
-		var display string
-		if err := rows.Scan(&display); err != nil {
+		var a Alternative
+		if err := rows.Scan(&a.Name, &a.Description, &a.Source); err != nil {
 			return nil, err
 		}
-		out = append(out, display)
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }

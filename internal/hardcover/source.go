@@ -293,6 +293,7 @@ type bookData struct {
 			Slug      string `json:"slug"`
 			Completed bool   `json:"is_completed"`
 			Books     int    `json:"books_count"`
+			Desc      string `json:"description"`
 		} `json:"series"`
 	} `json:"book_series"`
 }
@@ -310,7 +311,7 @@ const bookFields = `
       cached_tags
       image { url }
       contributions { author { name } }
-      book_series { position featured series { name slug is_completed books_count } }`
+      book_series { position featured series { name slug is_completed books_count description } }`
 
 // seriesBookFields adds the evidence the series lookup needs to tell an
 // original from its translations: whether the book has an edition in the
@@ -453,10 +454,12 @@ func seriesMemberships(b bookData) []library.Series {
 			continue
 		}
 		out = append(out, library.Series{
-			Name:      row.Series.Name,
-			Slug:      row.Series.Slug,
-			Completed: row.Series.Completed,
-			Position:  row.Position,
+			Name:        row.Series.Name,
+			Slug:        row.Series.Slug,
+			Completed:   row.Series.Completed,
+			Position:    row.Position,
+			Description: row.Series.Desc,
+			Source:      "hardcover",
 		})
 		featured = append(featured, row.Featured)
 		counts = append(counts, row.Series.Books)

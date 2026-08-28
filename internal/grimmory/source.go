@@ -161,7 +161,7 @@ func (c *Client) mapBook(b book) library.Book {
 		// A book can belong to a series without a number of its own — The
 		// Hobbit in The Lord of the Rings — so an absent seriesNumber leaves
 		// the book unplaced rather than at position zero.
-		out.Series = &library.Series{Name: m.SeriesName, Position: m.SeriesNumber}
+		out.Series = &library.Series{Name: m.SeriesName, Position: m.SeriesNumber, Source: "grimmory"}
 	}
 	return out
 }

@@ -36,8 +36,8 @@ func TestAlternativeSeriesAreOfferedForATrackedSeries(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Get = (%v, %v)", ok, err)
 	}
-	if len(tracked.Alternatives) != 1 || tracked.Alternatives[0] != "The Expanse" {
-		t.Errorf("Alternatives = %v, want [The Expanse]", tracked.Alternatives)
+	if len(tracked.Alternatives) != 1 || tracked.Alternatives[0].Name != "The Expanse" {
+		t.Errorf("Alternatives = %+v, want [The Expanse]", tracked.Alternatives)
 	}
 }
 
@@ -123,5 +123,44 @@ func TestSwitchingBackIsPossible(t *testing.T) {
 	}
 	if len(tracked) != 1 || tracked[0].Name != "The Expanse (Chronological)" {
 		t.Errorf("tracked = %v, want only The Expanse (Chronological)", names(tracked))
+	}
+}
+
+func TestAlternativesCarryTheirBlurbAndSource(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+
+	e := library.Entry{Book: library.Book{
+		Title:  "Leviathan Wakes",
+		Series: &library.Series{Name: "The Expanse (Chronological)", Position: library.At(2), Source: "hardcover"},
+		OtherSeries: []library.Series{{
+			Name:        "The Expanse",
+			Position:    library.At(1),
+			Source:      "grimmory",
+			Description: "Published order.",
+		}},
+	}}
+	if err := st.Reconcile(ctx, Snapshot{Reads: []library.Entry{e}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	tracked, _, err := st.Get(ctx, "The Expanse (Chronological)")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(tracked.Alternatives) != 1 {
+		t.Fatalf("Alternatives = %+v, want one", tracked.Alternatives)
+	}
+	alt := tracked.Alternatives[0]
+	// Two orderings of one franchise are told apart by their blurb and by
+	// which backend claims them.
+	if alt.Name != "The Expanse" {
+		t.Errorf("Name = %q", alt.Name)
+	}
+	if alt.Description != "Published order." {
+		t.Errorf("Description = %q, want the blurb", alt.Description)
+	}
+	if alt.Source != "grimmory" {
+		t.Errorf("Source = %q, want grimmory", alt.Source)
 	}
 }

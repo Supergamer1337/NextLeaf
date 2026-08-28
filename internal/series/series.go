@@ -91,9 +91,9 @@ type Tracked struct {
 	// CoverURL is the cover of the furthest book read in the series, which
 	// stands as the series' own face when there is no next book to show.
 	CoverURL string
-	// Alternatives names the other series the same books belong to, best
-	// first, which the reader can switch the series to.
-	Alternatives []string
+	// Alternatives are the other series the same books belong to, best first,
+	// which the reader can switch the series to.
+	Alternatives []Alternative
 	// CheckedAt is when the next book was last looked up.
 	CheckedAt time.Time
 }
@@ -101,6 +101,15 @@ type Tracked struct {
 // Key normalises a series name the way the store matches on it, so callers
 // comparing names against tracked series agree with the database.
 func Key(name string) string { return key(name) }
+
+// Alternative is another series the same books belong to. Description and
+// Source are what tell two of them apart: often the same franchise ordered
+// differently, or the same franchise as two backends happen to name it.
+type Alternative struct {
+	Name        string
+	Description string
+	Source      string
+}
 
 // Placed reports whether the reader has read a numbered volume of the series,
 // which is what makes "the next one" a question with an answer.

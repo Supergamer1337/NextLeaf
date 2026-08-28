@@ -564,3 +564,36 @@ func seriesFromRows(t *testing.T, rows ...string) string {
 	}
 	return entries[0].Book.Series.Name
 }
+
+func TestSeriesCarryTheirDescriptionAndSource(t *testing.T) {
+	const described = `{"data":{"user_books":[{"status_id":3,"book":{"title":"X","book_series":[
+	  {"position": 1, "featured": true, "series": {"name": "Saga", "books_count": 3, "description": "Published order."}}
+	]}}]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(b, &req)
+		if strings.Contains(req.Query, "me { id }") {
+			_, _ = io.WriteString(w, `{"data":{"me":[{"id":42}]}}`)
+			return
+		}
+		_, _ = io.WriteString(w, described)
+	}))
+	defer srv.Close()
+
+	entries, err := New("tok", WithEndpoint(srv.URL)).RecentReads(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("RecentReads: %v", err)
+	}
+	got := entries[0].Book.Series
+	// Two orderings of one franchise are told apart by their blurb, and by
+	// which backend claims them.
+	if got.Description != "Published order." {
+		t.Errorf("Description = %q, want the series blurb", got.Description)
+	}
+	if got.Source != "hardcover" {
+		t.Errorf("Source = %q, want hardcover", got.Source)
+	}
+}

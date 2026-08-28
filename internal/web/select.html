@@ -222,11 +222,35 @@
     }
     .drawer-act:hover { color: var(--moss); }
     .drawer-act--go { color: var(--moss); }
-    .drawer-alts {
-      display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;
-      margin-top: 0.35rem; padding-top: 0.35rem; border-top: 1px dotted var(--line);
+    /* Switching which series a row is tracked under */
+    .switcher { margin-top: 0.35rem; }
+    .switcher-toggle {
+      display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer;
+      list-style: none; font-size: 0.72rem; color: var(--muted);
     }
-    .drawer-alts-label { font-size: 0.68rem; color: var(--muted); }
+    .switcher-toggle::-webkit-details-marker { display: none; }
+    .switcher-toggle:hover { color: var(--moss); }
+    .switcher-icon { font-size: 0.9rem; line-height: 1; }
+    .switcher[open] .switcher-label { color: var(--moss); }
+    .switcher-menu {
+      margin-top: 0.35rem; padding: 0.3rem; display: flex; flex-direction: column; gap: 0.15rem;
+      background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    }
+    .switcher-option {
+      display: grid; gap: 0.1rem; width: 100%; text-align: left; font: inherit;
+      background: none; border: none; border-radius: 6px; padding: 0.35rem 0.45rem; cursor: pointer;
+      color: var(--ink);
+    }
+    .switcher-option:hover { background: var(--tint); }
+    .switcher-name { font-size: 0.8rem; font-weight: 600; }
+    .switcher-source {
+      justify-self: start; font-size: 0.62rem; letter-spacing: 0.04em; text-transform: uppercase;
+      color: var(--muted); background: var(--tint); border-radius: 999px; padding: 0.02rem 0.4rem;
+    }
+    .switcher-desc {
+      font-size: 0.7rem; color: var(--muted); line-height: 1.35;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    }
 
     @media (max-width: 460px) {
       .drawer { width: 100vw; }
@@ -467,18 +491,29 @@
           {{end}}
         </div>
         {{if .Alternatives}}
-        {{/* The same books are filed under another series too, and the pick
-             between them is a guess the reader can correct. */}}
-        <div class="drawer-alts">
-          <span class="drawer-alts-label">Also filed as</span>
-          {{range .Alternatives}}
-          <form method="post" action="/series/switch">
-            <input type="hidden" name="name" value="{{$tracked}}">
-            <input type="hidden" name="to" value="{{.}}">
-            <button class="drawer-act" type="submit" title="Track this series under {{.}} instead">{{.}}</button>
-          </form>
-          {{end}}
-        </div>
+        {{/* The same books are filed under other series too — a franchise
+             reordered, or two backends naming it differently — and the pick
+             between them is a guess the reader can correct. Folded away so a
+             long list costs the row nothing until asked for. */}}
+        <details class="switcher">
+          <summary class="switcher-toggle" title="Track under a different series">
+            <span class="switcher-icon" aria-hidden="true">⇄</span>
+            <span class="switcher-label">Switch series</span>
+          </summary>
+          <div class="switcher-menu">
+            {{range .Alternatives}}
+            <form method="post" action="/series/switch">
+              <input type="hidden" name="name" value="{{$tracked}}">
+              <input type="hidden" name="to" value="{{.Name}}">
+              <button class="switcher-option" type="submit">
+                <span class="switcher-name">{{.Name}}</span>
+                {{if .Source}}<span class="switcher-source">{{ucfirst .Source}}</span>{{end}}
+                {{if .Description}}<span class="switcher-desc">{{.Description}}</span>{{end}}
+              </button>
+            </form>
+            {{end}}
+          </div>
+        </details>
         {{end}}
       </div>
     </div>

@@ -485,7 +485,7 @@ func enclosingDetails(body, marker string) (string, bool) {
 	if i < 0 {
 		return "", false
 	}
-	start := strings.LastIndex(body[:i], "<details")
+	start := strings.LastIndex(body[:i], `<details class="drawer-group"`)
 	if start < 0 {
 		return "", false
 	}
@@ -737,5 +737,60 @@ func TestSwitchingToASeriesThatIsNotAnAlternativeIsRefused(t *testing.T) {
 	form := url.Values{"name": {"The Expanse (Chronological)"}, "to": {"Some Other Saga"}}
 	if rec := post(t, h, "/series/switch", form); rec.Code != http.StatusBadRequest {
 		t.Errorf("POST /series/switch to a stranger: status = %d, want 400", rec.Code)
+	}
+}
+
+// manyAlternatives tracks one series filed under three others, from two
+// backends, one of them with a blurb.
+func manyAlternativesStore(t *testing.T) *series.Store {
+	t.Helper()
+	st := testStore(t)
+	e := library.Entry{Book: library.Book{
+		Title:  "Leviathan Wakes",
+		Series: &library.Series{Name: "The Expanse (Chronological)", Position: library.At(2), Source: "hardcover"},
+		OtherSeries: []library.Series{
+			{Name: "The Expanse", Position: library.At(1), Source: "hardcover", Description: "Published order."},
+			{Name: "Expanse Shorts", Position: library.At(9), Source: "hardcover"},
+			{Name: "The Expanse Saga", Position: library.At(1), Source: "grimmory"},
+		},
+	}}
+	if err := st.Reconcile(context.Background(), series.Snapshot{Reads: []library.Entry{e}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	return st
+}
+
+func TestTheSwitcherStartsClosedAndHoldsEveryAlternative(t *testing.T) {
+	body := getBody(t, ready(t, stubSource{}, manyAlternativesStore(t)), "/")
+
+	i := strings.Index(body, `<details class="switcher"`)
+	if i < 0 {
+		t.Fatal("no switcher on a row with alternatives")
+	}
+	openTag, _, _ := strings.Cut(body[i:], ">")
+	if strings.Contains(openTag, "open") {
+		t.Errorf("the switcher starts open: %q", openTag)
+	}
+	// However many series the books belong to, they all have to be reachable.
+	menu := body[i:]
+	if end := strings.Index(menu, "</details>"); end > 0 {
+		menu = menu[:end]
+	}
+	for _, want := range []string{"The Expanse", "Expanse Shorts", "The Expanse Saga"} {
+		if !strings.Contains(menu, `value="`+want+`"`) {
+			t.Errorf("the switcher does not offer %q", want)
+		}
+	}
+}
+
+func TestTheSwitcherNamesTheSourceAndBlurbThatTellAlternativesApart(t *testing.T) {
+	body := getBody(t, ready(t, stubSource{}, manyAlternativesStore(t)), "/")
+
+	// Two orderings of one franchise are indistinguishable by name alone.
+	if !strings.Contains(body, "Published order.") {
+		t.Error("the switcher does not show an alternative's description")
+	}
+	if !strings.Contains(body, ">Grimmory<") {
+		t.Error("the switcher does not say which backend an alternative comes from")
 	}
 }
