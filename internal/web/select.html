@@ -225,37 +225,54 @@
     }
     .drawer-act:hover { color: var(--moss); }
     .drawer-act--go { color: var(--moss); }
-    /* Switching which series a row is tracked under. The control is a bare
-       icon at the row's top right; the options expand in place beneath the
-       row, in flow, so following rows slide down to make room. */
-    .drawer-row { position: relative; }
-    .switcher > .switcher-btn {
-      position: absolute; top: 0.45rem; right: 0;
+    /* Switching which series a row is tracked under: the row itself becomes
+       the wheel. It lifts in place over a dimmed drawer, candidates roll
+       through its footprint, and it settles back once one is chosen. */
+    .drawer-body { position: relative; }
+    .drawer-dim {
+      position: absolute; inset: 0; z-index: 4;
+      background: light-dark(rgba(36,49,42,0.35), rgba(0,0,0,0.55));
+      opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+    }
+    .drawer-body.dimmed .drawer-dim { opacity: 1; pointer-events: auto; }
+
+    .drawer-row { position: relative; transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease; }
+    .drawer-row.spinning {
+      z-index: 5; background: var(--card);
+      transform: scale(1.03); border-radius: 10px;
+      box-shadow: 0 16px 36px -18px var(--shadow-c);
+      padding-left: 0.45rem; padding-right: 0.45rem;
+    }
+
+    .switcher-btn {
+      position: absolute; top: 0.45rem; right: 0; z-index: 6;
       display: grid; place-items: center; width: 1.6rem; height: 1.6rem;
-      list-style: none; cursor: pointer; font-size: 0.95rem; line-height: 1;
-      color: var(--muted); border: 1px solid transparent; border-radius: 6px;
+      font: inherit; font-size: 0.95rem; line-height: 1; cursor: pointer;
+      color: var(--muted); background: none; border: 1px solid transparent; border-radius: 6px;
+      transition: transform 0.25s ease, color 0.15s ease;
     }
-    .switcher > .switcher-btn::-webkit-details-marker { display: none; }
-    .switcher > .switcher-btn:hover { color: var(--moss); border-color: var(--line); }
-    .switcher[open] > .switcher-btn { color: var(--moss); background: var(--tint); }
-    .switcher-menu {
-      list-style: none; margin: 0.5rem 0 0.15rem; padding: 0;
-      display: grid; gap: 0.35rem;
-    }
-    .switch-option {
-      display: grid; gap: 0.15rem; width: 100%; text-align: left; font: inherit; color: var(--ink);
-      background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
-      padding: 0.5rem 0.6rem; cursor: pointer;
-      animation: option-in 0.16s ease-out backwards;
-    }
-    .switch-option:hover { border-color: var(--moss); }
-    .switch-option:focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; }
-    @keyframes option-in {
-      from { opacity: 0; transform: translateY(-0.3rem); }
+    .switcher-btn:hover { color: var(--moss); border-color: var(--line); }
+    .spinning .switcher-btn { color: var(--moss); background: var(--tint); transform: rotate(180deg); }
+
+    .wheel-face { display: none; }
+    .spinning .row-body { display: none; }
+    .spinning .wheel-face { display: grid; gap: 0.45rem; animation: wheel-in 0.18s ease-out; }
+    @keyframes wheel-in {
+      from { opacity: 0; transform: translateY(0.25rem); }
       to   { opacity: 1; transform: none; }
     }
-    .switch-name { font-size: 0.82rem; font-weight: 600; }
-    .switch-meta { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+    .wheel-item { display: grid; gap: 0.15rem; min-height: 3rem; align-content: start; }
+    .wheel-item.roll-up   { animation: roll-up 0.16s ease-out; }
+    .wheel-item.roll-down { animation: roll-down 0.16s ease-out; }
+    @keyframes roll-up {
+      from { opacity: 0; transform: translateY(0.5rem); }
+      to   { opacity: 1; transform: none; }
+    }
+    @keyframes roll-down {
+      from { opacity: 0; transform: translateY(-0.5rem); }
+      to   { opacity: 1; transform: none; }
+    }
+    .wheel-meta { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
     .switch-source, .switch-pos {
       font-size: 0.62rem; letter-spacing: 0.04em; text-transform: uppercase;
       color: var(--muted); background: var(--tint); border-radius: 999px; padding: 0.03rem 0.4rem;
@@ -264,6 +281,20 @@
       font-size: 0.72rem; color: var(--muted); line-height: 1.4;
       display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
     }
+    .wheel-controls { display: flex; align-items: center; gap: 0.4rem; }
+    .wheel-step, .wheel-cancel {
+      display: grid; place-items: center; width: 1.7rem; height: 1.7rem;
+      font: inherit; font-size: 0.72rem; cursor: pointer;
+      color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    }
+    .wheel-step:hover, .wheel-cancel:hover { color: var(--moss); border-color: var(--moss); }
+    .wheel-ok {
+      font: inherit; font-size: 0.78rem; font-weight: 600; cursor: pointer;
+      color: var(--on-moss); background: var(--moss); border: none; border-radius: 999px;
+      padding: 0.28rem 0.9rem; margin-left: auto;
+    }
+    .wheel-ok:hover { filter: brightness(1.07); }
+    .wheel-cancel { margin-left: 0.1rem; }
 
     /* Notices */
     .notice {
@@ -392,6 +423,7 @@
       <a class="drawer-close" href="#" aria-label="Close">&times;</a>
     </div>
     <div class="drawer-body">
+      <div class="drawer-dim"></div>
       {{template "drawerGroup" dict "Label" "Reading next" "Items" .Panel.Pinned "Undo" "Unpin"}}
       {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Undo" "" "Open" true}}
       {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now"}}
@@ -402,6 +434,88 @@
   {{end}}
 
   <script>
+    // The series wheel: a row with alternatives lifts in place over a dimmed
+    // drawer, candidates roll through its footprint, and choosing one submits
+    // the switch. Everything else on the page works without this script.
+    (function () {
+      var body = document.querySelector(".drawer-body");
+      if (!body) return;
+      var dim = body.querySelector(".drawer-dim");
+      var openRow = null;
+
+      function close() {
+        if (!openRow) return;
+        openRow.classList.remove("spinning");
+        body.classList.remove("dimmed");
+        openRow = null;
+      }
+
+      document.querySelectorAll(".drawer-row").forEach(function (row) {
+        var btn = row.querySelector(".switcher-btn");
+        if (!btn) return;
+        var cands = Array.prototype.slice.call(row.querySelectorAll(".wheel-candidate"));
+        var face = row.querySelector(".wheel-face");
+        var form = row.querySelector(".wheel-form");
+        var item = face.querySelector(".wheel-item");
+        var i = 0;
+
+        function render(dir) {
+          var c = cands[i].dataset;
+          item.querySelector(".wheel-name").textContent = c.name;
+          var src = item.querySelector(".wheel-source");
+          src.textContent = c.source;
+          src.hidden = !c.source;
+          var pos = item.querySelector(".wheel-pos");
+          pos.textContent = c.pos ? "You're at book " + c.pos : "";
+          pos.hidden = !c.pos;
+          var desc = item.querySelector(".wheel-desc");
+          desc.textContent = c.desc;
+          desc.hidden = !c.desc;
+          if (dir) {
+            item.classList.remove("roll-up", "roll-down");
+            void item.offsetWidth; // restart the animation
+            item.classList.add(dir > 0 ? "roll-up" : "roll-down");
+          }
+        }
+        function cycle(d) {
+          i = (i + d + cands.length) % cands.length;
+          render(d);
+        }
+        function confirm() {
+          var to = cands[i].dataset.to;
+          if (!to) { close(); return; } // kept the current identity
+          form.querySelector("input[name=to]").value = to;
+          close(); // settle back down, then submit
+          setTimeout(function () { form.submit(); }, 170);
+        }
+
+        btn.addEventListener("click", function () {
+          if (openRow === row) { close(); return; }
+          close();
+          i = 0;
+          render();
+          row.classList.add("spinning");
+          body.classList.add("dimmed");
+          openRow = row;
+        });
+        face.querySelector(".wheel-up").addEventListener("click", function () { cycle(-1); });
+        face.querySelector(".wheel-down").addEventListener("click", function () { cycle(1); });
+        face.querySelector(".wheel-ok").addEventListener("click", confirm);
+        face.querySelector(".wheel-cancel").addEventListener("click", close);
+        row.addEventListener("keydown", function (e) {
+          if (openRow !== row) return;
+          if (e.key === "Escape") close();
+          if (e.key === "ArrowDown") { e.preventDefault(); cycle(1); }
+          if (e.key === "ArrowUp") { e.preventDefault(); cycle(-1); }
+          if (e.key === "Enter") { e.preventDefault(); confirm(); }
+        });
+      });
+      dim.addEventListener("click", close);
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") close();
+      });
+    })();
+
     (function () {
       var btn = document.getElementById("theme-toggle");
       function system() {
@@ -457,70 +571,77 @@
       {{else}}
       <span class="drawer-cover drawer-cover--blank" aria-hidden="true"></span>
       {{end}}
-      <div>
-        <span class="drawer-name">{{.Name}}</span>
-        {{if .NextTitle}}
-          <span class="drawer-next">Next: {{.NextTitle}}</span>
-        {{else if .CaughtUp}}
-          <span class="drawer-next">Nothing left to read</span>
-        {{else if .Position}}
-          <span class="drawer-pos">Read to book {{.Position}}</span>
-        {{end}}
-        <div class="drawer-acts">
-          {{if and .NextTitle (and (ne $.Label "Reading next") (ne $.Label "Dropped"))}}
-          <form method="post" action="/series/pin">
-            <input type="hidden" name="name" value="{{.Name}}">
-            <input type="hidden" name="position" value="{{.NextPosition}}">
-            <button class="drawer-act drawer-act--go" type="submit">Pick this</button>
-          </form>
+      <div class="drawer-cell">
+        <div class="row-body">
+          <span class="drawer-name">{{.Name}}</span>
+          {{if .NextTitle}}
+            <span class="drawer-next">Next: {{.NextTitle}}</span>
+          {{else if .CaughtUp}}
+            <span class="drawer-next">Nothing left to read</span>
+          {{else if .Position}}
+            <span class="drawer-pos">Read to book {{.Position}}</span>
           {{end}}
-          {{if eq $.Label "Current"}}
-          <form method="post" action="/series/park">
-            <input type="hidden" name="name" value="{{.Name}}">
-            <button class="drawer-act" type="submit">Park</button>
-          </form>
-          {{end}}
-          {{if ne $.Label "Dropped"}}
-          <form method="post" action="/series/drop">
-            <input type="hidden" name="name" value="{{.Name}}">
-            <button class="drawer-act" type="submit">Drop</button>
-          </form>
-          {{end}}
-          {{if $.Undo}}
-          <form method="post" action="/series/clear">
-            <input type="hidden" name="name" value="{{.Name}}">
-            <button class="drawer-act" type="submit">{{$.Undo}}</button>
-          </form>
-          {{end}}
+          <div class="drawer-acts">
+            {{if and .NextTitle (and (ne $.Label "Reading next") (ne $.Label "Dropped"))}}
+            <form method="post" action="/series/pin">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <button class="drawer-act drawer-act--go" type="submit">Pick this</button>
+            </form>
+            {{end}}
+            {{if eq $.Label "Current"}}
+            <form method="post" action="/series/park">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <button class="drawer-act" type="submit">Park</button>
+            </form>
+            {{end}}
+            {{if ne $.Label "Dropped"}}
+            <form method="post" action="/series/drop">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <button class="drawer-act" type="submit">Drop</button>
+            </form>
+            {{end}}
+            {{if $.Undo}}
+            <form method="post" action="/series/clear">
+              <input type="hidden" name="name" value="{{.Name}}">
+              <button class="drawer-act" type="submit">{{$.Undo}}</button>
+            </form>
+            {{end}}
+          </div>
         </div>
         {{if .Alternatives}}
-        {{/* The same books are filed under other series too — a franchise
-             reordered, or two backends naming it differently — and the pick
-             between them is a guess the reader can correct. The options
-             expand in place, like list items sliding in under the row. */}}
-        <details class="switcher">
-          <summary class="switcher-btn" title="Track under a different series" aria-label="Switch series">⇄</summary>
-          <ul class="switcher-menu">
-            {{range .Alternatives}}
-            <li>
-              <form method="post" action="/series/switch">
-                <input type="hidden" name="name" value="{{$tracked}}">
-                <input type="hidden" name="to" value="{{.Name}}">
-                <button class="switch-option" type="submit">
-                  <span class="switch-name">{{.Name}}</span>
-                  <span class="switch-meta">
-                    {{if .Source}}<span class="switch-source">{{ucfirst .Source}}</span>{{end}}
-                    {{if .Position}}<span class="switch-pos">You're at book {{.Position}}</span>{{end}}
-                  </span>
-                  {{if .Description}}<span class="switch-desc">{{.Description}}</span>{{end}}
-                </button>
-              </form>
-            </li>
-            {{end}}
-          </ul>
-        </details>
+        {{/* The wheel face the script swaps candidates through, in the row's
+             own footprint. Hidden until the row is spun. */}}
+        <div class="wheel-face">
+          <div class="wheel-item">
+            <span class="wheel-name drawer-name"></span>
+            <span class="wheel-meta">
+              <span class="wheel-source switch-source" hidden></span>
+              <span class="wheel-pos switch-pos" hidden></span>
+            </span>
+            <span class="wheel-desc switch-desc" hidden></span>
+          </div>
+          <div class="wheel-controls">
+            <button type="button" class="wheel-step wheel-up" aria-label="Previous series">▲</button>
+            <button type="button" class="wheel-step wheel-down" aria-label="Next series">▼</button>
+            <button type="button" class="wheel-ok">Use this</button>
+            <button type="button" class="wheel-cancel" aria-label="Cancel">✕</button>
+          </div>
+        </div>
         {{end}}
       </div>
+      {{if .Alternatives}}
+      <button class="switcher-btn" type="button" title="Track under a different series" aria-label="Switch series">⇄</button>
+      <div hidden>
+        <span class="wheel-candidate" data-to="" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-desc="Currently tracked."></span>
+        {{range .Alternatives}}
+        <span class="wheel-candidate" data-to="{{.Name}}" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-desc="{{.Description}}"></span>
+        {{end}}
+        <form method="post" action="/series/switch" class="wheel-form">
+          <input type="hidden" name="name" value="{{$tracked}}">
+          <input type="hidden" name="to" value="">
+        </form>
+      </div>
+      {{end}}
     </div>
   </li>
   {{end}}

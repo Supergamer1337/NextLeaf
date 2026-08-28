@@ -307,7 +307,7 @@ func TestAFoldedRowOffersNoDoNothingSwitch(t *testing.T) {
 
 	// The CSS class definition is always in the stylesheet; what must be
 	// absent is the control itself.
-	if body := getBody(t, h, "/"); strings.Contains(body, `class="switcher-toggle"`) {
+	if body := getBody(t, h, "/"); strings.Contains(body, `class="switcher-btn"`) {
 		t.Error("a switch control is offered with nothing meaningful to switch to")
 	}
 }
@@ -353,31 +353,40 @@ func switchSource() stubSource {
 	return stubSource{reads: []library.Entry{book}}
 }
 
-func TestTheSwitcherExpandsInPlaceNamingSourceAndBlurb(t *testing.T) {
+func TestTheSwitcherSpinsInPlace(t *testing.T) {
 	h := ready(t, switchSource(), testStore(t))
 	body := getBody(t, h, "/")
 
-	// The options expand inside the row rather than opening a modal, and the
-	// control is a bare icon: its purpose is told by tooltip and label, not
-	// by permanent text on every row.
-	i := strings.Index(body, `<details class="switcher"`)
-	if i < 0 {
-		t.Fatal("no in-place switcher on a row with alternatives")
-	}
-	if openTag, _, _ := strings.Cut(body[i:], ">"); strings.Contains(openTag, " open") {
-		t.Errorf("the switcher starts open: %q", openTag)
+	// The row itself becomes the wheel: an icon-only control, candidate data
+	// for the script to cycle through in place, and one form to submit the
+	// choice. No expanding menu, no modal.
+	if !strings.Contains(body, `class="switcher-btn"`) {
+		t.Fatal("no switch control on a row with alternatives")
 	}
 	if strings.Contains(body, ">Switch series<") {
-		t.Error("the switcher still carries its text label")
+		t.Error("the switcher still carries permanent text")
 	}
-	if strings.Contains(body, "switch-modal") || strings.Contains(body, "switch-backdrop") {
-		t.Error("modal markup survived the move to in-place expansion")
+	if strings.Contains(body, `<details class="switcher"`) || strings.Contains(body, "switch-modal") {
+		t.Error("old switcher markup survived")
+	}
+
+	// The wheel's candidates: the current identity first, then each
+	// alternative with what distinguishes it.
+	i := strings.Index(body, `class="wheel-candidate"`)
+	if i < 0 {
+		t.Fatal("no wheel candidates for the script to cycle")
+	}
+	if !strings.Contains(body, `data-name="The Expanse (Chronological)"`) {
+		t.Error("the current identity is not a candidate")
+	}
+	if !strings.Contains(body, `data-to="The Expanse"`) {
+		t.Error("the alternative is not a candidate")
 	}
 	if !strings.Contains(body, "Published order.") {
-		t.Error("the options do not show an alternative's description")
+		t.Error("the candidate does not carry its description")
 	}
-	if !strings.Contains(body, ">Hardcover<") {
-		t.Error("the options do not say which backend an alternative comes from")
+	if !strings.Contains(body, `action="/series/switch"`) {
+		t.Error("no form to submit the chosen candidate")
 	}
 }
 
