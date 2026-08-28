@@ -27,6 +27,11 @@ func TestStaticAssetsAreServed(t *testing.T) {
 			if rec.Body.Len() == 0 {
 				t.Error("body is empty")
 			}
+			// Vendored assets change only with a deploy; without a max-age
+			// every visit revalidates each of them.
+			if cc := rec.Header().Get("Cache-Control"); !strings.Contains(cc, "max-age") {
+				t.Errorf("Cache-Control = %q, want a max-age so browsers cache assets", cc)
+			}
 		})
 	}
 }

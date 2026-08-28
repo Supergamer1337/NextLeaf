@@ -455,6 +455,28 @@ func TestShellIsConstantAndReadsNoSource(t *testing.T) {
 	}
 }
 
+// The shell owns the only skeleton, shown before the first card. The fragment
+// must not carry one: after the first load the card stays on screen and is
+// morphed in place, never blanked while a request is in flight.
+func TestOnlyTheShellCarriesASkeleton(t *testing.T) {
+	h := ready(t, midSeries(), testStore(t))
+	if shell := getBody(t, h, "/"); !strings.Contains(shell, `class="waiting waiting--initial"`) {
+		t.Error("the shell has no skeleton to show before the first card arrives")
+	}
+	if frag := getBody(t, h, "/view"); strings.Contains(frag, `class="waiting`) {
+		t.Error("the fragment carries a skeleton, so a swap would blank the card instead of morphing it")
+	}
+}
+
+// The app is essentially one verb, so rerolling deserves a key: the button
+// listens for "n" anywhere on the page, declared in the markup itself.
+func TestPickAnotherListensForAKey(t *testing.T) {
+	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view")
+	if !strings.Contains(body, "keyup[key=='n'] from:body") {
+		t.Error("the reroll button has no keyboard trigger")
+	}
+}
+
 // The fragment is document-free: it is swapped into a page that already has a
 // head and a body.
 func TestViewIsAFragmentNotAPage(t *testing.T) {
@@ -470,7 +492,7 @@ func TestViewIsAFragmentNotAPage(t *testing.T) {
 // clears itself as soon as something works.
 func TestTheNoticeSlotIsEmptyOnASuccessfulRender(t *testing.T) {
 	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view")
-	if !strings.Contains(body, `<div id="flash" role="status"></div>`) {
+	if !strings.Contains(body, `<div id="flash"></div>`) {
 		t.Error("the notice slot is not empty, so an earlier refusal would persist")
 	}
 }

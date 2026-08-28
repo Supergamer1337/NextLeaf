@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"html/template"
 	"io"
@@ -58,6 +59,16 @@ var selectFuncs = template.FuncMap{
 			m[key] = pairs[i+1]
 		}
 		return m
+	},
+	// hxvals JSON-encodes key/value pairs for a button's hx-vals attribute, so
+	// a decision travels without a form wrapped around it.
+	"hxvals": func(pairs ...string) (string, error) {
+		m := make(map[string]string, len(pairs)/2)
+		for i := 0; i+1 < len(pairs); i += 2 {
+			m[pairs[i]] = pairs[i+1]
+		}
+		b, err := json.Marshal(m)
+		return string(b), err
 	},
 	// ucfirst capitalises the first letter so reason fragments read as sentences.
 	"ucfirst": func(s string) string {
@@ -116,8 +127,14 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("POST /series/{action}", s.handleSeriesDecision)
 	mux.HandleFunc("GET /cover/{source}/{id}", s.handleCover)
 	mux.HandleFunc("GET /healthcheck", handleHealthcheck)
-	// Paths line up with the embed, so no prefix stripping is needed.
-	mux.Handle("GET /static/", http.FileServerFS(staticFS))
+	// Paths line up with the embed, so no prefix stripping is needed. The
+	// assets are vendored and change only with a deploy, so a day-long cache
+	// costs at worst one stale day after one.
+	static := http.FileServerFS(staticFS)
+	mux.Handle("GET /static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		static.ServeHTTP(w, r)
+	}))
 	return mux
 }
 
@@ -147,7 +164,7 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	action := r.PathValue("action")
-	err := s.engine.Decide(ctx, action, name, strings.TrimSpace(r.FormValue("to")))
+	uncached, err := s.engine.Decide(ctx, action, name, strings.TrimSpace(r.FormValue("to")))
 	switch {
 	case errors.Is(err, series.ErrUnknownAction):
 		flash(w, "that is not something you can do to a series", http.StatusNotFound)
@@ -160,14 +177,17 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A decision re-renders without asking the catalogue anything, so it cannot
-	// be stretched by a slow one. The exceptions are the two that leave the
-	// group with no cached answer: a switch, which tracks it under a different
-	// name and so a different cache key, and undropping, since a dropped group
-	// is skipped by enrich and Warm alike. The drawer marks the second, being
-	// the side that knows which rows are dropped; a forged marker only makes
-	// the forger's own request slower.
-	uncached := action == "switch" || r.FormValue("uncached") != ""
-	renderView(w, s.viewOf(ctx, false, uncached), http.StatusOK)
+	// be stretched by a slow one — except when Decide says the decision left
+	// the group with no cached answer, which is the one case the re-render must
+	// be allowed to ask, or the row comes back with nothing next.
+	data := s.viewOf(ctx, false, uncached)
+	// A decision made in the drawer shows its effect where the reader is
+	// standing — the row moves, undo alongside — so only card decisions get
+	// the confirmation banner.
+	if r.FormValue("from") != "drawer" {
+		data.Done = doneFor(action, name, strings.TrimSpace(r.FormValue("to")))
+	}
+	renderView(w, data, http.StatusOK)
 }
 
 // handleCover relays a cover image from the source holding it, for providers
@@ -198,8 +218,39 @@ func (s *server) handleCover(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, body)
 }
 
+// done is the confirmation a recorded decision answers with, paired with the
+// undo that reverses it. It lands in the notice slot, so the next successful
+// render clears it on its own.
+type done struct {
+	Msg        string
+	UndoLabel  string
+	UndoAction string // the /series/{action} that reverses the decision
+	UndoName   string
+	UndoTo     string // only a reverse switch names a destination
+}
+
+// doneFor phrases the confirmation for a decision. A clear is itself an undo,
+// so its confirmation ends the chain rather than offering another one.
+func doneFor(action, name, to string) *done {
+	switch action {
+	case "park":
+		return &done{Msg: "Parked “" + name + "” for one book.", UndoLabel: "Resume now", UndoAction: "clear", UndoName: name}
+	case "drop":
+		return &done{Msg: "Dropped “" + name + "”.", UndoLabel: "Undrop", UndoAction: "clear", UndoName: name}
+	case "pin":
+		return &done{Msg: "Pinned “" + name + "” to read next.", UndoLabel: "Unpin", UndoAction: "clear", UndoName: name}
+	case "switch":
+		return &done{Msg: "Now tracking “" + to + "”.", UndoLabel: "Switch back", UndoAction: "switch", UndoName: to, UndoTo: name}
+	case "clear":
+		return &done{Msg: "“" + name + "” is back in the running."}
+	}
+	return nil
+}
+
 // viewData is the fragment's view model: the card and the drawer together.
 type viewData struct {
+	// Done is the decision just recorded, when the render answers one.
+	Done       *done
 	Configured bool
 	Error      string
 	Rec        picker.Recommendation

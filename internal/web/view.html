@@ -1,7 +1,12 @@
 {{define "view"}}
-  <div id="flash" role="status"></div>
-  <div class="deck">
-    <div class="waiting" aria-hidden="true">{{template "waitingCard"}}</div>
+  {{/* No role="status" here: #app is already a polite live region, and a
+       nested one would announce every notice twice. */}}
+  <div id="flash">
+    {{- with .Done -}}
+    <p class="notice notice--done">{{.Msg}}{{if .UndoLabel}} <button class="drawer-act" type="button" hx-post="/series/{{.UndoAction}}" hx-vals="{{hxvals "name" .UndoName "to" .UndoTo}}" hx-disabled-elt="this">{{.UndoLabel}}</button>{{end}}</p>
+    {{- end -}}
+  </div>
+  <div class="deck" id="deck">
     {{if not .Configured}}
       <p class="notice">No reading source connected. Set <code>HARDCOVER_TOKEN</code> and restart to get a recommendation.</p>
     {{else if .Error}}
@@ -66,21 +71,14 @@
       </section>
 
       <div class="actions">
-        <button class="btn" type="button" hx-get="/view?another=1" hx-disabled-elt="this">Pick another</button>
+        <button class="btn" type="button" hx-get="/view?another=1" hx-trigger="click, keyup[key=='n'] from:body" hx-disabled-elt="this" title="Press n for another pick">Pick another</button>
         {{if $.Decidable}}
-        {{$name := $.Decide}}
-        <form class="decide" hx-post="/series/pin" hx-disabled-elt="find button">
-          <input type="hidden" name="name" value="{{$name}}">
-          <button class="btn btn--quiet" type="submit">Reading this next</button>
-        </form>
-        <form class="decide" hx-post="/series/park" hx-disabled-elt="find button">
-          <input type="hidden" name="name" value="{{$name}}">
-          <button class="btn btn--quiet" type="submit">Park for one book</button>
-        </form>
-        <form class="decide" hx-post="/series/drop" hx-disabled-elt="find button">
-          <input type="hidden" name="name" value="{{$name}}">
-          <button class="btn btn--quiet" type="submit">Drop this series</button>
-        </form>
+        {{/* No pin here: pinning re-renders this same card, so the button
+             would look inert. It lives in the drawer, where the filing
+             visibly changes. */}}
+        {{$vals := hxvals "name" $.Decide}}
+        <button class="btn btn--quiet" type="button" hx-post="/series/park" hx-vals="{{$vals}}" hx-disabled-elt="this">Park for one book</button>
+        <button class="btn btn--quiet" type="button" hx-post="/series/drop" hx-vals="{{$vals}}" hx-disabled-elt="this">Drop this series</button>
         {{end}}
       </div>
       {{end}}
@@ -93,10 +91,10 @@
        in: no reopening, and the scroll position survives on its own. */}}
   <a class="drawer-toggle" id="drawer-toggle" href="#series" hx-swap-oob="true"{{if not .Panel.Any}} hidden{{end}}>Series <span class="drawer-count">{{.Panel.Count}}</span></a>
   <div class="drawer-body" id="drawer-body" hx-swap-oob="innerHTML">
-      {{template "drawerGroup" dict "Label" "Reading next — pinned" "Items" .Panel.Pinned "Undo" "Unpin" "Flat" true}}
-      {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Undo" "" "Open" true}}
-      {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now"}}
-      {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "Undo" ""}}
+      {{template "drawerGroup" dict "Label" "Reading next — pinned" "Items" .Panel.Pinned "Undo" "Unpin" "Flat" true "CanDrop" true}}
+      {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Open" true "CanPick" true "CanPark" true "CanDrop" true}}
+      {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now" "CanPick" true "CanDrop" true}}
+      {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "CanPick" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
   </div>
 {{end}}
@@ -155,95 +153,97 @@
           {{else if .CaughtUp}}
             <span class="drawer-next">Nothing left to read</span>
           {{end}}
+          {{/* "from" marks the decision as made in the drawer, where the row
+               moving is the feedback; the page raises no banner for it. */}}
+          {{$vals := hxvals "name" .Name "from" "drawer"}}
           <div class="drawer-acts">
-            {{if and .NextTitle (and (ne $.Label "Reading next — pinned") (ne $.Label "Dropped"))}}
-            <form hx-post="/series/pin" hx-disabled-elt="find button">
-              <input type="hidden" name="name" value="{{.Name}}">
-              <button class="drawer-act drawer-act--go" type="submit">Pick this</button>
-            </form>
+            {{if and .NextTitle $.CanPick}}
+            <button class="drawer-act drawer-act--go" type="button" hx-post="/series/pin" hx-vals="{{$vals}}" hx-disabled-elt="this">Pick this</button>
             {{end}}
-            {{if eq $.Label "Current"}}
-            <form hx-post="/series/park" hx-disabled-elt="find button">
-              <input type="hidden" name="name" value="{{.Name}}">
-              <button class="drawer-act" type="submit">Park</button>
-            </form>
+            {{if $.CanPark}}
+            <button class="drawer-act" type="button" hx-post="/series/park" hx-vals="{{$vals}}" hx-disabled-elt="this">Park</button>
             {{end}}
-            {{if ne $.Label "Dropped"}}
-            <form hx-post="/series/drop" hx-disabled-elt="find button">
-              <input type="hidden" name="name" value="{{.Name}}">
-              <button class="drawer-act" type="submit">Drop</button>
-            </form>
+            {{if $.CanDrop}}
+            <button class="drawer-act" type="button" hx-post="/series/drop" hx-vals="{{$vals}}" hx-disabled-elt="this">Drop</button>
             {{end}}
             {{if $.Undo}}
-            <form hx-post="/series/clear" hx-disabled-elt="find button">
-              <input type="hidden" name="name" value="{{.Name}}">
-              {{/* Only a dropped group comes back with nothing cached about it. */}}
-              {{if eq $.Label "Dropped"}}<input type="hidden" name="uncached" value="1">{{end}}
-              <button class="drawer-act" type="submit">{{$.Undo}}</button>
-            </form>
+            <button class="drawer-act" type="button" hx-post="/series/clear" hx-vals="{{$vals}}" hx-disabled-elt="this">{{$.Undo}}</button>
             {{end}}
           </div>
         </div>
         {{if .Alternatives}}
-        {{/* The wheel face the script swaps candidates through, in the row's
-             own footprint. Hidden until the row is spun. */}}
+        {{/* The wheel: a card floated over the row and centered on it, so
+             opening, cycling, and closing never reflow the list. Every
+             candidate arrives fully rendered — the current identity first,
+             then each alternative — so the script only chooses which one
+             shows, never writes their content. Hidden until the row is spun.
+             The ghosts live inside it, anchored to the card's own edges. */}}
         <div class="wheel-face">
-          <div class="wheel-item">
-            <span class="wheel-name drawer-name"></span>
-            <span class="wheel-meta">
-              <span class="wheel-source switch-source" hidden></span>
-              <span class="wheel-pos switch-pos" hidden></span>
-            </span>
-            <span class="wheel-desc switch-desc" hidden></span>
-          </div>
+          <img class="wheel-cover" alt="" hidden>
+          {{template "wheelItem" dict "To" "" "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Desc" "Currently tracked." "Cover" (or .NextCoverURL .CoverURL)}}
+          {{range .Alternatives}}
+          {{template "wheelItem" dict "To" .Name "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Desc" .Description "Cover" .CoverURL}}
+          {{end}}
           <div class="wheel-controls">
             <button type="button" class="wheel-ok">Use this</button>
             <button type="button" class="wheel-cancel" aria-label="Cancel">✕</button>
           </div>
+          <button type="button" class="wheel-ghost wheel-prev" aria-label="Previous series">{{template "wheelPeeks" .}}</button>
+          <button type="button" class="wheel-ghost wheel-next" aria-label="Next series">{{template "wheelPeeks" .}}</button>
         </div>
         {{end}}
       </div>
       {{if .Alternatives}}
-      {{/* The ghost cards the selection moves between: rendered above and
-           below the lifted card, smaller and darkened for depth. */}}
-      <button type="button" class="wheel-ghost wheel-prev" aria-label="Previous series" hidden>
-        <img class="ghost-cover" alt="" hidden>
-        <span class="ghost-text">
-          <span class="peek-name"></span>
-          <span class="ghost-badges">
-            <span class="peek-badge switch-source" hidden></span>
-            <span class="peek-badge switch-pos" hidden></span>
-          </span>
-        </span>
-      </button>
-      <button type="button" class="wheel-ghost wheel-next" aria-label="Next series" hidden>
-        <img class="ghost-cover" alt="" hidden>
-        <span class="ghost-text">
-          <span class="peek-name"></span>
-          <span class="ghost-badges">
-            <span class="peek-badge switch-source" hidden></span>
-            <span class="peek-badge switch-pos" hidden></span>
-          </span>
-        </span>
-      </button>
       <button class="switcher-btn" type="button" title="Track under a different series" aria-label="Switch series">⇄</button>
-      <div hidden>
-        <span class="wheel-candidate" data-to="" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-pos-label="{{.PositionLabel}}" data-desc="Currently tracked." data-cover="{{or .NextCoverURL .CoverURL}}"></span>
-        {{range .Alternatives}}
-        <span class="wheel-candidate" data-to="{{.Name}}" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-pos-label="{{.PositionLabel}}" data-desc="{{.Description}}" data-cover="{{.CoverURL}}"></span>
-        {{end}}
-        {{/* The wheel's button sits outside this form, so name it directly; only
-             one row is ever spun at a time. */}}
-        <form hx-post="/series/switch" hx-disabled-elt=".wheel-ok" class="wheel-form">
-          <input type="hidden" name="name" value="{{$tracked}}">
-          <input type="hidden" name="to" value="">
-        </form>
-      </div>
+      {{/* The wheel's button sits outside this form, so name it directly; only
+           one row is ever spun at a time. */}}
+      <form hx-post="/series/switch" hx-disabled-elt=".wheel-ok" class="wheel-form" hidden>
+        <input type="hidden" name="name" value="{{$tracked}}">
+        <input type="hidden" name="to" value="">
+        <input type="hidden" name="from" value="drawer">
+      </form>
       {{end}}
     </div>
   </li>
   {{end}}
 </ul>
+{{end}}
+
+{{/* One wheel candidate, rendered whole; the script shows one at a time.
+     data-to is what confirming submits — empty means keep the current
+     identity — and data-cover is the face the row wears while it shows. */}}
+{{define "wheelItem"}}
+<div class="wheel-item" data-to="{{.To}}" data-cover="{{.Cover}}" hidden>
+  <span class="drawer-name">{{.Name}}</span>
+  <span class="wheel-meta">
+    {{if .Source}}<span class="switch-source">{{ucfirst .Source}}</span>{{end}}
+    {{if .PosLabel}}<span class="switch-pos">{{.PosLabel}}</span>{{end}}
+  </span>
+  {{/* Always present, its lines reserved in CSS, so candidates with and
+       without descriptions have the same height and cycling never resizes
+       the card. */}}
+  <span class="switch-desc">{{.Desc}}</span>
+</div>
+{{end}}
+
+{{/* A ghost's peeks: one compact card per candidate, same order as the
+     wheel's items. */}}
+{{define "wheelPeeks"}}
+  {{template "wheelPeek" dict "Name" .Name "Source" .Source "Pos" .Position "Cover" (or .NextCoverURL .CoverURL)}}
+  {{range .Alternatives}}{{template "wheelPeek" dict "Name" .Name "Source" .Source "Pos" .Position "Cover" .CoverURL}}{{end}}
+{{end}}
+
+{{define "wheelPeek"}}
+<span class="wheel-peek" hidden>
+  {{if .Cover}}<img class="ghost-cover" src="{{.Cover}}" alt="">{{end}}
+  <span class="ghost-text">
+    <span class="peek-name">{{.Name}}</span>
+    <span class="ghost-badges">
+      {{if .Source}}<span class="peek-badge switch-source">{{ucfirst .Source}}</span>{{end}}
+      {{if .Pos}}<span class="peek-badge switch-pos">book {{.Pos}}</span>{{end}}
+    </span>
+  </span>
+</span>
 {{end}}
 
 {{/* The card's footprint while a recommendation is in flight. Static: the

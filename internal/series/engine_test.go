@@ -74,7 +74,7 @@ func TestParkingSkipsOneTurn(t *testing.T) {
 	}
 	e := testEngine(t, src)
 	ctx := context.Background()
-	if err := e.Decide(ctx, "park", "Mistborn", ""); err != nil {
+	if _, err := e.Decide(ctx, "park", "Mistborn", ""); err != nil {
 		t.Fatalf("Decide park: %v", err)
 	}
 	rec, _, err := e.Recommend(ctx, false)
@@ -98,7 +98,7 @@ func TestDroppingWithholdsTheBooksFromVarietyToo(t *testing.T) {
 	}
 	e := testEngine(t, src)
 	ctx := context.Background()
-	if err := e.Decide(ctx, "drop", "Mistborn", ""); err != nil {
+	if _, err := e.Decide(ctx, "drop", "Mistborn", ""); err != nil {
 		t.Fatalf("Decide drop: %v", err)
 	}
 	rec, _, err := e.Recommend(ctx, true)
@@ -183,7 +183,7 @@ func TestSwitchRecordsAPreferenceAndTheViewFollows(t *testing.T) {
 	e := testEngine(t, src)
 	ctx := context.Background()
 
-	if err := e.Decide(ctx, "switch", "Chrono", "Published"); err != nil {
+	if _, err := e.Decide(ctx, "switch", "Chrono", "Published"); err != nil {
 		t.Fatalf("Decide switch: %v", err)
 	}
 	v, err := e.View(ctx)
@@ -195,7 +195,7 @@ func TestSwitchRecordsAPreferenceAndTheViewFollows(t *testing.T) {
 	}
 
 	// And back again: preferences are fully reversible.
-	if err := e.Decide(ctx, "switch", "Published", "Chrono"); err != nil {
+	if _, err := e.Decide(ctx, "switch", "Published", "Chrono"); err != nil {
 		t.Fatalf("switch back: %v", err)
 	}
 	v, err = e.View(ctx)
@@ -209,14 +209,14 @@ func TestSwitchRecordsAPreferenceAndTheViewFollows(t *testing.T) {
 
 func TestSwitchToAStrangerIsRefused(t *testing.T) {
 	src := fakeSource{reads: []library.Entry{read("Book 3", "Mistborn", 3, day0)}}
-	err := testEngine(t, src).Decide(context.Background(), "switch", "Mistborn", "Some Other Saga")
+	_, err := testEngine(t, src).Decide(context.Background(), "switch", "Mistborn", "Some Other Saga")
 	if !errors.Is(err, ErrNotAnAlternative) {
 		t.Errorf("err = %v, want ErrNotAnAlternative", err)
 	}
 }
 
 func TestDecidingOnAnUnknownSeriesIsRefused(t *testing.T) {
-	err := testEngine(t, fakeSource{}).Decide(context.Background(), "park", "Nothing", "")
+	_, err := testEngine(t, fakeSource{}).Decide(context.Background(), "park", "Nothing", "")
 	if !errors.Is(err, ErrUnknownSeries) {
 		t.Errorf("err = %v, want ErrUnknownSeries", err)
 	}
@@ -235,6 +235,42 @@ func TestAZeroBudgetSpendsNoFreshLookups(t *testing.T) {
 	}
 	if src.calls != 0 {
 		t.Errorf("asked the catalogue %d times on a zero budget, want 0", src.calls)
+	}
+}
+
+// Decide reports which decisions leave the group with no cached lookup: a
+// switch tracks it under a new name (a new cache key), and clearing a drop
+// revives a group that enrich and Warm alike have been skipping. The caller
+// uses this to grant the re-render a lookup budget; every other decision
+// re-renders from cache alone.
+func TestDecideReportsWhichDecisionsLeaveTheGroupUncached(t *testing.T) {
+	book := library.Entry{Book: library.Book{
+		Title:       "Leviathan Wakes",
+		Series:      &library.Series{Name: "Chrono", Position: library.At(2), Source: "hardcover"},
+		OtherSeries: []library.Series{{Name: "Published", Position: library.At(1), Source: "hardcover"}},
+	}, Status: library.StatusRead}
+	book.FinishedAt = day0
+	e := testEngine(t, fakeSource{reads: []library.Entry{book}})
+	ctx := context.Background()
+
+	steps := []struct {
+		action, name, to string
+		wantUncached     bool
+	}{
+		{"park", "Chrono", "", false},
+		{"clear", "Chrono", "", false}, // resuming a park: enriched all along
+		{"switch", "Chrono", "Published", true},
+		{"drop", "Published", "", false},
+		{"clear", "Published", "", true}, // undropping: nothing was ever cached
+	}
+	for _, s := range steps {
+		uncached, err := e.Decide(ctx, s.action, s.name, s.to)
+		if err != nil {
+			t.Fatalf("Decide %s %q: %v", s.action, s.name, err)
+		}
+		if uncached != s.wantUncached {
+			t.Errorf("Decide %s %q: uncached = %v, want %v", s.action, s.name, uncached, s.wantUncached)
+		}
 	}
 }
 

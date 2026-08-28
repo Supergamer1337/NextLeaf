@@ -141,6 +141,20 @@ func TestPanelListsTrackedSeriesAndOffersUndo(t *testing.T) {
 	}
 }
 
+// Pinning from the card re-renders the very same card, so the button read as
+// doing nothing at all. Pinning lives in the drawer, where filing a series
+// under "Reading next" is a change the reader can see.
+func TestTheCardOffersParkAndDropButNoPin(t *testing.T) {
+	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view")
+	deck, _, _ := strings.Cut(body, `id="drawer-toggle"`)
+	if strings.Contains(deck, `hx-post="/series/pin"`) {
+		t.Error("the card still offers a pin whose effect it cannot show")
+	}
+	if !strings.Contains(deck, `hx-post="/series/park"`) || !strings.Contains(deck, `hx-post="/series/drop"`) {
+		t.Error("park and drop belong on the card")
+	}
+}
+
 func TestCardOffersNoDecisionsForASeriesTheReaderHasNotStarted(t *testing.T) {
 	src := stubSource{toRead: []library.Entry{seriesEntry("Book 1", "Unstarted", 1)}}
 	h := ready(t, src, testStore(t))
@@ -370,17 +384,17 @@ func TestTheSwitcherSpinsInPlace(t *testing.T) {
 		t.Error("old switcher markup survived")
 	}
 
-	// The wheel's candidates: the current identity first, then each
-	// alternative with what distinguishes it.
-	i := strings.Index(body, `class="wheel-candidate"`)
-	if i < 0 {
-		t.Fatal("no wheel candidates for the script to cycle")
+	// The wheel's candidates are rendered whole by the server — the current
+	// identity first, then each alternative — so the script only chooses
+	// which one shows, never writes their content.
+	if n := strings.Count(body, `class="wheel-item"`); n != 2 {
+		t.Errorf("%d wheel items, want both candidates rendered whole", n)
 	}
-	if !strings.Contains(body, `data-name="The Expanse (Chronological)"`) {
-		t.Error("the current identity is not a candidate")
+	if !strings.Contains(body, "Currently tracked.") {
+		t.Error("the current identity is not a rendered candidate")
 	}
 	if !strings.Contains(body, `data-to="The Expanse"`) {
-		t.Error("the alternative is not a candidate")
+		t.Error("the alternative candidate does not say what to switch to")
 	}
 	if !strings.Contains(body, "Published order.") {
 		t.Error("the candidate does not carry its description")
@@ -388,9 +402,21 @@ func TestTheSwitcherSpinsInPlace(t *testing.T) {
 	if !strings.Contains(body, `hx-post="/series/switch"`) {
 		t.Error("no form to submit the chosen candidate")
 	}
-	// The selection moves between ghost cards above and below the lifted row.
+	if strings.Contains(body, "wheel-candidate") {
+		t.Error("data-span candidates survived; the server renders candidates whole now")
+	}
+	// The selection moves between ghost cards above and below the lifted row,
+	// each holding a server-rendered peek of every candidate.
 	if !strings.Contains(body, `class="wheel-ghost wheel-prev"`) || !strings.Contains(body, `class="wheel-ghost wheel-next"`) {
 		t.Error("the wheel has no ghost cards to move between")
+	}
+	if n := strings.Count(body, `class="wheel-peek"`); n != 4 {
+		t.Errorf("%d peeks, want each ghost to hold every candidate", n)
+	}
+	// The face floats over the row rather than replacing its content, so it
+	// wears its own cover; the row underneath is never touched.
+	if !strings.Contains(body, `class="wheel-cover"`) {
+		t.Error("the face has no cover of its own, so it would have to borrow the row's")
 	}
 }
 
@@ -463,6 +489,98 @@ func (s *breakableSource) ToRead(ctx context.Context) ([]library.Entry, error) {
 }
 
 var errTestDown = errors.New("dial tcp: connection refused")
+
+// flashOf returns the notice slot's contents from a response body.
+func flashOf(t *testing.T, body string) string {
+	t.Helper()
+	i := strings.Index(body, `<div id="flash"`)
+	if i < 0 {
+		t.Fatal("the response carries no notice slot")
+	}
+	end := strings.Index(body[i:], `<div class="deck"`)
+	if end < 0 {
+		return body[i:]
+	}
+	return body[i : i+end]
+}
+
+// A recorded decision answers with a quiet confirmation carrying its own
+// undo, so reversing a slip never means hunting the drawer for the row.
+func TestADecisionConfirmsItselfAndOffersUndo(t *testing.T) {
+	h := ready(t, midSeries(), testStore(t))
+	rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	flash := flashOf(t, rec.Body.String())
+	if !strings.Contains(flash, "Dropped") || !strings.Contains(flash, "Mistborn") {
+		t.Errorf("the confirmation does not say what was decided: %q", flash)
+	}
+	if !strings.Contains(flash, `hx-post="/series/clear"`) || !strings.Contains(flash, "Undrop") {
+		t.Errorf("the confirmation offers no undo: %q", flash)
+	}
+}
+
+// A decision made in the drawer shows its effect right where the reader is
+// standing — the row moves to its new group, undo alongside — so no banner
+// appears in the page behind it. The drawer's controls say so themselves.
+func TestADrawerDecisionRaisesNoBanner(t *testing.T) {
+	h := ready(t, midSeries(), testStore(t))
+	rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}, "from": {"drawer"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if flash := flashOf(t, rec.Body.String()); strings.Contains(flash, "notice") {
+		t.Errorf("a drawer decision still raises a banner: %q", flash)
+	}
+
+	body := getBody(t, h, "/view")
+	if !strings.Contains(body, `&#34;from&#34;:&#34;drawer&#34;`) {
+		t.Error("drawer buttons do not say where they were pressed")
+	}
+	i := strings.Index(body, `class="wheel-form"`)
+	if i >= 0 && !strings.Contains(body[i:], `name="from" value="drawer"`) {
+		t.Error("the wheel form does not say it lives in the drawer")
+	}
+}
+
+// An undo is a decision too, but its confirmation ends the chain: it offers
+// no undo of its own.
+func TestAClearedDecisionConfirmsWithoutAnotherUndo(t *testing.T) {
+	h := ready(t, midSeries(), testStore(t))
+	if rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+		t.Fatalf("park: status = %d, want 200", rec.Code)
+	}
+	rec := post(t, h, "/series/clear", url.Values{"name": {"Mistborn"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: status = %d, want 200", rec.Code)
+	}
+	flash := flashOf(t, rec.Body.String())
+	if !strings.Contains(flash, "Mistborn") {
+		t.Errorf("the undo does not confirm itself: %q", flash)
+	}
+	if strings.Contains(flash, "hx-post") {
+		t.Errorf("undoing an undo would loop forever: %q", flash)
+	}
+}
+
+// htmx buttons carry their own parameters, so a decision needs no form or
+// hidden input around it. The one form left is the wheel's, whose "to" value
+// the script fills in at confirm time.
+func TestDecisionsAreButtonsNotForms(t *testing.T) {
+	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view")
+	if strings.Contains(body, "<form") {
+		t.Error("a decision still travels by form; buttons carry their own hx-vals")
+	}
+	if !strings.Contains(body, "Mistborn") || !strings.Contains(body, "hx-vals") {
+		t.Error("no hx-vals on the decision buttons, so a POST would carry no series name")
+	}
+
+	body = getBody(t, ready(t, switchSource(), testStore(t)), "/view")
+	if strings.Count(body, "<form") != 1 {
+		t.Errorf("%d forms on a page with a wheel, want only the wheel's", strings.Count(body, "<form"))
+	}
+}
 
 // section returns the drawer group whose label is name.
 func section(body, name string) string {
@@ -573,7 +691,7 @@ func TestRowsWearTheirIdentityBadges(t *testing.T) {
 	if !strings.Contains(row, ">Hardcover<") {
 		t.Errorf("the row does not name its source: %.300s", row)
 	}
-	if !strings.Contains(body, `data-pos-label="read to book 2"`) {
+	if !strings.Contains(body, ">read to book 2<") {
 		t.Error("the switcher does not say where the reader stands in each ordering")
 	}
 }
@@ -666,7 +784,7 @@ func TestTheSwitcherStillSaysWhereTheReaderStands(t *testing.T) {
 	src := stubSource{reading: []library.Entry{started}}
 
 	body := getBody(t, ready(t, src, testStore(t)), "/view")
-	if !strings.Contains(body, `data-pos-label="reading book 1"`) {
+	if !strings.Contains(body, ">reading book 1<") {
 		t.Error("the switcher does not say the tracked identity is mid-book")
 	}
 }
@@ -768,8 +886,7 @@ func TestUndroppingStillOffersTheNextBook(t *testing.T) {
 	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
 		t.Fatalf("drop: status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	// The marker is what the Dropped row posts; see the form in view.html.
-	rec := post(t, h, "/series/clear", url.Values{"name": {"Mistborn"}, "uncached": {"1"}})
+	rec := post(t, h, "/series/clear", url.Values{"name": {"Mistborn"}})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("clear: status = %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -778,9 +895,9 @@ func TestUndroppingStillOffersTheNextBook(t *testing.T) {
 	}
 }
 
-// Only the Dropped rows carry the marker: they are the only ones whose group
-// the engine has never cached an answer for.
-func TestOnlyADroppedRowAsksForALookup(t *testing.T) {
+// Whether an undo needs a lookup is the engine's knowledge now; the markup
+// carries no marker for the client to hand back.
+func TestNoRowCarriesACacheMarker(t *testing.T) {
 	src := offShelfSeries()
 	h := ready(t, src, testStore(t))
 	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
@@ -790,11 +907,8 @@ func TestOnlyADroppedRowAsksForALookup(t *testing.T) {
 	if !strings.Contains(body, "Undrop") {
 		t.Fatal("no undrop control to inspect")
 	}
-	if !strings.Contains(body, `<input type="hidden" name="uncached" value="1">`) {
-		t.Error("the dropped row does not ask for the lookup it needs")
-	}
-	if strings.Count(body, `name="uncached"`) != 1 {
-		t.Errorf("%d rows ask for a lookup, want only the dropped one", strings.Count(body, `name="uncached"`))
+	if strings.Contains(body, `name="uncached"`) {
+		t.Error("a row still asks the client to report cache state the server already knows")
 	}
 }
 
