@@ -28,6 +28,12 @@ func read(title, seriesName string, pos float64, at time.Time) library.Entry {
 	return e
 }
 
+func reading(title, seriesName string, pos float64) library.Entry {
+	e := entry(title, seriesName, pos, "hardcover")
+	e.Status = library.StatusCurrentlyRead
+	return e
+}
+
 func tbr(title, seriesName string, pos float64, added time.Time) library.Entry {
 	e := entry(title, seriesName, pos, "hardcover")
 	e.Status = library.StatusWantToRead
@@ -571,5 +577,125 @@ func TestAnAlternativeWithoutACoverFallsBackToTheRowsNotALowerVolumes(t *testing
 	}
 	if got := g.Alternatives[0].CoverURL; got != "https://covers.example/c.jpg" {
 		t.Errorf("alternative cover = %q, want the row's fallback, not Book A's", got)
+	}
+}
+
+func TestAnInProgressSlotIsNotReportedAsRead(t *testing.T) {
+	// The reader is partway through book 2: it is where they are, but it is
+	// not somewhere they have been.
+	v := Compute(Input{
+		Reads:   []library.Entry{read("Book 1", "Mistborn", 1, day0)},
+		Reading: []library.Entry{reading("Book 2", "Mistborn", 2)},
+		ToRead:  []library.Entry{tbr("Book 3", "Mistborn", 3, day0)},
+	})
+	g := groupNamed(t, v, "Mistborn")
+	if g.Position == nil || *g.Position != 2 {
+		t.Errorf("Position = %v, want 2", g.Position)
+	}
+	if !g.PositionReading {
+		t.Error("the furthest slot is still being read, but the group calls it read")
+	}
+	if got, want := g.PositionLabel(), "reading book 2"; got != want {
+		t.Errorf("PositionLabel() = %q, want %q", got, want)
+	}
+}
+
+func TestAFinishedFurthestSlotIsReportedAsRead(t *testing.T) {
+	v := Compute(Input{
+		Reads:  []library.Entry{read("Book 2", "Mistborn", 2, day0)},
+		ToRead: []library.Entry{tbr("Book 3", "Mistborn", 3, day0)},
+	})
+	g := groupNamed(t, v, "Mistborn")
+	if g.PositionReading {
+		t.Error("a finished book is reported as still being read")
+	}
+	if got, want := g.PositionLabel(), "read to book 2"; got != want {
+		t.Errorf("PositionLabel() = %q, want %q", got, want)
+	}
+}
+
+func TestAReReadBehindTheFurthestFinishDoesNotClaimTheSlot(t *testing.T) {
+	// Book 3 is finished and book 1 is being re-read: the furthest slot is
+	// still a finished one, so the label must not say "reading".
+	v := Compute(Input{
+		Reads:   []library.Entry{read("Book 3", "Mistborn", 3, day0)},
+		Reading: []library.Entry{reading("Book 1", "Mistborn", 1)},
+	})
+	g := groupNamed(t, v, "Mistborn")
+	if g.PositionReading {
+		t.Error("a re-read behind the furthest finish claimed the furthest slot")
+	}
+	if got, want := g.PositionLabel(), "read to book 3"; got != want {
+		t.Errorf("PositionLabel() = %q, want %q", got, want)
+	}
+}
+
+func TestAHalfSlotLabelKeepsItsFraction(t *testing.T) {
+	v := Compute(Input{Reads: []library.Entry{read("The Novella", "Saga", 3.5, day0)}})
+	if got, want := groupNamed(t, v, "Saga").PositionLabel(), "read to book 3.5"; got != want {
+		t.Errorf("PositionLabel() = %q, want %q", got, want)
+	}
+}
+
+func TestAnUnplacedGroupHasNoPositionLabel(t *testing.T) {
+	unplaced := library.Entry{Book: library.Book{
+		Title:  "The Hobbit",
+		Series: &library.Series{Name: "Middle-earth", Source: "hardcover"},
+	}, Status: library.StatusRead, FinishedAt: day0}
+	if got := groupNamed(t, Compute(Input{Reads: []library.Entry{unplaced}}), "Middle-earth").PositionLabel(); got != "" {
+		t.Errorf("PositionLabel() = %q, want empty for an unplaced series", got)
+	}
+}
+
+func TestATwinAlternativeInheritsTheInProgressState(t *testing.T) {
+	// Two backends file the same series name but no shared book joins them, so
+	// each is offered as the other's fold target. The offer must not call a
+	// book finished that the reader is still in.
+	started := entry("Leviathan Wakes", "The Expanse", 1, "hardcover")
+	started.Status = library.StatusCurrentlyRead
+	other := entry("Caliban's War", "The Expanse", 2, "grimmory")
+	other.Status = library.StatusRead
+	other.FinishedAt = day0
+
+	v := Compute(Input{
+		Reads:       []library.Entry{other},
+		Reading:     []library.Entry{started},
+		SourceOrder: []string{"hardcover", "grimmory"},
+	})
+	var twin *Alternative
+	for _, g := range v.Groups {
+		if g.Source != "grimmory" {
+			continue
+		}
+		for i, alt := range g.Alternatives {
+			if alt.Source == "hardcover" {
+				twin = &g.Alternatives[i]
+			}
+		}
+	}
+	if twin == nil {
+		t.Fatalf("the hardcover row is not offered as a fold target: %+v", v.Groups)
+	}
+	if !twin.PositionReading {
+		t.Error("the twin does not know its books are still being read")
+	}
+	if got, want := twin.PositionLabel(), "reading book 1"; got != want {
+		t.Errorf("PositionLabel() = %q, want %q", got, want)
+	}
+}
+
+func TestAnOfferAtSlotZeroKeepsItsSlot(t *testing.T) {
+	// Series really do number prequels 0, and that is not the same as an
+	// offer whose slot is unknown.
+	v := Compute(Input{
+		Reads:  []library.Entry{read("Book 1", "Saga", 1, day0)},
+		ToRead: []library.Entry{tbr("The Prequel", "Saga", 0, day1)},
+	})
+	g := groupNamed(t, v, "Saga")
+	if g.NextTitle != "The Prequel" {
+		t.Fatalf("NextTitle = %q, want the prequel offered", g.NextTitle)
+	}
+	if g.NextPosition == nil || *g.NextPosition != 0 {
+		t.Errorf("NextPosition = %v, want a placed slot 0", g.NextPosition)
 	}
 }

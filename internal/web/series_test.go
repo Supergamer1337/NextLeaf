@@ -431,7 +431,7 @@ func TestAnUnplacedSeriesShowsNoPositionRatherThanZero(t *testing.T) {
 	hobbit.FinishedAt = time.Now()
 	h := ready(t, stubSource{reads: []library.Entry{hobbit}}, testStore(t))
 
-	if body := getBody(t, h, "/"); strings.Contains(body, "Read to book 0") {
+	if body := getBody(t, h, "/"); strings.Contains(body, "read to book 0") {
 		t.Error("an unplaced series claims to be read to book 0")
 	}
 }
@@ -568,7 +568,125 @@ func TestRowsWearTheirIdentityBadges(t *testing.T) {
 	if !strings.Contains(row, ">Hardcover<") {
 		t.Errorf("the row does not name its source: %.300s", row)
 	}
-	if !strings.Contains(row, ">book 2<") {
-		t.Errorf("the row does not show the reader's position: %.300s", row)
+	if !strings.Contains(body, `data-pos-label="read to book 2"`) {
+		t.Error("the switcher does not say where the reader stands in each ordering")
+	}
+}
+
+// midSeriesReading is the same reader, partway through book 3 rather than
+// done with it.
+func midSeriesReading() stubSource {
+	started := seriesEntry("Book 3", "Mistborn", 3)
+	started.Status = library.StatusCurrentlyRead
+	return stubSource{
+		reading: []library.Entry{started},
+		toRead:  []library.Entry{seriesEntry("Book 4", "Mistborn", 4)},
+	}
+}
+
+func TestTheNextLineNumbersTheBookItOffers(t *testing.T) {
+	row := drawerRow(t, getBody(t, ready(t, midSeries(), testStore(t)), "/"))
+	if !strings.Contains(row, "Next: Book 4, book 4") {
+		t.Errorf("the offered book is not numbered where it is named: %.300s", row)
+	}
+}
+
+func TestARowSaysNothingAboutWhereTheReaderHasBeen(t *testing.T) {
+	// The row offers a book; how far the reader came is the switcher's job.
+	row := drawerRow(t, getBody(t, ready(t, midSeriesReading(), testStore(t)), "/"))
+	if strings.Contains(row, "read to") || strings.Contains(row, "reading book") {
+		t.Errorf("the row still reports the reader's own place: %.300s", row)
+	}
+	if !strings.Contains(row, "Next: Book 4, book 4") {
+		t.Errorf("the offered book is not numbered: %.300s", row)
+	}
+}
+
+func TestACaughtUpRowOffersNoNumber(t *testing.T) {
+	done := seriesEntry("Book 3", "Mistborn", 3)
+	done.Status = library.StatusRead
+	done.FinishedAt = time.Now().Add(-24 * time.Hour)
+	src := resolverStub{stubSource: stubSource{reads: []library.Entry{done}}}
+
+	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/"))
+	if !strings.Contains(row, "Nothing left to read") {
+		t.Errorf("a caught-up row does not say it is done: %.300s", row)
+	}
+	if strings.Contains(row, "book 3") {
+		t.Errorf("a caught-up row numbers a book it is not offering: %.300s", row)
+	}
+}
+
+func TestANextBookWithoutASlotIsNamedWithoutANumber(t *testing.T) {
+	done := seriesEntry("Book 3", "Mistborn", 3)
+	done.Status = library.StatusRead
+	done.FinishedAt = time.Now().Add(-24 * time.Hour)
+	src := resolverStub{
+		stubSource: stubSource{reads: []library.Entry{done}},
+		next:       library.Entry{Book: library.Book{Title: "The Companion"}},
+		found:      true,
+	}
+
+	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/"))
+	if !strings.Contains(row, "Next: The Companion<") {
+		t.Errorf("an unnumbered offer is not named plainly: %.300s", row)
+	}
+	if strings.Contains(row, "book 0") {
+		t.Errorf("an unnumbered offer claims slot zero: %.300s", row)
+	}
+}
+
+func TestTheTagsSitBeneathTheTitle(t *testing.T) {
+	row := drawerRow(t, getBody(t, ready(t, midSeries(), testStore(t)), "/"))
+	head := row[:strings.Index(row, "</span>")]
+	if strings.Contains(head, "row-badge") {
+		t.Errorf("the tags share the title's line: %.300s", row)
+	}
+	tags := strings.Index(row, `class="row-tags"`)
+	if tags < 0 || tags < strings.Index(row, "drawer-name") {
+		t.Errorf("the tags do not sit on their own line beneath the title: %.300s", row)
+	}
+}
+
+func TestTheSwitcherStillSaysWhereTheReaderStands(t *testing.T) {
+	// The badge now speaks of the next book, so the reader's own place in each
+	// ordering lives where orderings are compared: the switcher.
+	started := library.Entry{Book: library.Book{
+		Title:  "Leviathan Wakes",
+		Series: &library.Series{Name: "The Expanse (Chronological)", Position: library.At(1), Source: "hardcover"},
+		OtherSeries: []library.Series{
+			{Name: "The Expanse", Position: library.At(1), Source: "hardcover", Description: "Published order."},
+		},
+	}, Status: library.StatusCurrentlyRead}
+	src := stubSource{reading: []library.Entry{started}}
+
+	body := getBody(t, ready(t, src, testStore(t)), "/")
+	if !strings.Contains(body, `data-pos-label="reading book 1"`) {
+		t.Error("the switcher does not say the tracked identity is mid-book")
+	}
+}
+
+// drawerRow returns the first series row's markup.
+func drawerRow(t *testing.T, body string) string {
+	t.Helper()
+	i := strings.Index(body, `class="row-head"`)
+	if i < 0 {
+		t.Fatal("the drawer holds no series rows")
+	}
+	return body[i:min(i+600, len(body))]
+}
+
+func TestAnOfferAtSlotZeroIsStillNumbered(t *testing.T) {
+	done := seriesEntry("Book 1", "Saga", 1)
+	done.Status = library.StatusRead
+	done.FinishedAt = time.Now().Add(-24 * time.Hour)
+	src := stubSource{
+		reads:  []library.Entry{done},
+		toRead: []library.Entry{seriesEntry("The Prequel", "Saga", 0)},
+	}
+
+	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/"))
+	if !strings.Contains(row, "Next: The Prequel, book 0") {
+		t.Errorf("a prequel at slot 0 loses its number: %.300s", row)
 	}
 }

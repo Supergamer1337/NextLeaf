@@ -219,6 +219,12 @@
     .drawer-cover--blank { border: 1px dashed var(--line); }
     .drawer-name { font-size: 0.88rem; font-weight: 600; }
     .row-head { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; padding-right: 2.2rem; }
+    /* Tags sit under the title rather than trailing it, so a long series name
+       cannot push them out of sight. */
+    .row-tags {
+      display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+      margin-top: 0.2rem; padding-right: 2.2rem;
+    }
     .drawer-group--flat > .drawer-label { display: block; padding: 0.15rem 0; }
     .drawer-next, .drawer-pos { display: block; color: var(--muted); font-size: 0.75rem; margin-top: 0.1rem; }
     .drawer-acts { display: flex; gap: 0.7rem; margin-top: 0.4rem; flex-wrap: wrap; }
@@ -588,8 +594,8 @@
             src.textContent = c.source;
             src.hidden = !c.source;
             var pos = item.querySelector(".wheel-pos");
-            pos.textContent = c.pos ? "You're at book " + c.pos : "";
-            pos.hidden = !c.pos;
+            pos.textContent = c.posLabel || "";
+            pos.hidden = !c.posLabel;
             var desc = item.querySelector(".wheel-desc");
             desc.textContent = c.desc;
             desc.hidden = !c.desc;
@@ -715,11 +721,15 @@
         <div class="row-body">
           <span class="row-head">
             <span class="drawer-name">{{.Name}}</span>
+          </span>
+          <span class="row-tags">
             {{if .Source}}<span class="row-badge switch-source">{{ucfirst .Source}}</span>{{end}}
-            {{if .Position}}<span class="row-badge switch-pos">book {{.Position}}</span>{{end}}
           </span>
           {{if .NextTitle}}
-            <span class="drawer-next">Next: {{.NextTitle}}</span>
+            {{/* The row's one number belongs to the book it is offering, named
+                 in the same breath; where the reader has been is the
+                 switcher's business. */}}
+            <span class="drawer-next">Next: {{.NextTitle}}{{if .NextPosition}}, book {{.NextPosition}}{{end}}</span>
           {{else if .CaughtUp}}
             <span class="drawer-next">Nothing left to read</span>
           {{end}}
@@ -794,9 +804,9 @@
       </button>
       <button class="switcher-btn" type="button" title="Track under a different series" aria-label="Switch series">⇄</button>
       <div hidden>
-        <span class="wheel-candidate" data-to="" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-desc="Currently tracked." data-cover="{{or .NextCoverURL .CoverURL}}"></span>
+        <span class="wheel-candidate" data-to="" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-pos-label="{{.PositionLabel}}" data-desc="Currently tracked." data-cover="{{or .NextCoverURL .CoverURL}}"></span>
         {{range .Alternatives}}
-        <span class="wheel-candidate" data-to="{{.Name}}" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-desc="{{.Description}}" data-cover="{{.CoverURL}}"></span>
+        <span class="wheel-candidate" data-to="{{.Name}}" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-pos-label="{{.PositionLabel}}" data-desc="{{.Description}}" data-cover="{{.CoverURL}}"></span>
         {{end}}
         <form method="post" action="/series/switch" class="wheel-form">
           <input type="hidden" name="name" value="{{$tracked}}">
