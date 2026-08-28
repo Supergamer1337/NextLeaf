@@ -125,7 +125,7 @@ func NewHandler(d Deps) http.Handler {
 // the series drawer, then returns the refreshed view to swap in place.
 func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 	if s.engine == nil {
-		flash(w, "series tracking is not configured", http.StatusNotFound)
+		flash(w, "Series tracking is not running, so there is nothing to record it in. Check the server log and restart.", http.StatusNotFound)
 		return
 	}
 	// NextLeaf has no login, so any page on the web could otherwise post a
@@ -159,15 +159,15 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 		flash(w, "could not record that decision", http.StatusInternalServerError)
 		return
 	}
-	// The statement is recorded. Most decisions leave the cached next-book
-	// answers standing, so their re-render spends no lookups and a slow
-	// catalogue cannot stretch the response the reader is waiting on. Two
-	// decisions invalidate those answers and must be allowed to ask: a switch
-	// tracks the group under a different name, which is a different cache key,
-	// and clearing a drop readmits a group that both enrich and Warm skip while
-	// it is dropped, so nothing has ever been cached for it.
-	lookups := action == "switch" || action == "clear"
-	renderView(w, s.viewOf(ctx, false, lookups), http.StatusOK)
+	// A decision re-renders without asking the catalogue anything, so it cannot
+	// be stretched by a slow one. The exceptions are the two that leave the
+	// group with no cached answer: a switch, which tracks it under a different
+	// name and so a different cache key, and undropping, since a dropped group
+	// is skipped by enrich and Warm alike. The drawer marks the second, being
+	// the side that knows which rows are dropped; a forged marker only makes
+	// the forger's own request slower.
+	uncached := action == "switch" || r.FormValue("uncached") != ""
+	renderView(w, s.viewOf(ctx, false, uncached), http.StatusOK)
 }
 
 // handleCover relays a cover image from the source holding it, for providers
@@ -317,7 +317,7 @@ func renderView(w http.ResponseWriter, data viewData, status int) {
 		retargetToFlash(w)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = io.WriteString(w, `<p class="notice notice--error">Something went wrong showing that.</p>`)
+		_, _ = io.WriteString(w, `<p class="notice notice--error">Something went wrong showing that. Try again.</p>`)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

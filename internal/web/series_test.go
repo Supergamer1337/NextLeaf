@@ -768,11 +768,49 @@ func TestUndroppingStillOffersTheNextBook(t *testing.T) {
 	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
 		t.Fatalf("drop: status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	rec := post(t, h, "/series/clear", url.Values{"name": {"Mistborn"}})
+	// The marker is what the Dropped row posts; see the form in view.html.
+	rec := post(t, h, "/series/clear", url.Values{"name": {"Mistborn"}, "uncached": {"1"}})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("clear: status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	if !strings.Contains(rec.Body.String(), "Next: The Alloy of Law") {
 		t.Error("the undropped group came back with no next book, so there is nothing to pick")
+	}
+}
+
+// Only the Dropped rows carry the marker: they are the only ones whose group
+// the engine has never cached an answer for.
+func TestOnlyADroppedRowAsksForALookup(t *testing.T) {
+	src := offShelfSeries()
+	h := ready(t, src, testStore(t))
+	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+		t.Fatalf("drop: status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := getBody(t, h, "/view")
+	if !strings.Contains(body, "Undrop") {
+		t.Fatal("no undrop control to inspect")
+	}
+	if !strings.Contains(body, `<input type="hidden" name="uncached" value="1">`) {
+		t.Error("the dropped row does not ask for the lookup it needs")
+	}
+	if strings.Count(body, `name="uncached"`) != 1 {
+		t.Errorf("%d rows ask for a lookup, want only the dropped one", strings.Count(body, `name="uncached"`))
+	}
+}
+
+// Unpinning and resuming go through the same action as undropping, but their
+// groups were enriched all along, so they must not spend a lookup.
+func TestResumingSpendsNoLookup(t *testing.T) {
+	src := &countingSlowResolver{stubSource: offShelfSeries()}
+	h := ready(t, src, testStore(t))
+	if rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+		t.Fatalf("park: status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	before := src.calls
+	if rec := post(t, h, "/series/clear", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+		t.Fatalf("clear: status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if src.calls != before {
+		t.Errorf("resuming made %d catalogue lookups, want none", src.calls-before)
 	}
 }

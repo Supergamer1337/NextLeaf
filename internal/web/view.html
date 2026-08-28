@@ -177,6 +177,8 @@
             {{if $.Undo}}
             <form hx-post="/series/clear" hx-disabled-elt="find button">
               <input type="hidden" name="name" value="{{.Name}}">
+              {{/* Only a dropped group comes back with nothing cached about it. */}}
+              {{if eq $.Label "Dropped"}}<input type="hidden" name="uncached" value="1">{{end}}
               <button class="drawer-act" type="submit">{{$.Undo}}</button>
             </form>
             {{end}}
@@ -230,7 +232,9 @@
         {{range .Alternatives}}
         <span class="wheel-candidate" data-to="{{.Name}}" data-name="{{.Name}}" data-source="{{.Source}}" data-pos="{{if .Position}}{{.Position}}{{end}}" data-pos-label="{{.PositionLabel}}" data-desc="{{.Description}}" data-cover="{{.CoverURL}}"></span>
         {{end}}
-        <form hx-post="/series/switch" hx-disabled-elt="find button" class="wheel-form">
+        {{/* The wheel's button sits outside this form, so name it directly; only
+             one row is ever spun at a time. */}}
+        <form hx-post="/series/switch" hx-disabled-elt=".wheel-ok" class="wheel-form">
           <input type="hidden" name="name" value="{{$tracked}}">
           <input type="hidden" name="to" value="">
         </form>

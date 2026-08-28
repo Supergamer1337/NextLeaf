@@ -366,6 +366,10 @@
        animation at sub-200ms micro-interactions. */
     .deck > .waiting { display: none; }
     .deck > .waiting--initial { display: block; }
+    /* A failed first load swaps the skeleton for the way out of it; a retry
+       puts the skeleton back, so the deck is never left blank. */
+    #app.failed .deck > .waiting--initial { display: none; }
+    #app.htmx-request .deck > .waiting--initial { display: block; }
     #app.htmx-request .deck > .waiting { display: block; }
     /* The drawer sits outside .deck, so a decision never blanks it out from
        under a reader who is standing in it. */
@@ -400,7 +404,7 @@
       <div class="deck">
         <div class="waiting waiting--initial" aria-hidden="true">{{template "waitingCard"}}</div>
         <p class="notice deck-error" hidden>Couldn't reach the server for a recommendation.
-          <button class="btn btn--quiet" type="button" hx-get="/view">Try again</button></p>
+          <button class="btn btn--quiet" type="button" hx-get="/view" hx-disabled-elt="this">Try again</button></p>
       </div>
     </div>
   </main>
@@ -594,9 +598,8 @@
       // and the skeleton would otherwise sit there for good.
       function loadFailed() {
         app.setAttribute("aria-busy", "false");
-        var initial = app.querySelector(".waiting--initial");
-        if (!initial) { return; }
-        initial.remove();
+        if (!app.querySelector(".waiting--initial")) { return; }
+        app.classList.add("failed");
         var err = app.querySelector(".deck-error");
         if (err) { err.hidden = false; }
       }
@@ -622,6 +625,7 @@
         app.setAttribute("aria-busy", "false");
       });
       document.body.addEventListener("htmx:beforeRequest", function () {
+        app.classList.remove("failed");
         app.setAttribute("aria-busy", "true");
       });
       syncDrawer();
