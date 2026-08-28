@@ -724,3 +724,55 @@ func TestDrawerGroupsCarryAStableFoldKey(t *testing.T) {
 		t.Error("the Current fold has no stable key to restore its state against")
 	}
 }
+
+// Switching changes the name a group is tracked under, and the lookahead cache
+// is keyed on that name, so the new identity is never already cached. A
+// re-render that refuses to spend a lookup hands back a row with nothing next
+// and no way to pick it.
+func TestSwitchingStillOffersTheNextBook(t *testing.T) {
+	src := resolverStub{
+		stubSource: switchSource(),
+		next:       library.Entry{Book: library.Book{Title: "Leviathan Falls"}},
+		found:      true,
+	}
+	h := ready(t, src, testStore(t))
+	form := url.Values{"name": {"The Expanse (Chronological)"}, "to": {"The Expanse"}}
+	rec := post(t, h, "/series/switch", form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !strings.Contains(rec.Body.String(), "Next: Leviathan Falls") {
+		t.Error("the switched group came back with no next book, so there is nothing to pick")
+	}
+}
+
+// offShelfSeries is a reader partway through a series with nothing of it on the
+// shelf, so only the catalogue can say what comes next.
+func offShelfSeries() stubSource {
+	read := seriesEntry("Book 3", "Mistborn", 3)
+	read.Status = library.StatusRead
+	read.FinishedAt = time.Now().Add(-24 * time.Hour)
+	return stubSource{reads: []library.Entry{read}}
+}
+
+// A dropped group is skipped by the request-time enrichment and by the warm
+// pass alike, so nothing is ever cached for it. Undropping has to be allowed to
+// ask, or the series returns to the drawer with nothing next.
+func TestUndroppingStillOffersTheNextBook(t *testing.T) {
+	src := resolverStub{
+		stubSource: offShelfSeries(),
+		next:       library.Entry{Book: library.Book{Title: "The Alloy of Law"}},
+		found:      true,
+	}
+	h := ready(t, src, testStore(t))
+	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+		t.Fatalf("drop: status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	rec := post(t, h, "/series/clear", url.Values{"name": {"Mistborn"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !strings.Contains(rec.Body.String(), "Next: The Alloy of Law") {
+		t.Error("the undropped group came back with no next book, so there is nothing to pick")
+	}
+}

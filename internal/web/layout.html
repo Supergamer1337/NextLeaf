@@ -399,6 +399,8 @@
     <div id="app" hx-get="/view" hx-trigger="load" aria-live="polite" aria-busy="true">
       <div class="deck">
         <div class="waiting waiting--initial" aria-hidden="true">{{template "waitingCard"}}</div>
+        <p class="notice deck-error" hidden>Couldn't reach the server for a recommendation.
+          <button class="btn btn--quiet" type="button" hx-get="/view">Try again</button></p>
       </div>
     </div>
   </main>
@@ -523,9 +525,9 @@
         if (!c.to) { closeWheel(); return; } // kept the current identity
         var form = row.querySelector(".wheel-form");
         form.querySelector("input[name=to]").value = c.to;
-        // Settle showing the chosen identity; the morph makes it real.
-        var nameEl = row.querySelector(".row-body .drawer-name");
-        if (nameEl) { nameEl.textContent = c.name; }
+        // The row keeps wearing its current identity until the server agrees.
+        // A refusal swaps only the notice slot, so anything written here
+        // optimistically would stay on screen as a lie.
         htmx.trigger(form, "submit");
       }
 
@@ -575,13 +577,42 @@
         if (body) { body.scrollTop = scrolled; }
       });
 
+      // Error responses are swapped by configuration, so a refusal can reach
+      // the notice slot. Anything that fails without saying where it belongs —
+      // a proxy's 502 page, say — would otherwise be morphed over the card.
+      document.body.addEventListener("htmx:beforeSwap", function (e) {
+        var xhr = e.detail.xhr;
+        if (!xhr || xhr.status < 400 || xhr.getResponseHeader("HX-Retarget")) { return; }
+        e.detail.shouldSwap = false;
+        var slot = document.getElementById("flash");
+        if (slot) {
+          slot.innerHTML = '<p class="notice notice--error">Something went wrong. Try again.</p>';
+        }
+      });
+
+      // Before the first card arrives there is no notice slot to write into,
+      // and the skeleton would otherwise sit there for good.
+      function loadFailed() {
+        app.setAttribute("aria-busy", "false");
+        var initial = app.querySelector(".waiting--initial");
+        if (!initial) { return; }
+        initial.remove();
+        var err = app.querySelector(".deck-error");
+        if (err) { err.hidden = false; }
+      }
+      document.body.addEventListener("htmx:sendError", loadFailed);
+      document.body.addEventListener("htmx:responseError", loadFailed);
+      document.body.addEventListener("htmx:timeout", loadFailed);
+
       window.addEventListener("hashchange", syncDrawer);
       // A morph rebuilds the drawer from server HTML, which carries none of the
       // state these classes hold, so re-derive it every time.
       document.body.addEventListener("htmx:afterSettle", function () {
-        // The overlay outlives the swap now, so the wheel's transient classes
-        // have to be cleared rather than being replaced along with the rows.
-        openRow = null;
+        // The overlay outlives the swap, so the wheel's transient state is
+        // cleared rather than replaced along with the rows. closeWheel, not a
+        // bare reset, because it is what restores the row's own cover after a
+        // refusal leaves the row on screen.
+        closeWheel();
         var d = drawer();
         if (d) { d.classList.remove("dimmed"); }
         document.querySelectorAll(".drawer-row.spinning").forEach(function (r) {

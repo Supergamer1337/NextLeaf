@@ -146,7 +146,8 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	err := s.engine.Decide(ctx, r.PathValue("action"), name, strings.TrimSpace(r.FormValue("to")))
+	action := r.PathValue("action")
+	err := s.engine.Decide(ctx, action, name, strings.TrimSpace(r.FormValue("to")))
 	switch {
 	case errors.Is(err, series.ErrUnknownAction):
 		flash(w, "that is not something you can do to a series", http.StatusNotFound)
@@ -158,9 +159,15 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 		flash(w, "could not record that decision", http.StatusInternalServerError)
 		return
 	}
-	// The statement is recorded; re-render on a zero lookup budget so a slow
-	// catalogue cannot stretch the response the reader is waiting on.
-	renderView(w, s.viewOf(ctx, false, false), http.StatusOK)
+	// The statement is recorded. Most decisions leave the cached next-book
+	// answers standing, so their re-render spends no lookups and a slow
+	// catalogue cannot stretch the response the reader is waiting on. Two
+	// decisions invalidate those answers and must be allowed to ask: a switch
+	// tracks the group under a different name, which is a different cache key,
+	// and clearing a drop readmits a group that both enrich and Warm skip while
+	// it is dropped, so nothing has ever been cached for it.
+	lookups := action == "switch" || action == "clear"
+	renderView(w, s.viewOf(ctx, false, lookups), http.StatusOK)
 }
 
 // handleCover relays a cover image from the source holding it, for providers
@@ -304,12 +311,25 @@ func (s *server) viewOf(ctx context.Context, reroll, catalogue bool) viewData {
 func renderView(w http.ResponseWriter, data viewData, status int) {
 	var buf bytes.Buffer
 	if err := viewTmpl.ExecuteTemplate(&buf, "view", data); err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		// Nothing is written yet, so the failure can still be steered at the
+		// notice slot rather than swapped over the card. Written literally: the
+		// templates are what just failed.
+		retargetToFlash(w)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `<p class="notice notice--error">Something went wrong showing that.</p>`)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = buf.WriteTo(w)
+}
+
+// retargetToFlash steers htmx at the notice slot. Error responses are swapped
+// by configuration, so without this an error would land over the card.
+func retargetToFlash(w http.ResponseWriter) {
+	w.Header().Set("HX-Retarget", "#flash")
+	w.Header().Set("HX-Reswap", "innerHTML")
 }
 
 // flash reports a refusal as a swappable fragment. The status stays honest;
@@ -321,8 +341,7 @@ func flash(w http.ResponseWriter, msg string, status int) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("HX-Retarget", "#flash")
-	w.Header().Set("HX-Reswap", "innerHTML")
+	retargetToFlash(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = buf.WriteTo(w)
