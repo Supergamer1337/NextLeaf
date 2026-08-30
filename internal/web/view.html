@@ -71,7 +71,12 @@
       </section>
 
       <div class="actions">
-        <button class="btn" type="button" hx-get="/view?another=1" hx-trigger="click, keyup[key=='n'] from:body" hx-disabled-elt="this" title="Press n for another pick">Pick another</button>
+        {{/* A continuation gets no reroll. Stepping past a series is a park —
+             recorded, spent by the next book finished — not a free skip that
+             would leave the series first in line again on the next load. */}}
+        {{if not $.Continuation}}
+        <button class="btn" type="button" hx-get="/view?another=1" hx-trigger="click, keyup[key=='n'] from:body" hx-disabled-elt="this" title="Press n for something else">Not now</button>
+        {{end}}
         {{if $.Decidable}}
         {{/* No pin here: pinning re-renders this same card, so the button
              would look inert. It lives in the drawer, where the filing

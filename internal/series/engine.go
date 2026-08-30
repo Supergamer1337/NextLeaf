@@ -160,6 +160,10 @@ type Recommendation struct {
 	Rec       picker.Recommendation
 	OK        bool
 	Decidable bool
+	// Continuation is true when the book is offered because it is the next in
+	// a series, rather than drawn for variety. The card shows no free skip
+	// past one: stepping over a series is a park, not a reroll.
+	Continuation bool
 	// Group is the display name decisions should be recorded against, which
 	// is not always the series the book itself is labelled with.
 	Group string
@@ -189,7 +193,7 @@ func (e *Engine) RecommendWithin(ctx context.Context, reroll bool, budget int) (
 				continue
 			}
 			rec := picker.ContinueSeries(*g.NextEntry, g.LastRating)
-			return Recommendation{Rec: rec, OK: true, Decidable: true, Group: g.Name}, v, nil
+			return Recommendation{Rec: rec, OK: true, Decidable: true, Continuation: true, Group: g.Name}, v, nil
 		}
 	}
 
