@@ -928,3 +928,31 @@ func TestResumingSpendsNoLookup(t *testing.T) {
 		t.Errorf("resuming made %d catalogue lookups, want none", src.calls-before)
 	}
 }
+
+// Skipping a continuation used to cost nothing: the reroll recorded no
+// statement, so the series was back on the next load and parking bought
+// nothing the button did not already give away. The card now offers no way
+// past a series except a decision about it.
+func TestAContinuationOffersNoFreeSkip(t *testing.T) {
+	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view")
+	deck, _, _ := strings.Cut(body, `id="drawer-toggle"`)
+	if strings.Contains(deck, "another=1") {
+		t.Error("a continuation still offers a reroll that steps past the series without parking it")
+	}
+	if !strings.Contains(deck, `hx-post="/series/park"`) {
+		t.Error("a continuation must still offer the park that is now the only way past it")
+	}
+}
+
+// A variety pick belongs to no series the card is asking about, so declining
+// it records nothing: "Not now" is simply another draw from the list.
+func TestAVarietyPickOffersNotNow(t *testing.T) {
+	src := stubSource{toRead: []library.Entry{{Book: library.Book{Title: "A Standalone Pick"}}}}
+	body := getBody(t, ready(t, src, testStore(t)), "/view")
+	if !strings.Contains(body, "Not now") {
+		t.Errorf("a variety pick offers no way to decline it:\n%s", body)
+	}
+	if !strings.Contains(body, `hx-get="/view?another=1"`) {
+		t.Error(`"Not now" does not reroll`)
+	}
+}

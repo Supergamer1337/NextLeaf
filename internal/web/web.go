@@ -264,7 +264,11 @@ type viewData struct {
 	// the book itself is labelled with.
 	Decidable bool
 	Decide    string
-	Panel     panel
+	// Continuation is true when the card holds the next book in a series
+	// rather than a variety pick. Such a card offers no reroll: stepping past
+	// a series is a park, so the decision is recorded rather than given away.
+	Continuation bool
+	Panel        panel
 }
 
 // panel is the series drawer: every tracked series, grouped by what applies
@@ -347,6 +351,7 @@ func (s *server) viewOf(ctx context.Context, reroll, catalogue bool) viewData {
 	} else {
 		data.Rec, data.HasRec = rec.Rec, rec.OK
 		data.Decidable, data.Decide = rec.Decidable, rec.Group
+		data.Continuation = rec.Continuation
 		data.Panel = group(view)
 	}
 	for _, h := range library.HealthOf(s.src) {

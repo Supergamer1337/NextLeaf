@@ -468,10 +468,12 @@ func TestOnlyTheShellCarriesASkeleton(t *testing.T) {
 	}
 }
 
-// The app is essentially one verb, so rerolling deserves a key: the button
-// listens for "n" anywhere on the page, declared in the markup itself.
-func TestPickAnotherListensForAKey(t *testing.T) {
-	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view")
+// The app is essentially one verb, so declining a variety pick deserves a
+// key: the button listens for "n" anywhere on the page, declared in the
+// markup itself.
+func TestNotNowListensForAKey(t *testing.T) {
+	src := stubSource{toRead: []library.Entry{{Book: library.Book{Title: "A Standalone Pick"}}}}
+	body := getBody(t, ready(t, src, testStore(t)), "/view")
 	if !strings.Contains(body, "keyup[key=='n'] from:body") {
 		t.Error("the reroll button has no keyboard trigger")
 	}

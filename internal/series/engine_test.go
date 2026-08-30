@@ -288,3 +288,31 @@ func TestTheDefaultBudgetStillAsksTheCatalogue(t *testing.T) {
 		t.Error("the default budget asked the catalogue 0 times, want at least one")
 	}
 }
+
+// The card offers no free skip past a continuation, so it has to know which
+// kind of pick it is holding. A variety pick is never a continuation, even
+// when its book belongs to a series the reader has read into.
+func TestAContinuationSaysSo(t *testing.T) {
+	src := fakeSource{
+		reads:  []library.Entry{read("Book 3", "Mistborn", 3, day0)},
+		toRead: []library.Entry{tbr("Book 4", "Mistborn", 4, day0)},
+	}
+	e := testEngine(t, src)
+	ctx := context.Background()
+
+	rec, _, err := e.Recommend(ctx, false)
+	if err != nil {
+		t.Fatalf("Recommend: %v", err)
+	}
+	if !rec.Continuation {
+		t.Error("the series continuation does not say it is one")
+	}
+
+	rec, _, err = e.Recommend(ctx, true)
+	if err != nil {
+		t.Fatalf("Recommend reroll: %v", err)
+	}
+	if rec.Continuation {
+		t.Error("a variety pick claims to be a continuation")
+	}
+}
