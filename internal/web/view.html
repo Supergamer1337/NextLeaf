@@ -149,6 +149,16 @@
           </span>
           <span class="row-tags">
             {{if .Source}}<span class="row-badge switch-source">{{ucfirst .Source}}</span>{{end}}
+            {{with .ContinueOn}}
+            {{/* The same series on a provider with a catalogue. An icon, not a
+                 sentence: the tooltip says where it leads, and taking it is an
+                 ordinary switch the wheel can undo. */}}
+            {{$hint := printf "Continue on %s" (ucfirst .Source)}}
+            {{if ne .Name $tracked}}{{$hint = printf "%s as “%s”" $hint .Name}}{{end}}
+            <button class="row-follow" type="button" title="{{$hint}}" aria-label="{{$hint}}" hx-post="/series/switch" hx-vals="{{hxvals "name" $tracked "to" .Name "from" "drawer"}}" hx-disabled-elt="this">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            {{end}}
           </span>
           {{if .NextTitle}}
             {{/* The row's one number belongs to the book it is offering, named

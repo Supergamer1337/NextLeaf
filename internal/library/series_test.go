@@ -56,18 +56,45 @@ func TestMultiWithoutCapableSourceReportsUnsupported(t *testing.T) {
 	}
 }
 
-func TestMultiResolvesSeriesFromCapableSource(t *testing.T) {
+func TestMultiAsksOnlyTheSeriesOwnProvider(t *testing.T) {
+	// A series belongs to the backend asserting it. Another backend's
+	// catalogue may use the same name for something else, so it is never
+	// asked on the first one's behalf.
 	m := Combine(
 		listSource{name: "plain"},
 		resolverSource{listSource: listSource{name: "cap"}, next: Entry{Book: Book{Title: "Next"}}, found: true},
 	)
-
 	r, ok := AsSeriesResolver(m)
 	if !ok {
 		t.Fatal("Multi should resolve series when one source is capable")
 	}
-	entry, found, err := r.NextInSeries(context.Background(), SeriesQuery{Series: Series{Name: "S"}})
+
+	entry, found, err := r.NextInSeries(context.Background(), SeriesQuery{Series: Series{Name: "S", Source: "cap"}})
 	if err != nil || !found || entry.Book.Title != "Next" {
-		t.Errorf("NextInSeries = (%+v, %v, %v), want Next/true/nil", entry, found, err)
+		t.Errorf("own provider: NextInSeries = (%+v, %v, %v), want Next/true/nil", entry, found, err)
+	}
+	for _, provider := range []string{"plain", "stranger", ""} {
+		_, found, err := r.NextInSeries(context.Background(), SeriesQuery{Series: Series{Name: "S", Source: provider}})
+		if err != nil || found {
+			t.Errorf("provider %q: found = %v, err = %v; want nothing from a catalogue that is not its own", provider, found, err)
+		}
+	}
+}
+
+func TestResolvesSeriesSaysWhichProvidersHaveACatalogue(t *testing.T) {
+	capable := resolverSource{listSource: listSource{name: "cap"}}
+	m := Combine(listSource{name: "plain"}, NewCached(capable, time.Minute))
+	if !ResolvesSeries(m, "cap") {
+		t.Error("cap has a catalogue, seen through its cache")
+	}
+	if ResolvesSeries(m, "plain") || ResolvesSeries(m, "stranger") {
+		t.Error("a provider without a catalogue must not claim one")
+	}
+	// A lone source is the only provider there is, whatever its entries call it.
+	if !ResolvesSeries(capable, "anything") {
+		t.Error("a lone capable source answers for every series it reports")
+	}
+	if ResolvesSeries(listSource{name: "plain"}, "plain") {
+		t.Error("a lone incapable source has no catalogue")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"sync"
 	"time"
 
 	"nextleaf/internal/library"
@@ -37,12 +38,25 @@ type Engine struct {
 	rng       *rand.Rand
 	// SourceOrder is the configured source order (see Input.SourceOrder).
 	SourceOrder []string
+
+	// finders and found power the offer to continue a catalogue-less
+	// provider's series on one that has a catalogue. found is disposable, like
+	// the lookahead: series claims looked up by ISBN, per plain book key.
+	finders []library.SeriesFinder
+	mu      sync.Mutex
+	found   map[string]foundClaims
+}
+
+type foundClaims struct {
+	claims []library.Series
+	at     time.Time
 }
 
 // NewEngine wires the engine to its collaborators. src's optional
 // SeriesResolver capability, when present, powers new-release lookups.
 func NewEngine(store *Store, src library.Source, prefs picker.Prefs) *Engine {
-	e := &Engine{src: src, store: store, prefs: prefs, now: time.Now}
+	e := &Engine{src: src, store: store, prefs: prefs, now: time.Now, found: map[string]foundClaims{}}
+	e.finders = library.AsSeriesFinders(src)
 	if resolver, ok := library.AsSeriesResolver(src); ok {
 		e.lookahead = NewLookahead(resolver, lookaheadTTL)
 	}
@@ -58,12 +72,27 @@ func (e *Engine) View(ctx context.Context) (View, error) {
 // viewWithin is View with the lookup budget named. A budget of zero still uses
 // every cached answer, so it costs nothing beyond the sources View reads anyway.
 func (e *Engine) viewWithin(ctx context.Context, budget int) (View, error) {
+	v, err := e.compute(ctx, budget, 0)
+	return v, err
+}
+
+// compute builds the view and spends the lookup budget on it: first finding
+// series for rows whose provider cannot look ahead, which changes what Compute
+// sees, then asking what comes next.
+func (e *Engine) compute(ctx context.Context, budget int, pause time.Duration) (View, error) {
 	in, err := e.input(ctx)
 	if err != nil {
 		return View{}, err
 	}
 	v := Compute(in)
-	e.enrich(ctx, &v, budget, 0)
+	if spent := e.discover(ctx, &v, budget, pause); spent > 0 {
+		budget -= spent
+		if in, err = e.input(ctx); err != nil {
+			return View{}, err
+		}
+		v = Compute(in)
+	}
+	e.enrich(ctx, &v, budget, pause)
 	return v, nil
 }
 
@@ -85,22 +114,170 @@ func (e *Engine) input(ctx context.Context) (Input, error) {
 		return Input{}, err
 	}
 	return Input{
-		Reads: reads, Reading: reading, ToRead: toRead,
+		Reads: e.withFound(reads), Reading: e.withFound(reading), ToRead: toRead,
 		Statements: statements, Prefs: e.prefs, SourceOrder: e.SourceOrder,
 	}, nil
 }
 
-// enrich fills in what only a catalogue can know: the next book beyond the
-// shelf, and whether the reader is caught up. Failed lookups leave a group
-// unknown rather than wrongly finished.
-func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Duration) {
-	if e.lookahead == nil {
-		return
+// withFound adds the series claims found by ISBN to the entries they were
+// found for. Sources hand back retained slices, so entries are copied.
+func (e *Engine) withFound(entries []library.Entry) []library.Entry {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.found) == 0 {
+		return entries
+	}
+	out := make([]library.Entry, len(entries))
+	for i, entry := range entries {
+		if f := e.found[library.BookKey(entry)]; len(f.claims) > 0 && entry.Book.Series != nil {
+			others := make([]library.Series, 0, len(entry.Book.OtherSeries)+len(f.claims))
+			others = append(others, entry.Book.OtherSeries...)
+			entry.Book.OtherSeries = append(others, f.claims...)
+		}
+		out[i] = entry
+	}
+	return out
+}
+
+// shelfOnly reports whether a row has run out of shelf with no catalogue of
+// its own to ask.
+func (e *Engine) shelfOnly(g *Group) bool {
+	return !g.NextFromShelf && g.Decision != Dropped && !library.ResolvesSeries(e.src, g.Source)
+}
+
+// unclaimed reports whether a row is displayed under an identity none of its
+// books carries: the reader followed a series found by ISBN, and what was
+// found has since been forgotten, as it is on every restart.
+func (e *Engine) unclaimed(g *Group) bool {
+	return !hasMembership(g.memberships, library.Series{Source: g.Source, Name: g.Name})
+}
+
+// continuation finds the same books' series on a provider that can look
+// ahead: the one sharing the row's name when there is one, else the claim that
+// provider ranks first.
+func (e *Engine) continuation(g *Group) *Alternative {
+	named := func(m library.Series) *Alternative {
+		for i, alt := range g.Alternatives {
+			if alt.Source == m.Source && key(alt.Name) == key(m.Name) {
+				return &g.Alternatives[i]
+			}
+		}
+		return nil
+	}
+	var first *Alternative
+	for _, m := range g.memberships {
+		if !library.ResolvesSeries(e.src, m.Source) {
+			continue
+		}
+		alt := named(m)
+		if alt == nil {
+			continue
+		}
+		if key(m.Name) == key(g.Name) {
+			return alt
+		}
+		if first == nil {
+			first = alt
+		}
+	}
+	return first
+}
+
+// discover looks up, by ISBN, the series of rows that have run out of shelf
+// and have nowhere to continue, and of rows following a series found that way
+// before. One lookup covers a row. It returns how many
+// it spent; answers, including empty ones, are kept for a day.
+func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.Duration) int {
+	if len(e.finders) == 0 {
+		return 0
 	}
 	spent := 0
 	for i := range v.Groups {
 		g := &v.Groups[i]
-		if g.NextFromShelf || g.Decision == Dropped || g.Position == nil || g.Completed && g.CaughtUp {
+		if !e.unclaimed(g) && (!e.shelfOnly(g) || e.continuation(g) != nil) {
+			continue
+		}
+		var isbns []string
+		var asking []*book
+		e.mu.Lock()
+		for _, b := range g.books {
+			fresh := false
+			for _, k := range b.plainKeys {
+				if f, ok := e.found[k]; ok && e.now().Sub(f.at) < lookaheadTTL {
+					fresh = true
+				}
+			}
+			if !fresh && len(b.isbns) > 0 {
+				isbns = append(isbns, b.isbns...)
+				asking = append(asking, b)
+			}
+		}
+		e.mu.Unlock()
+		if len(asking) == 0 || spent >= budget {
+			continue
+		}
+		if pause > 0 {
+			select {
+			case <-ctx.Done():
+				return spent
+			case <-time.After(pause):
+			}
+		}
+
+		answers := map[string][]library.Series{}
+		failed := false
+		for _, f := range e.finders {
+			got, err := f.SeriesByISBN(ctx, isbns)
+			if err != nil {
+				log.Printf("series: finding %q by ISBN: %v", g.Name, err)
+				failed = true
+				break
+			}
+			for isbn, claims := range got {
+				answers[isbn] = append(answers[isbn], claims...)
+			}
+		}
+		spent++
+		if failed {
+			continue
+		}
+
+		e.mu.Lock()
+		for _, b := range asking {
+			var claims []library.Series
+			for _, isbn := range b.isbns {
+				if claims = answers[isbn]; len(claims) > 0 {
+					break
+				}
+			}
+			inferred := make([]library.Series, len(claims))
+			for j, c := range claims {
+				c.Inferred = true
+				inferred[j] = c
+			}
+			for _, k := range b.plainKeys {
+				e.found[k] = foundClaims{claims: inferred, at: e.now()}
+			}
+		}
+		e.mu.Unlock()
+	}
+	return spent
+}
+
+// enrich fills in what only a catalogue can know: the next book beyond the
+// shelf, and whether the reader is caught up. A row is only ever looked up in
+// its own provider's catalogue. Failed lookups leave a group unknown rather
+// than wrongly finished.
+func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Duration) {
+	spent := 0
+	for i := range v.Groups {
+		g := &v.Groups[i]
+		if e.shelfOnly(g) {
+			// As far as this provider can say, the reader is caught up.
+			g.CaughtUp, g.ContinueOn = true, e.continuation(g)
+			continue
+		}
+		if e.lookahead == nil || g.NextFromShelf || g.Decision == Dropped || g.Position == nil || g.Completed && g.CaughtUp {
 			continue
 		}
 		q := library.SeriesQuery{
@@ -145,13 +322,10 @@ func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Dur
 // Warm walks every group without a shelf answer and fills the lookup cache,
 // paced so it cannot trip the source's rate limit. Run at startup and daily.
 func (e *Engine) Warm(ctx context.Context) {
-	in, err := e.input(ctx)
-	if err != nil {
+	// Generous rather than exact: the budget only has to outlast the rows.
+	if _, err := e.compute(ctx, 1<<20, warmPause); err != nil {
 		log.Printf("series warm: %v", err)
-		return
 	}
-	v := Compute(in)
-	e.enrich(ctx, &v, len(v.Groups)+1, warmPause)
 }
 
 // Recommendation is the engine's pick together with the group a decision on

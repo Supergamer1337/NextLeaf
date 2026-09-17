@@ -36,6 +36,11 @@ type Group struct {
 	NextFromShelf bool
 	// CaughtUp is set by the engine when a lookup says nothing is left.
 	CaughtUp bool
+	// ContinueOn is set by the engine on a row whose shelf has run out and
+	// whose provider has no catalogue to ask: the same series on a provider
+	// that has one, when the books are known there. Taking it is an ordinary
+	// switch.
+	ContinueOn *Alternative
 
 	Alternatives []Alternative
 
@@ -119,6 +124,8 @@ type Input struct {
 // two backends is one book with both backends' series claims.
 type book struct {
 	key         string
+	plainKeys   []string // every description's own BookKey
+	isbns       []string
 	memberships []library.Series
 	read        bool
 	reading     bool
@@ -225,6 +232,14 @@ func mergeBooks(in Input, ix *library.KeyIndex) []*book {
 				b.memberships = append(b.memberships, m)
 			}
 		}
+		if plain := library.BookKey(e); !contains(b.plainKeys, plain) {
+			b.plainKeys = append(b.plainKeys, plain)
+		}
+		for _, isbn := range e.Book.ISBNs {
+			if !contains(b.isbns, isbn) {
+				b.isbns = append(b.isbns, isbn)
+			}
+		}
 		switch role {
 		case "read":
 			b.read = true
@@ -267,8 +282,13 @@ func mergeBooks(in Input, ix *library.KeyIndex) []*book {
 		return len(in.SourceOrder)
 	}
 	for _, b := range order {
-		// Stable, so each source's own ranking of its claims is kept.
+		// Stable, so each source's own ranking of its claims is kept. A claim
+		// the reader's shelf never made goes last: it is an offer, and must not
+		// become the book's series by outranking the one they are following.
 		sort.SliceStable(b.memberships, func(i, j int) bool {
+			if b.memberships[i].Inferred != b.memberships[j].Inferred {
+				return !b.memberships[i].Inferred
+			}
 			ri, rj := rank(b.memberships[i].Source), rank(b.memberships[j].Source)
 			if ri != rj {
 				return ri < rj
@@ -277,6 +297,15 @@ func mergeBooks(in Input, ix *library.KeyIndex) []*book {
 		})
 	}
 	return order
+}
+
+func contains(list []string, s string) bool {
+	for _, have := range list {
+		if have == s {
+			return true
+		}
+	}
+	return false
 }
 
 func memberships(b library.Book) []library.Series {
@@ -645,14 +674,13 @@ func finish(g *Group, books []*book, prefs picker.Prefs) {
 		g.NextPosition = &nextPos
 	}
 
-	// Every other series these books belong to is an alternative home. Another
-	// backend's claim under the same name is not one: switching to it would
-	// change nothing the reader can see. (A same-named series that is still a
-	// separate row is different — the fold offer for those is added later.)
+	// Every other series these books belong to is an alternative home. That
+	// includes another backend's claim under the same name: the provider a
+	// series follows decides whose catalogue says what comes next.
 	seen := map[string]bool{groupKey(library.Series{Source: g.Source, Name: g.Name}): true}
 	for _, m := range g.memberships {
 		k := groupKey(m)
-		if seen[k] || key(m.Name) == key(g.Name) {
+		if seen[k] {
 			continue
 		}
 		seen[k] = true

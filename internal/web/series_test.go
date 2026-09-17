@@ -306,9 +306,10 @@ func TestDrawerRowsOfferPark(t *testing.T) {
 	}
 }
 
-func TestAFoldedRowOffersNoDoNothingSwitch(t *testing.T) {
-	// Both backends file the book under the same name; switching between
-	// their identical claims changes nothing the reader can see.
+func TestAFoldedRowOffersTheOtherProvider(t *testing.T) {
+	// Both backends file the book under the same name. Switching between them
+	// still matters: the provider a row follows is whose catalogue gets asked
+	// what comes next.
 	hc := seriesEntry("Vol 8", "Overlord", 8)
 	hc.Status = library.StatusRead
 	hc.FinishedAt = time.Now().Add(-24 * time.Hour)
@@ -320,9 +321,9 @@ func TestAFoldedRowOffersNoDoNothingSwitch(t *testing.T) {
 	h := ready(t, stubSource{reads: []library.Entry{hc, gm}}, testStore(t))
 
 	// The CSS class definition is always in the stylesheet; what must be
-	// absent is the control itself.
-	if body := getBody(t, h, "/view"); strings.Contains(body, `class="switcher-btn"`) {
-		t.Error("a switch control is offered with nothing meaningful to switch to")
+	// present is the control itself.
+	if body := getBody(t, h, "/view"); !strings.Contains(body, `class="switcher-btn"`) {
+		t.Error("the row offers no way to follow the series on the other backend")
 	}
 }
 

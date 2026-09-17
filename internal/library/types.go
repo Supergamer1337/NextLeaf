@@ -37,6 +37,10 @@ type Series struct {
 	// Source names the backend that reported this membership, so a reader
 	// choosing between them can see who says what.
 	Source string
+	// Inferred marks a claim found by looking the book up in Source's
+	// catalogue, rather than reported from the reader's shelf there. It is
+	// offered, and never chosen on the reader's behalf.
+	Inferred bool
 }
 
 // At returns a position for a book that occupies a numbered slot. Any number is

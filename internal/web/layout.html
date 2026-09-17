@@ -271,6 +271,16 @@
     .drawer-row.spinning { z-index: 5; }
     .spinning > .drawer-cover, .spinning .row-body { visibility: hidden; }
 
+    /* Sits in the badge row, the size of a badge: the row's series can be
+       followed on a provider that knows what comes next. */
+    .row-follow {
+      display: inline-grid; place-items: center; width: 1.5rem; height: 1.05rem; padding: 0;
+      color: var(--moss); background: none; border: 1px solid var(--moss); border-radius: 999px;
+      cursor: pointer; vertical-align: middle;
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+    .row-follow svg { width: 0.7rem; height: 0.7rem; }
+    .row-follow:hover, .row-follow:focus-visible { color: var(--card); background: var(--moss); }
     .switcher-btn {
       position: absolute; top: 50%; right: 0; z-index: 6;
       display: grid; place-items: center; width: 2.1rem; height: 2.1rem;

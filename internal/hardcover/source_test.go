@@ -331,8 +331,8 @@ func TestNextInSeriesReturnsNextBook(t *testing.T) {
 	if !strings.Contains(gotQuery, "position: {_gt: $after}") {
 		t.Errorf("query should fetch the next position:\n%s", gotQuery)
 	}
-	if got := gotVars["name"]; got != "The Broken Earth" {
-		t.Errorf("name var = %v, want The Broken Earth", got)
+	if got := gotVars["series"]; got != "The Broken Earth" {
+		t.Errorf("series var = %v, want The Broken Earth", got)
 	}
 	if got := gotVars["after"]; got != float64(1) {
 		t.Errorf("after var = %v, want 1", got)
