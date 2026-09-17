@@ -38,8 +38,9 @@ func NewLookahead(resolver library.SeriesResolver, ttl time.Duration) *Lookahead
 }
 
 // keyFor identifies a question, carrying every dimension that changes the
-// answer: an unplaced series is not slot zero, and a novella-inclusive answer
-// does not serve a query that excludes them.
+// answer: the same name is a different series on another provider, an unplaced
+// series is not slot zero, and a novella-inclusive answer does not serve a
+// query that excludes them.
 func keyFor(q library.SeriesQuery) string {
 	pos, placed := q.Series.Slot()
 	slot := "unplaced"
@@ -50,7 +51,7 @@ func keyFor(q library.SeriesQuery) string {
 	if q.IncludeNovellas {
 		novellas = "novellas:yes"
 	}
-	return key(q.Series.Name) + "\x00" + slot + "\x00" + novellas
+	return q.Series.Source + "\x00" + q.Series.Slug + "\x00" + key(q.Series.Name) + "\x00" + slot + "\x00" + novellas
 }
 
 // Cached reports whether a fresh answer for q is already held, so callers can

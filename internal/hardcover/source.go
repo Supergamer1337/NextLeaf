@@ -89,7 +89,7 @@ func (c *Client) NextInSeries(ctx context.Context, q library.SeriesQuery) (libra
 	// translations and split editions. Page until the source runs dry rather
 	// than mistaking a truncated read for the end of the series.
 	for page := 0; page < maxSeriesPages; page++ {
-		rows, err := c.seriesPage(ctx, s.Name, after)
+		rows, err := c.seriesPage(ctx, s, after)
 		if err != nil {
 			return library.Entry{}, false, err
 		}
@@ -138,24 +138,88 @@ func (c *Client) NextInSeries(ctx context.Context, q library.SeriesQuery) (libra
 		"hardcover: series %q: no readable book within %d pages", s.Name, maxSeriesPages)
 }
 
-// seriesPage fetches one page of a series' rows past the given position.
-func (c *Client) seriesPage(ctx context.Context, name string, after float64) ([]seriesRow, error) {
+// SeriesByISBN says which series Hardcover files the given books under. It
+// satisfies library.SeriesFinder.
+func (c *Client) SeriesByISBN(ctx context.Context, isbns []string) (map[string][]library.Series, error) {
+	given := map[string]string{} // bare number -> the ISBN as the caller wrote it
+	var bare []string
+	for _, isbn := range isbns {
+		n := strings.Map(func(r rune) rune {
+			if unicode.IsDigit(r) || r == 'X' || r == 'x' {
+				return unicode.ToUpper(r)
+			}
+			return -1
+		}, isbn)
+		if len(n) != 10 && len(n) != 13 {
+			continue
+		}
+		if _, dup := given[n]; !dup {
+			given[n] = isbn
+			bare = append(bare, n)
+		}
+	}
+	if len(bare) == 0 {
+		return nil, nil
+	}
+
+	const query = `
+query SeriesByISBN($isbns: [String!]!) {
+  editions(where: {_or: [{isbn_13: {_in: $isbns}}, {isbn_10: {_in: $isbns}}]}) {
+    isbn_13
+    isbn_10
+    book { book_series { position featured series { name slug is_completed books_count description } } }
+  }
+}`
+	var data struct {
+		Editions []struct {
+			ISBN13 string   `json:"isbn_13"`
+			ISBN10 string   `json:"isbn_10"`
+			Book   bookData `json:"book"`
+		} `json:"editions"`
+	}
+	if err := c.execute(ctx, query, map[string]any{"isbns": bare}, &data); err != nil {
+		return nil, err
+	}
+
+	out := map[string][]library.Series{}
+	for _, ed := range data.Editions {
+		claims := seriesMemberships(ed.Book)
+		if len(claims) == 0 {
+			continue
+		}
+		for _, n := range []string{ed.ISBN13, ed.ISBN10} {
+			if isbn, ok := given[n]; ok {
+				out[isbn] = claims
+			}
+		}
+	}
+	return out, nil
+}
+
+// seriesPage fetches one page of a series' rows past the given position. The
+// slug is Hardcover's own identifier and wins when the claim carries one: two
+// series may share a name.
+func (c *Client) seriesPage(ctx context.Context, s library.Series, after float64) ([]seriesRow, error) {
+	field, value := "name", s.Name
+	if s.Slug != "" {
+		field, value = "slug", s.Slug
+	}
 	query := fmt.Sprintf(`
-query NextInSeries($name: String!, $after: float8!, $limit: Int!) {
+query NextInSeries($series: String!, $after: float8!, $limit: Int!) {
   book_series(
-    where: {series: {name: {_eq: $name}}, position: {_gt: $after}, featured: {_eq: true}}
+    where: {series: {%s: {_eq: $series}}, position: {_gt: $after}, featured: {_eq: true}}
     order_by: {position: asc}
     limit: $limit
   ) {
     position
     book {%s}
   }
-}`, seriesBookFields)
+}`, field, seriesBookFields)
 
 	var data struct {
 		BookSeries []seriesRow `json:"book_series"`
 	}
-	vars := map[string]any{"name": name, "after": after, "limit": seriesLookahead}
+	vars := map[string]any{"series": value, "after": after, "limit": seriesLookahead}
 	if err := c.execute(ctx, query, vars, &data); err != nil {
 		return nil, err
 	}

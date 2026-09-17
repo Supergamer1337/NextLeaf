@@ -36,19 +36,16 @@ func AsSeriesResolver(s Source) (SeriesResolver, bool) {
 		// A Multi does not implement SeriesResolver itself, so detection stays
 		// honest: it resolves series only when at least one of its sources can.
 		if m, ok := s.(*Multi); ok {
-			var capable []SeriesResolver
+			capable := multiResolver{}
 			for _, sub := range m.sources {
 				if r, ok := AsSeriesResolver(sub); ok {
-					capable = append(capable, r)
+					capable[sub.Name()] = r
 				}
 			}
 			if len(capable) == 0 {
 				return nil, false
 			}
-			// TODO: Series carries only Name/Position, so with more than one
-			// catalog a name collision could mis-resolve. Bind resolution to the
-			// source that produced the anchor entry before adding a second source.
-			return multiResolver(capable), true
+			return capable, true
 		}
 		if u, ok := s.(unwrapper); ok {
 			s = u.Unwrap()
@@ -59,18 +56,64 @@ func AsSeriesResolver(s Source) (SeriesResolver, bool) {
 	return nil, false
 }
 
-// multiResolver tries each underlying resolver in turn, returning the first hit.
-type multiResolver []SeriesResolver
+// multiResolver routes a query to the catalogue of the series' own provider.
+// A series is one backend's claim; another backend may file something else
+// under the same name, so nobody else is asked on its behalf.
+type multiResolver map[string]SeriesResolver
 
 func (mr multiResolver) NextInSeries(ctx context.Context, q SeriesQuery) (Entry, bool, error) {
-	for _, r := range mr {
-		entry, found, err := r.NextInSeries(ctx, q)
-		if err != nil {
-			return Entry{}, false, err
-		}
-		if found {
-			return entry, true, nil
-		}
+	r, ok := mr[q.Series.Source]
+	if !ok {
+		return Entry{}, false, nil
 	}
-	return Entry{}, false, nil
+	return r.NextInSeries(ctx, q)
+}
+
+// ResolvesSeries reports whether the named provider's series can be looked up
+// in a catalogue. When it cannot, what follows the reader's shelf is unknown,
+// which is not the same as nothing. A lone source is the only provider there
+// is, so it answers for every series it reports.
+func ResolvesSeries(s Source, provider string) bool {
+	r, ok := AsSeriesResolver(s)
+	if !ok {
+		return false
+	}
+	if mr, ok := r.(multiResolver); ok {
+		_, ok := mr[provider]
+		return ok
+	}
+	return true
+}
+
+// SeriesFinder is an OPTIONAL Source capability: given ISBNs, it says which
+// series its catalogue files those books under. It is how a series known only
+// to a catalogue-less backend finds its counterpart, on the same certain
+// evidence that joins two copies of a book.
+type SeriesFinder interface {
+	// SeriesByISBN returns each known ISBN's series claims, best first, keyed
+	// by the ISBN as it was given. Unknown ISBNs are simply absent.
+	SeriesByISBN(ctx context.Context, isbns []string) (map[string][]Series, error)
+}
+
+// AsSeriesFinders returns every SeriesFinder within s, seeing through the same
+// decorators AsSeriesResolver does.
+func AsSeriesFinders(s Source) []SeriesFinder {
+	for s != nil {
+		if f, ok := s.(SeriesFinder); ok {
+			return []SeriesFinder{f}
+		}
+		if m, ok := s.(*Multi); ok {
+			var out []SeriesFinder
+			for _, sub := range m.sources {
+				out = append(out, AsSeriesFinders(sub)...)
+			}
+			return out
+		}
+		u, ok := s.(unwrapper)
+		if !ok {
+			return nil
+		}
+		s = u.Unwrap()
+	}
+	return nil
 }
