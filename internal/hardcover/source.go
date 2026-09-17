@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -271,6 +272,12 @@ type bookData struct {
 	Editions []struct {
 		ID int `json:"id"`
 	} `json:"editions"`
+	// ISBNEditions is requested only for shelf entries, where the numbers
+	// join the book to another source's copy of it.
+	ISBNEditions []struct {
+		ISBN13 string `json:"isbn_13"`
+		ISBN10 string `json:"isbn_10"`
+	} `json:"isbn_editions"`
 	Pages      int             `json:"pages"`
 	CachedTags json.RawMessage `json:"cached_tags"`
 	Image      *struct {
@@ -317,6 +324,11 @@ const bookFields = `
 const seriesBookFields = bookFields + `
       editions(limit: 1, where: {language: {code3: {_eq: "` + readingLanguage + `"}}}) { id }`
 
+// shelfBookFields adds every edition's ISBN. The copy a reader holds elsewhere
+// can be any edition, so the one Hardcover shows by default is not enough.
+const shelfBookFields = bookFields + `
+      isbn_editions: editions(where: {_or: [{isbn_13: {_is_null: false}}, {isbn_10: {_is_null: false}}]}) { isbn_13 isbn_10 }`
+
 func (c *Client) fetchEntries(ctx context.Context, statusID int, orderBy string, limit int) ([]library.Entry, error) {
 	userID, err := c.currentUserID(ctx)
 	if err != nil {
@@ -343,7 +355,7 @@ query Entries($userID: Int!, $status: Int!%s) {
     last_read_date
     book {%s}
   }
-}`, limitVar(limit), orderBy, limitClause, bookFields)
+}`, limitVar(limit), orderBy, limitClause, shelfBookFields)
 
 	var data struct {
 		UserBooks []userBook `json:"user_books"`
@@ -399,6 +411,13 @@ func mapBook(b bookData) library.Book {
 	}
 	if all := seriesMemberships(b); len(all) > 0 {
 		book.Series, book.OtherSeries = &all[0], all[1:]
+	}
+	for _, ed := range b.ISBNEditions {
+		for _, isbn := range []string{ed.ISBN13, ed.ISBN10} {
+			if isbn != "" && !slices.Contains(book.ISBNs, isbn) {
+				book.ISBNs = append(book.ISBNs, isbn)
+			}
+		}
 	}
 	if b.Image != nil {
 		book.CoverURL = b.Image.URL

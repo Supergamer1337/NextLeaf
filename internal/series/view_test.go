@@ -699,3 +699,24 @@ func TestAnOfferAtSlotZeroKeepsItsSlot(t *testing.T) {
 		t.Errorf("NextPosition = %v, want a placed slot 0", g.NextPosition)
 	}
 }
+
+func TestAnExactSlotBeatsABorrowedOneForTheNextBook(t *testing.T) {
+	// Fellowship is Middle Earth #2. The Two Towers is only known to the
+	// library, so its Middle Earth slot is borrowed from its own series — also
+	// 2 — and must not displace the book the display series actually places.
+	hobbit := read("The Hobbit", "Middle Earth", 1, day0)
+	hobbit.Book.OtherSeries = []library.Series{{Name: "The Lord of the Rings", Position: library.At(0), Source: "grimmory"}}
+	towers := entry("The Two Towers", "The Lord of the Rings", 2, "grimmory")
+	towers.DateAdded = day0
+	fellowship := tbr("The Fellowship of the Ring", "Middle Earth", 2, day1)
+
+	v := Compute(Input{
+		Reads:       []library.Entry{hobbit},
+		ToRead:      []library.Entry{towers, fellowship},
+		SourceOrder: []string{"hardcover", "grimmory"},
+	})
+	g := groupNamed(t, v, "Middle Earth")
+	if g.NextTitle != "The Fellowship of the Ring" {
+		t.Errorf("Next = %q, want the book the display series places at the slot", g.NextTitle)
+	}
+}

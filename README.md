@@ -44,6 +44,11 @@ you said (park, drop, pin, and which series you meant), anchored to the books
 themselves so a metadata change can never orphan a decision. If a source is
 unreachable, the page shows its last known data and says so.
 
+With several sources connected, each usually describes the same book a little
+differently: a longer title, an edition's illustrator among the authors.
+NextLeaf treats two copies as one book when their title and author match
+exactly or when they share an ISBN, and never on a likeness alone.
+
 Books that aren't out yet are never recommended, and novellas at half-positions
 (book 3.5) are offered unless you turn them off. Translations, split editions
 and omnibus bundles are filtered out: Hardcover files all of them at the same
