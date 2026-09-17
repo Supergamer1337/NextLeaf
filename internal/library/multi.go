@@ -86,15 +86,22 @@ func (m *Multi) ToRead(ctx context.Context) ([]Entry, error) {
 		}
 		all = append(all, entries...)
 	}
-	all = dedup(all)
-
-	exclude, err := m.readKeys(ctx)
+	started, err := m.started(ctx)
 	if err != nil {
 		return nil, err
 	}
+	ix := NewKeyIndex(all, started)
+	all = dedup(all, ix)
+
+	exclude := make(map[string]bool, len(started))
+	for _, e := range started {
+		if key := ix.Key(e); key != "" {
+			exclude[key] = true
+		}
+	}
 	kept := all[:0] // dedup returns a fresh slice, so filtering in place is safe
 	for _, e := range all {
-		if key := dedupKey(e); key == "" || !exclude[key] {
+		if key := ix.Key(e); key == "" || !exclude[key] {
 			kept = append(kept, e)
 		}
 	}
@@ -105,10 +112,10 @@ func (m *Multi) ToRead(ctx context.Context) ([]Entry, error) {
 	return kept, nil
 }
 
-// readKeys identifies every book some source knows the user has read or is
-// reading, for exclusion from the TBR pool. Title-less entries yield no key.
-func (m *Multi) readKeys(ctx context.Context) (map[string]bool, error) {
-	keys := make(map[string]bool)
+// started collects every book some source knows the user has read or is
+// reading, for exclusion from the TBR pool.
+func (m *Multi) started(ctx context.Context) ([]Entry, error) {
+	var all []Entry
 	for _, s := range m.sources {
 		reads, err := s.RecentReads(ctx, 0)
 		if err != nil {
@@ -118,30 +125,19 @@ func (m *Multi) readKeys(ctx context.Context) (map[string]bool, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Two loops, not an append: the slices are the source's retained
-		// copies and must not be grown in place.
-		for _, e := range reads {
-			if key := dedupKey(e); key != "" {
-				keys[key] = true
-			}
-		}
-		for _, e := range reading {
-			if key := dedupKey(e); key != "" {
-				keys[key] = true
-			}
-		}
+		all = append(all, reads...)
+		all = append(all, reading...)
 	}
-	return keys, nil
+	return all, nil
 }
 
-// dedup folds entries describing the same book (matched on normalized title
-// and first author) into one. Sources hand back retained slices, so merging
+// dedup folds entries describing the same book (per ix) into one. Sources hand back retained slices, so merging
 // copies entries rather than writing through them.
-func dedup(all []Entry) []Entry {
+func dedup(all []Entry, ix *KeyIndex) []Entry {
 	out := make([]Entry, 0, len(all))
 	seen := make(map[string]int, len(all))
 	for _, e := range all {
-		key := dedupKey(e)
+		key := ix.Key(e)
 		if key == "" {
 			out = append(out, e)
 			continue
@@ -159,7 +155,8 @@ func dedup(all []Entry) []Entry {
 // mergeSeries unions the series two sources file the same book under. The
 // first source's pick stays the tracked one; everything else becomes an
 // alternative the reader can switch to, since the sources name franchises
-// differently and each only knows its own.
+// differently and each only knows its own. A name both sources use is still
+// two claims: each source's series finds its books through its own.
 func mergeSeries(base Book, dup Book) (*Series, []Series) {
 	all := make([]Series, 0, 2+len(base.OtherSeries)+len(dup.OtherSeries))
 	for _, b := range []Book{base, dup} {
@@ -174,10 +171,11 @@ func mergeSeries(base Book, dup Book) (*Series, []Series) {
 
 	chosen := all[0]
 	var others []Series
-	seen := map[string]bool{normalize(chosen.Name): true}
+	claim := func(s Series) string { return s.Source + "\x00" + normalize(s.Name) }
+	seen := map[string]bool{claim(chosen): true}
 	for _, s := range all[1:] {
-		key := normalize(s.Name)
-		if key == "" || seen[key] {
+		key := claim(s)
+		if normalize(s.Name) == "" || seen[key] {
 			continue
 		}
 		seen[key] = true
@@ -186,9 +184,10 @@ func mergeSeries(base Book, dup Book) (*Series, []Series) {
 	return &chosen, others
 }
 
-// BookKey identifies a book across sources: normalized title plus first
-// author. It is the stable key statements are anchored to, and the fallback
-// join for books without a shared identifier. Empty means "never merge".
+// BookKey identifies a book from one entry alone: normalized title plus
+// smallest author. Statements are anchored to it, so it never guesses. Joining
+// two differing descriptions of one book is the KeyIndex's job. Empty means
+// "never merge".
 func BookKey(e Entry) string { return dedupKey(e) }
 
 // dedupKey identifies a book for deduplication; empty means "never merge".

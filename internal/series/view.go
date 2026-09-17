@@ -134,7 +134,9 @@ type book struct {
 // Compute derives the series view. It is a pure function: same inputs, same
 // view, nothing written anywhere.
 func Compute(in Input) View {
-	books := mergeBooks(in)
+	ix := library.NewKeyIndex(in.Reads, in.Reading, in.ToRead)
+	in.Statements = followJoins(in.Statements, ix)
+	books := mergeBooks(in, ix)
 
 	finished := 0
 	for _, b := range books {
@@ -184,14 +186,31 @@ func Compute(in Input) View {
 	return View{Groups: out, FinishedCount: finished}
 }
 
-// mergeBooks folds the three lists into logical books keyed by BookKey,
-// unioning series claims across sources.
-func mergeBooks(in Input) []*book {
+// followJoins re-anchors statements to the shared keys of joined books. A
+// statement is recorded against a copy's plain key, and must keep applying
+// once that copy is folded into another.
+func followJoins(statements []Statement, ix *library.KeyIndex) []Statement {
+	out := make([]Statement, len(statements))
+	for i, st := range statements {
+		anchors := make([]string, len(st.Anchors))
+		for j, a := range st.Anchors {
+			anchors[j] = ix.Canonical(a)
+		}
+		st.Anchors = anchors
+		st.PinnedBook = ix.Canonical(st.PinnedBook)
+		out[i] = st
+	}
+	return out
+}
+
+// mergeBooks folds the three lists into logical books keyed by ix, unioning
+// series claims across sources.
+func mergeBooks(in Input, ix *library.KeyIndex) []*book {
 	var order []*book
 	byKey := map[string]*book{}
 
 	add := func(e library.Entry, role string) {
-		k := library.BookKey(e)
+		k := ix.Key(e)
 		if k == "" {
 			return
 		}
@@ -591,8 +610,11 @@ func finish(g *Group, books []*book, prefs picker.Prefs) {
 
 	// The earliest unread shelved volume is next, wherever it sits. A dropped
 	// series offers nothing, so it gets no next book.
+	// On a shared slot, a book the display series itself places beats one
+	// whose slot is borrowed from another ordering.
 	var next *book
 	var nextPos float64
+	var nextExact bool
 	for _, b := range books {
 		if g.Decision == Dropped {
 			break
@@ -607,8 +629,9 @@ func finish(g *Group, books []*book, prefs picker.Prefs) {
 		if !prefs.IncludeNovellas && isNovella(pos) {
 			continue
 		}
-		if next == nil || pos < nextPos {
-			next, nextPos = b, pos
+		exact := hasMembership(b.memberships, library.Series{Source: g.Source, Name: g.Name})
+		if next == nil || pos < nextPos || (pos == nextPos && exact && !nextExact) {
+			next, nextPos, nextExact = b, pos, exact
 		}
 	}
 	if next != nil {

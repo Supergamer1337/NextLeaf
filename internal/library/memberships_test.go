@@ -34,13 +34,26 @@ func TestMergingKeepsBothSourcesSeriesAsAlternatives(t *testing.T) {
 	}
 }
 
-func TestMergingDoesNotRepeatASeriesBothSourcesAgreeOn(t *testing.T) {
+func TestMergingDoesNotRepeatAClaimASourceMakesTwice(t *testing.T) {
 	a := Entry{Book: Book{Title: "X", Series: &Series{Name: "Saga", Position: At(1), Source: "hardcover"}}}
-	b := Entry{Book: Book{Title: "X", Series: &Series{Name: "saga", Position: At(1), Source: "grimmory"}}}
+	b := Entry{Book: Book{Title: "X", Series: &Series{Name: "saga", Position: At(1), Source: "hardcover"}}}
 
 	merged := mergeEntry(a, b)
 	if len(merged.Book.OtherSeries) != 0 {
-		t.Errorf("OtherSeries = %+v, want none: both sources named the same series", merged.Book.OtherSeries)
+		t.Errorf("OtherSeries = %+v, want none: it is one claim", merged.Book.OtherSeries)
+	}
+}
+
+func TestMergingKeepsEachSourcesClaimOnASharedSeriesName(t *testing.T) {
+	// A series row belongs to the backend asserting it, and finds its shelved
+	// books through that backend's claims. Dropping the second source's claim
+	// because the first used the same name hides the book from its row.
+	a := Entry{Book: Book{Title: "X", Series: &Series{Name: "Saga", Position: At(1), Source: "hardcover"}}}
+	b := Entry{Book: Book{Title: "X", Series: &Series{Name: "Saga", Position: At(1), Source: "grimmory"}}}
+
+	merged := mergeEntry(a, b)
+	if len(merged.Book.OtherSeries) != 1 || merged.Book.OtherSeries[0].Source != "grimmory" {
+		t.Errorf("OtherSeries = %+v, want grimmory's claim kept", merged.Book.OtherSeries)
 	}
 }
 
