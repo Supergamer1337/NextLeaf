@@ -38,8 +38,8 @@ type Group struct {
 	CaughtUp bool
 	// ContinueOn is set by the engine on a row whose shelf has run out and
 	// whose provider has no catalogue to ask: the same series on a provider
-	// that has one, when the books are known there. Taking it is an ordinary
-	// switch.
+	// that has one, once that catalogue has confirmed it holds a book past
+	// where the reader stands. Taking it is an ordinary switch.
 	ContinueOn *Alternative
 
 	Alternatives []Alternative
@@ -74,6 +74,39 @@ type Alternative struct {
 	// CoverURL is the face the row would wear if tracked under this
 	// identity: the cover of the furthest book read in that ordering.
 	CoverURL string
+
+	// NextTitle and NextPosition are what this identity's provider offers
+	// after the reader's place in it, so switching is chosen with both
+	// destinations in view. Only meaningful once Checked.
+	NextTitle    string
+	NextPosition *float64
+	// Checked marks that the provider has answered for this identity. An
+	// unchecked one says nothing rather than reading as a dead end.
+	Checked bool
+}
+
+// NextLabel says what this identity holds after the reader's place in it:
+// the book, or that there is nothing more. Empty until its provider has
+// answered — an unasked identity must not read as finished.
+func (a Alternative) NextLabel() string { return nextLabel(a.Checked, a.NextTitle, a.NextPosition) }
+
+// NextLabel says what the row offers next, in the same words the wheel uses
+// for the identities it could be switched to.
+func (g Group) NextLabel() string {
+	return nextLabel(g.CaughtUp || g.NextTitle != "", g.NextTitle, g.NextPosition)
+}
+
+func nextLabel(checked bool, title string, pos *float64) string {
+	switch {
+	case !checked:
+		return ""
+	case title == "":
+		return "Nothing left to read"
+	case pos != nil:
+		return "Next: " + title + ", book " + formatPos(*pos)
+	default:
+		return "Next: " + title
+	}
 }
 
 // PositionLabel states where the reader stands in the series: a slot they have
@@ -589,6 +622,28 @@ func posIn(b *book, source, name string) (float64, bool) {
 		return *b.memberships[0].Position, true
 	}
 	return 0, false
+}
+
+// furthestIn is the slot the group's read and in-progress books reach in the
+// named ordering: where the row would stand if it followed that identity.
+// finish works the same slot out for the display ordering, alongside the book
+// whose face the row wears.
+func furthestIn(g *Group, source, name string) *float64 {
+	var furthest *float64
+	for _, b := range g.books {
+		if !b.read && !b.reading {
+			continue
+		}
+		pos, placed := posIn(b, source, name)
+		if !placed {
+			continue
+		}
+		if furthest == nil || pos > *furthest {
+			v := pos
+			furthest = &v
+		}
+	}
+	return furthest
 }
 
 // isNovella treats a half slot (3.5) as side material between two novels.
