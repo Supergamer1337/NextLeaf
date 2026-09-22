@@ -211,19 +211,34 @@ func (e *Engine) offer(g *Group) *Alternative {
 	return nil
 }
 
+// checkMode says how far a render may go to find out what each identity
+// offers next.
+type checkMode int
+
+const (
+	// cachedOnly uses answers already held and asks for nothing. What has not
+	// been looked up stays unspoken.
+	cachedOnly checkMode = iota
+	// untilOffered asks in preference order and stops at the first identity
+	// that leads somewhere — that is the one the arrow takes, and the reader
+	// is looking at the row right now.
+	untilOffered
+	// everyIdentity asks about all of them, filling the wheel. It belongs to
+	// the warm pass, which has nobody waiting on it.
+	everyIdentity
+)
+
 // check fills each candidate with what that identity offers next, so the wheel
 // names both destinations rather than making the reader switch to find out.
-// Cached answers are always used; fresh is what costs. limit caps the fresh
-// lookups this row may spend, so one row cannot spend the whole request and
-// leave the rows below it with nothing to show: a row that has run out asks
-// about its first choice, the warm pass asks about them all, and every other
-// row reads the cache and says nothing about what has not been looked up.
-func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pause time.Duration, limit int) {
+// Cached answers are always used; mode decides how much may be asked for.
+func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pause time.Duration, mode checkMode) {
 	if e.lookahead == nil {
 		return
 	}
-	asked := 0
 	for _, c := range e.candidates(g) {
+		if mode == untilOffered && e.offer(g) != nil {
+			return
+		}
 		pos := furthestIn(g, c.claim.Source, c.claim.Name)
 		if pos == nil {
 			// Nothing to ask after: the row would switch into silence.
@@ -234,7 +249,7 @@ func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pa
 			IncludeNovellas: e.prefs.IncludeNovellas,
 		}
 		if fresh := !e.lookahead.Cached(q); fresh {
-			if asked >= limit || *spent >= budget {
+			if mode == cachedOnly || *spent >= budget {
 				continue
 			}
 			if pause > 0 {
@@ -247,7 +262,7 @@ func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pa
 			// Charged whatever the answer: a failure is a round trip like any
 			// other, and errors are never cached, so an uncharged one would be
 			// retried on every render for as long as the backend stays down.
-			asked, *spent = asked+1, *spent+1
+			*spent++
 		}
 		entry, found, err := e.lookahead.Next(ctx, q)
 		if err != nil {
@@ -365,35 +380,51 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 // shelf, and whether the reader is caught up. A row is only ever looked up in
 // its own provider's catalogue. Failed lookups leave a group unknown rather
 // than wrongly finished.
+//
+// The budget is spent in the order a reader needs the answers, not in the
+// order the rows happen to sit. What each row holds next comes first, so one
+// row's switcher is never filled at the cost of another row's content; then
+// where a row that has run out can be continued, which is the one question
+// such a row exists to answer; and last the rest of the wheel, which only the
+// warm pass goes and fetches.
 func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Duration, thorough bool) {
 	spent := 0
-	for i := range v.Groups {
-		g := &v.Groups[i]
-		if g.Decision == Dropped {
+	rows := func(want func(*Group) bool, do func(*Group)) {
+		for i := range v.Groups {
+			g := &v.Groups[i]
 			// A dropped series offers nothing, so nothing is looked up for it.
-			continue
+			if g.Decision != Dropped && want(g) {
+				do(g)
+			}
 		}
-		// The warm pass checks every identity a row could be switched to; a
-		// request checks only what it must answer with.
-		limit := 0
-		if thorough {
-			limit = len(g.Alternatives)
-		}
-		if e.shelfOnly(g) {
-			// As far as this provider can say, the reader is caught up. What
-			// the other providers hold is what decides whether there is
-			// anywhere to go, so this row asks about its first choice now
-			// rather than waiting for the warm pass.
-			g.CaughtUp = true
-			e.check(ctx, g, &spent, budget, pause, max(limit, 1))
-			g.ContinueOn = e.offer(g)
-			continue
-		}
-		// The row's own next book comes before widening its switcher: it is
-		// what the row is for.
-		e.next(ctx, g, &spent, budget, pause)
-		e.check(ctx, g, &spent, budget, pause, limit)
 	}
+
+	rows(func(g *Group) bool { return true }, func(g *Group) {
+		if e.shelfOnly(g) {
+			// As far as this provider can say, the reader is caught up.
+			g.CaughtUp = true
+			return
+		}
+		e.next(ctx, g, &spent, budget, pause)
+	})
+
+	mode := untilOffered
+	if thorough {
+		mode = everyIdentity
+	}
+	rows(e.shelfOnly, func(g *Group) {
+		e.check(ctx, g, &spent, budget, pause, mode)
+		g.ContinueOn = e.offer(g)
+	})
+
+	mode = cachedOnly
+	if thorough {
+		mode = everyIdentity
+	}
+	rows(func(g *Group) bool { return !e.shelfOnly(g) }, func(g *Group) {
+		e.check(ctx, g, &spent, budget, pause, mode)
+	})
+
 	e.fillTwins(v)
 }
 
@@ -472,8 +503,14 @@ func (e *Engine) fillTwins(v *View) {
 	}
 }
 
-// Warm walks every group without a shelf answer and fills the lookup cache,
-// paced so it cannot trip the source's rate limit. Run at startup and daily.
+// Warm walks every group and fills the lookup cache, paced so it cannot trip
+// the source's rate limit. Run at startup and daily.
+//
+// It is tempting to let the first pass run flat out, since nothing is cached
+// and a reader may be about to open the page. Measured against Hardcover's
+// live API, that trips its limit within seconds: the lookups fail, the rows
+// they were for lose their offers, and the retries land in the reader's page
+// loads. A slow fill the reader never sees beats a fast one that breaks.
 func (e *Engine) Warm(ctx context.Context) {
 	// Generous rather than exact: the budget only has to outlast the rows.
 	if _, err := e.compute(ctx, 1<<20, warmPause, true); err != nil {

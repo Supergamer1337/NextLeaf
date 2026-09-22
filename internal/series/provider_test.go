@@ -466,10 +466,9 @@ func TestAnUncheckedIdentitySaysNothingAtAll(t *testing.T) {
 
 func TestTheArrowSkipsACandidateThatLeadsNowhere(t *testing.T) {
 	// Hardcover ranks the umbrella first, and it is finished; the trilogy
-	// under it is not. The offer follows the one that leads somewhere — once
-	// the warm pass has asked about both. A request asks about the first
-	// choice alone, so until then the row shows no way on rather than a
-	// guess.
+	// under it is not. The offer follows the one that leads somewhere, on the
+	// render the reader is looking at — a row that has run out is exactly the
+	// one they need an answer for.
 	claim := func(name, slug string, pos float64) library.Series {
 		return library.Series{Name: name, Slug: slug, Position: library.At(pos), Source: "hardcover"}
 	}
@@ -480,21 +479,7 @@ func TestTheArrowSkipsACandidateThatLeadsNowhere(t *testing.T) {
 		return library.Entry{Book: library.Book{Title: "The Alloy of Law"}}, q.Series.Slug == "mistborn"
 	}
 	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "The Hero of Ages", "The Final Empire Books", 3, "9780765350381")}}}
-	e := twoProviders(t, hc, gm)
-	ctx := context.Background()
-
-	v, err := e.View(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if g := groupNamed(t, v, "The Final Empire Books"); g.ContinueOn != nil {
-		t.Errorf("ContinueOn = %+v before anything is known of the second candidate", g.ContinueOn)
-	}
-
-	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
-		t.Fatal(err)
-	}
-	v, err = e.View(ctx)
+	v, err := twoProviders(t, hc, gm).View(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,6 +518,8 @@ func TestARequestChecksTheCandidateTheOfferWouldTakeFirst(t *testing.T) {
 	if g.ContinueOn == nil || g.ContinueOn.Name != "Zzz Saga" {
 		t.Errorf("ContinueOn = %+v, want the preferred candidate offered", g.ContinueOn)
 	}
+	// Asking stops at the first candidate that leads somewhere: the arrow is
+	// decided, and the rest is wheel detail the warm pass can fill in.
 	if len(hc.asked) != 1 || hc.asked[0].Series.Slug != "zzz saga" {
 		t.Errorf("asked = %+v, want one lookup, spent on the preferred candidate", hc.asked)
 	}
@@ -656,5 +643,30 @@ func TestAnIdentityIsAskedAboutAtItsOwnNumbering(t *testing.T) {
 		if alt.Name == "Subseries" && alt.NextTitle != "Book Four" {
 			t.Errorf("Subseries offers %q; it was asked at a slot borrowed from another ordering: %+v", alt.NextTitle, hc.asked)
 		}
+	}
+}
+
+func TestARateLimitedCatalogueDoesNotSlowEveryRender(t *testing.T) {
+	// The pass that fills the cache is paced to stay under the backend's
+	// limit, but if it is tripped anyway, the render after it must not go
+	// back to the backend for every candidate all over again.
+	hc := manyClaims("Zzz Saga", "Alpha", "Beta")
+	hc.nextErr = errors.New("rate limited")
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Book Three", "Zzz Saga", 3, "9780000000001")}}}
+	e := twoProviders(t, hc, gm)
+	ctx := context.Background()
+
+	if _, err := e.View(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after := len(hc.asked)
+	if after == 0 {
+		t.Fatal("the first render asked nothing")
+	}
+	if _, err := e.View(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(hc.asked) != after {
+		t.Errorf("asked %d more times on the next render; a failure just answered is held", len(hc.asked)-after)
 	}
 }
