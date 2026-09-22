@@ -670,3 +670,110 @@ func TestARateLimitedCatalogueDoesNotSlowEveryRender(t *testing.T) {
 		t.Errorf("asked %d more times on the next render; a failure just answered is held", len(hc.asked)-after)
 	}
 }
+
+func TestARowWaitingOnALookupSaysSoRatherThanNothing(t *testing.T) {
+	// Out of budget is not the same as out of books. A row that renders
+	// silent looks settled, and the reader has no way to tell that an answer
+	// is still coming.
+	hc := &catalogue{next: library.Entry{Book: library.Book{Title: "Sword of Destiny"}}, found: true}
+	var reads []library.Entry
+	for _, name := range []string{"A", "B", "C", "D", "E", "F"} {
+		reads = append(reads, readOn("hardcover", "Book "+name, "Series "+name, 1))
+	}
+	hc.fakeSource = fakeSource{reads: reads}
+	e := twoProviders(t, hc, shelf{})
+	ctx := context.Background()
+
+	v, err := e.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := 0
+	for _, g := range v.Groups {
+		if g.NextTitle == "" && !g.CaughtUp {
+			if !g.NextPending {
+				t.Errorf("%q has no answer and does not say one is coming", g.Name)
+			}
+			if g.NextLabel() != "Checking…" {
+				t.Errorf("%q label = %q, want it to say it is still checking", g.Name, g.NextLabel())
+			}
+			waiting++
+		}
+	}
+	if waiting == 0 {
+		t.Fatal("every row was answered; the budget was not the constraint")
+	}
+
+	// And once the answers are in, nothing claims to be waiting.
+	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	v, err = e.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range v.Groups {
+		if g.NextPending {
+			t.Errorf("%q still says it is checking after every answer is in", g.Name)
+		}
+	}
+}
+
+func TestAnIdentityNobodyCanAskIsNotWaitingForever(t *testing.T) {
+	// An identity with no slot to ask after, or on a provider with no
+	// catalogue, has no answer coming. Marking it as waiting would leave the
+	// drawer saying it is still checking for as long as the app runs.
+	hc := &catalogue{
+		byISBN: map[string][]library.Series{"9780000000001": {{Name: "Unplaced Saga", Source: "hardcover"}}},
+		next:   library.Entry{Book: library.Book{Title: "x"}}, found: true,
+	}
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Dune", "Dune", 1, "9780000000001")}}}
+
+	v, err := twoProviders(t, hc, gm).compute(context.Background(), 1<<20, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := groupNamed(t, v, "Dune")
+	if g.NextPending {
+		t.Error("a row on a provider with no catalogue has no answer coming")
+	}
+	for _, alt := range g.Alternatives {
+		if alt.Pending {
+			t.Errorf("%q says it is still being checked, but it has no slot to ask after", alt.Name)
+		}
+	}
+}
+
+func TestAnUncheckedIdentitySaysItIsStillBeingChecked(t *testing.T) {
+	hc := manyClaims("Zzz Saga", "Alpha", "Beta")
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Book Three", "Zzz Saga", 3, "9780000000001")}}}
+	e := twoProviders(t, hc, gm)
+	ctx := context.Background()
+
+	v, err := e.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := groupNamed(t, v, "Zzz Saga")
+	for _, alt := range g.Alternatives {
+		if alt.Checked {
+			continue
+		}
+		if !alt.Pending || alt.NextLabel() != "Checking…" {
+			t.Errorf("%q: Pending = %v, label = %q; an identity waiting on the warm pass says so", alt.Name, alt.Pending, alt.NextLabel())
+		}
+	}
+
+	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	v, err = e.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, alt := range groupNamed(t, v, "Zzz Saga").Alternatives {
+		if alt.Pending {
+			t.Errorf("%q still says it is being checked after the warm pass", alt.Name)
+		}
+	}
+}

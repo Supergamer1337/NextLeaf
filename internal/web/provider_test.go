@@ -129,3 +129,75 @@ func nextLines(body string) []string {
 	}
 	return out
 }
+
+// slowCat answers nothing in time: every row is left waiting.
+type slowCat struct {
+	namedStub
+	claims map[string][]library.Series
+}
+
+func (s slowCat) NextInSeries(ctx context.Context, _ library.SeriesQuery) (library.Entry, bool, error) {
+	return library.Entry{}, false, context.DeadlineExceeded
+}
+func (s slowCat) SeriesByISBN(_ context.Context, isbns []string) (map[string][]library.Series, error) {
+	out := map[string][]library.Series{}
+	for _, isbn := range isbns {
+		if c, ok := s.claims[isbn]; ok {
+			out[isbn] = c
+		}
+	}
+	return out, nil
+}
+
+func waitingLibrary() library.Source {
+	read := library.Entry{
+		Book: library.Book{
+			Title: "The Last Wish", Authors: []string{"Andrzej Sapkowski"},
+			Series: &library.Series{Name: "The Witcher", Position: library.At(1), Source: "hardcover"},
+		},
+		Status: library.StatusRead, FinishedAt: time.Now().Add(-24 * time.Hour),
+	}
+	return slowCat{namedStub: namedStub{name: "hardcover", stubSource: stubSource{reads: []library.Entry{read}}}}
+}
+
+func TestTheDrawerSaysWhenAnswersAreStillComing(t *testing.T) {
+	// A row with no answer yet renders the same as one with nothing in it,
+	// unless it says otherwise. The drawer says so for the whole panel too,
+	// since the row may be inside a section the reader has collapsed.
+	h := ready(t, waitingLibrary(), testStore(t))
+	body := getBody(t, h, "/view")
+
+	if !strings.Contains(body, "Checking…") {
+		t.Error("a row waiting on a lookup renders silent, as though it held nothing")
+	}
+	if !strings.Contains(body, "drawer-status") {
+		t.Error("the drawer does not say that answers are still coming")
+	}
+	// And it refreshes itself: the state changes on its own, so a reader who
+	// leaves the page open must not be left with a stale one.
+	if !strings.Contains(body, `hx-get="/view?drawer=1"`) {
+		t.Error("nothing refreshes the drawer while it is still filling in")
+	}
+
+	// The refresh only touches the drawer: re-rendering the card would deal
+	// the reader a different book every twenty seconds.
+	drawer := getBody(t, h, "/view?drawer=1")
+	if strings.Contains(drawer, "Recommended") || strings.Contains(drawer, `id="deck"`) {
+		t.Error("the drawer refresh re-renders the recommendation card")
+	}
+	if !strings.Contains(drawer, "The Witcher") {
+		t.Error("the drawer refresh does not carry the rows")
+	}
+}
+
+func TestASettledDrawerSaysNothingAndStopsRefreshing(t *testing.T) {
+	h := ready(t, midSeries(), testStore(t))
+	body := getBody(t, h, "/view")
+
+	if strings.Contains(body, "Checking…") || strings.Contains(body, "drawer-status") {
+		t.Error("the drawer claims to be still checking when every answer is in")
+	}
+	if strings.Contains(body, "drawer=1") {
+		t.Error("the drawer keeps polling after it has everything")
+	}
+}
