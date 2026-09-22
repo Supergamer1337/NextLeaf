@@ -160,14 +160,11 @@
             </button>
             {{end}}
           </span>
-          {{if .NextTitle}}
-            {{/* The row's one number belongs to the book it is offering, named
-                 in the same breath; where the reader has been is the
-                 switcher's business. */}}
-            <span class="drawer-next">Next: {{.NextTitle}}{{if .NextPosition}}, book {{.NextPosition}}{{end}}</span>
-          {{else if .CaughtUp}}
-            <span class="drawer-next">Nothing left to read</span>
-          {{end}}
+          {{/* The row's one number belongs to the book it is offering, named
+               in the same breath; where the reader has been is the switcher's
+               business. The wheel says the same thing about the identities the
+               row could be switched to, in the same words. */}}
+          {{with .NextLabel}}<span class="drawer-next">{{.}}</span>{{end}}
           {{/* "from" marks the decision as made in the drawer, where the row
                moving is the feedback; the page raises no banner for it. */}}
           {{$vals := hxvals "name" .Name "from" "drawer"}}
@@ -195,9 +192,9 @@
              The ghosts live inside it, anchored to the card's own edges. */}}
         <div class="wheel-face">
           <img class="wheel-cover" alt="" hidden>
-          {{template "wheelItem" dict "To" "" "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Desc" "Currently tracked." "Cover" (or .NextCoverURL .CoverURL)}}
+          {{template "wheelItem" dict "To" "" "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Next" .NextLabel "Desc" "Currently tracked." "Cover" (or .NextCoverURL .CoverURL)}}
           {{range .Alternatives}}
-          {{template "wheelItem" dict "To" .Name "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Desc" .Description "Cover" .CoverURL}}
+          {{template "wheelItem" dict "To" .Name "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Next" .NextLabel "Desc" .Description "Cover" .CoverURL}}
           {{end}}
           <div class="wheel-controls">
             <button type="button" class="wheel-ok">Use this</button>
@@ -234,6 +231,10 @@
     {{if .Source}}<span class="switch-source">{{ucfirst .Source}}</span>{{end}}
     {{if .PosLabel}}<span class="switch-pos">{{.PosLabel}}</span>{{end}}
   </span>
+  {{/* What this identity would leave the reader with, so the choice is made
+       with both destinations in view. Silent until its provider has answered:
+       an unasked identity must not read as a dead end. */}}
+  <span class="switch-next">{{.Next}}</span>
   {{/* Always present, its lines reserved in CSS, so candidates with and
        without descriptions have the same height and cycling never resizes
        the card. */}}

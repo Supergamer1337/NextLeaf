@@ -61,8 +61,13 @@ func TestAFinishedShelfOffersTheCatalogue(t *testing.T) {
 	h := ready(t, shelfAndCatalogue(), testStore(t))
 	body := getBody(t, h, "/view")
 
-	if strings.Contains(body, "The Redemption of Time") {
-		t.Error("a Grimmory row was answered from Hardcover's catalogue without being asked to")
+	// The row itself is answered by its own provider only. Hardcover's book
+	// may be named in the wheel, as the thing a switch would lead to, but
+	// never on the row as though Grimmory had offered it.
+	for _, line := range nextLines(body) {
+		if strings.Contains(line, "The Redemption of Time") {
+			t.Errorf("a Grimmory row was answered from Hardcover's catalogue without being asked to: %q", line)
+		}
 	}
 	// The row reads like any other the reader is caught up with; the icon is
 	// the only difference.
@@ -84,4 +89,43 @@ func TestAFinishedShelfOffersTheCatalogue(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "The Redemption of Time") {
 		t.Error("after following the series on Hardcover, its catalogue should answer")
 	}
+}
+
+func TestTheWheelNamesWhatEachIdentityHoldsNext(t *testing.T) {
+	// Choosing where to continue and choosing how to track are one gesture,
+	// so each candidate says what it would leave the reader with.
+	h := ready(t, shelfAndCatalogue(), testStore(t))
+	body := getBody(t, h, "/view")
+
+	current := between(body, `data-to=""`, `</div>`)
+	if !strings.Contains(current, "Nothing left to read") {
+		t.Errorf("the tracked identity does not say it has run out:\n%s", current)
+	}
+	alt := between(body, `data-to="Remembrance`, `</div>`)
+	if !strings.Contains(alt, "Next: The Redemption of Time") {
+		t.Errorf("the alternative does not say what it offers:\n%s", alt)
+	}
+}
+
+// between returns the slice of s from the first occurrence of from up to the
+// next occurrence of to.
+func between(s, from, to string) string {
+	i := strings.Index(s, from)
+	if i < 0 {
+		return ""
+	}
+	rest := s[i:]
+	if j := strings.Index(rest, to); j >= 0 {
+		return rest[:j]
+	}
+	return rest
+}
+
+// nextLines returns every row's "what is next" line, the wheel's excluded.
+func nextLines(body string) []string {
+	var out []string
+	for _, part := range strings.Split(body, `<span class="drawer-next">`)[1:] {
+		out = append(out, part[:strings.Index(part, "</span>")])
+	}
+	return out
 }
