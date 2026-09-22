@@ -157,123 +157,108 @@ func (e *Engine) unclaimed(g *Group) bool {
 	return !hasMembership(g.memberships, library.Series{Source: g.Source, Name: g.Name})
 }
 
-// continuation finds the same books' series on a provider that can look
-// ahead: the one sharing the row's name when there is one, else the claim that
-// provider ranks first. The claim comes back with the alternative, since only
-// it carries the identifier that provider's catalogue answers to.
-func (e *Engine) continuation(g *Group) (library.Series, *Alternative) {
-	named := func(m library.Series) *Alternative {
-		for i, alt := range g.Alternatives {
-			if alt.Source == m.Source && key(alt.Name) == key(m.Name) {
-				return &g.Alternatives[i]
-			}
-		}
-		return nil
-	}
-	var first *Alternative
-	var firstClaim library.Series
-	for _, m := range g.memberships {
-		if !library.ResolvesSeries(e.src, m.Source) {
-			continue
-		}
-		alt := named(m)
-		if alt == nil {
-			continue
-		}
-		if key(m.Name) == key(g.Name) {
-			return m, alt
-		}
-		if first == nil {
-			first, firstClaim = alt, m
-		}
-	}
-	return firstClaim, first
+// candidate is a series the row could be continued or tracked under: the
+// alternative the reader sees, with the claim behind it, since only the claim
+// carries the identifier that provider's catalogue answers to.
+type candidate struct {
+	claim library.Series
+	alt   *Alternative
 }
 
-// hasContinuation reports whether a candidate exists at all, which is what
-// decides whether a row still needs looking up by ISBN. Whether the candidate
-// leads anywhere is offer's question, and costs a catalogue round trip.
-func (e *Engine) hasContinuation(g *Group) bool {
-	_, alt := e.continuation(g)
-	return alt != nil
-}
-
-// offer is the continuation to show on a row that has run out: the candidate
-// whose provider has said it really holds a book past where the reader
-// stands. An unchecked candidate is never offered — every series has a
-// counterpart somewhere, finished ones included, and following one only
-// renames the row that already said "nothing left". A candidate that leads
-// nowhere is skipped rather than ending the search: the next one may be the
-// sub-series the reader is actually following.
-func (e *Engine) offer(g *Group) *Alternative {
-	var first *Alternative
+// candidates are the row's continuation candidates in preference order: the
+// claim sharing the row's name first, then the order its provider ranks them.
+// offer, check and hasContinuation all read this one order, so a request never
+// spends its budget on a candidate the offer would not have taken first —
+// the alternatives themselves are sorted by name, for the wheel to read.
+func (e *Engine) candidates(g *Group) []candidate {
+	var same, rest []candidate
 	for _, m := range g.memberships {
 		if !library.ResolvesSeries(e.src, m.Source) {
 			continue
 		}
 		alt := alternativeFor(g, m)
-		if alt == nil || alt.NextTitle == "" {
+		if alt == nil {
 			continue
 		}
+		c := candidate{claim: m, alt: alt}
 		if key(m.Name) == key(g.Name) {
-			return alt
-		}
-		if first == nil {
-			first = alt
+			same = append(same, c)
+		} else {
+			rest = append(rest, c)
 		}
 	}
-	return first
+	return append(same, rest...)
 }
 
-// check fills each alternative with what that identity offers next, so the
-// wheel names both destinations rather than making the reader switch to find
-// out. ask allows spending the budget on answers not held yet: the warm pass
-// sets it for every row, a request only for a row that has run out, where the
-// answer decides whether an offer is made at all. Every other row reads the
-// cache and says nothing about what has not been looked up.
-func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pause time.Duration, ask bool) {
+// hasContinuation reports whether a candidate exists at all, which is what
+// decides whether a row still needs looking up by ISBN. Whether the candidate
+// leads anywhere is offer's question, and costs a catalogue round trip.
+func (e *Engine) hasContinuation(g *Group) bool { return len(e.candidates(g)) > 0 }
+
+// offer is the continuation to show on a row that has run out: the first
+// candidate whose provider has said it really holds a book past where the
+// reader stands. An unchecked candidate is never offered — every series has a
+// counterpart somewhere, finished ones included, and following one only
+// renames the row that already said "nothing left". A candidate that leads
+// nowhere is skipped rather than ending the search: the next one may be the
+// sub-series the reader is actually following.
+func (e *Engine) offer(g *Group) *Alternative {
+	for _, c := range e.candidates(g) {
+		if c.alt.NextTitle != "" {
+			return c.alt
+		}
+	}
+	return nil
+}
+
+// check fills each candidate with what that identity offers next, so the wheel
+// names both destinations rather than making the reader switch to find out.
+// Cached answers are always used; fresh is what costs. limit caps the fresh
+// lookups this row may spend, so one row cannot spend the whole request and
+// leave the rows below it with nothing to show: a row that has run out asks
+// about its first choice, the warm pass asks about them all, and every other
+// row reads the cache and says nothing about what has not been looked up.
+func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pause time.Duration, limit int) {
 	if e.lookahead == nil {
 		return
 	}
-	for i := range g.Alternatives {
-		alt := &g.Alternatives[i]
-		claim, ok := membershipFor(g, alt)
-		if !ok || !library.ResolvesSeries(e.src, claim.Source) {
-			continue
-		}
-		pos := furthestIn(g, claim.Source, claim.Name)
+	asked := 0
+	for _, c := range e.candidates(g) {
+		pos := furthestIn(g, c.claim.Source, c.claim.Name)
 		if pos == nil {
 			// Nothing to ask after: the row would switch into silence.
 			continue
 		}
 		q := library.SeriesQuery{
-			Series:          library.Series{Name: claim.Name, Position: pos, Slug: claim.Slug, Source: claim.Source},
+			Series:          library.Series{Name: c.claim.Name, Position: pos, Slug: c.claim.Slug, Source: c.claim.Source},
 			IncludeNovellas: e.prefs.IncludeNovellas,
 		}
-		fresh := !e.lookahead.Cached(q)
-		if fresh && (!ask || *spent >= budget) {
-			continue
-		}
-		if fresh && pause > 0 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(pause):
+		if fresh := !e.lookahead.Cached(q); fresh {
+			if asked >= limit || *spent >= budget {
+				continue
 			}
+			if pause > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(pause):
+				}
+			}
+			// Charged whatever the answer: a failure is a round trip like any
+			// other, and errors are never cached, so an uncharged one would be
+			// retried on every render for as long as the backend stays down.
+			asked, *spent = asked+1, *spent+1
 		}
 		entry, found, err := e.lookahead.Next(ctx, q)
 		if err != nil {
-			log.Printf("series: checking what %q offers beyond %q: %v", claim.Source, g.Name, err)
+			log.Printf("series: checking what %q offers beyond %q: %v", c.claim.Source, g.Name, err)
 			continue
 		}
-		if fresh {
-			*spent++
-		}
-		alt.Checked = true
+		c.alt.Checked = true
 		if found {
-			alt.NextTitle = entry.Book.Title
+			c.alt.NextTitle = entry.Book.Title
 			if entry.Book.Series != nil {
-				alt.NextPosition = entry.Book.Series.Position
+				c.alt.NextPosition = entry.Book.Series.Position
 			}
 		}
 	}
@@ -287,19 +272,6 @@ func alternativeFor(g *Group, m library.Series) *Alternative {
 		}
 	}
 	return nil
-}
-
-// membershipFor finds the claim behind an alternative: only it carries the
-// identifier that provider's catalogue answers to. A twin — the same name
-// tracked as its own row on another provider — has no claim here, and brings
-// its answer from its own row instead.
-func membershipFor(g *Group, alt *Alternative) (library.Series, bool) {
-	for _, m := range g.memberships {
-		if m.Source == alt.Source && key(m.Name) == key(alt.Name) {
-			return m, true
-		}
-	}
-	return library.Series{}, false
 }
 
 // discover looks up, by ISBN, the series a catalogue files a row's books
@@ -319,7 +291,7 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 	for i := range v.Groups {
 		g := &v.Groups[i]
 		needed := e.unclaimed(g) || (e.shelfOnly(g) && !e.hasContinuation(g))
-		if !needed && !thorough {
+		if !needed && (!thorough || g.Decision == Dropped) {
 			continue
 		}
 		var isbns []string
@@ -397,22 +369,32 @@ func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Dur
 	spent := 0
 	for i := range v.Groups {
 		g := &v.Groups[i]
+		if g.Decision == Dropped {
+			// A dropped series offers nothing, so nothing is looked up for it.
+			continue
+		}
+		// The warm pass checks every identity a row could be switched to; a
+		// request checks only what it must answer with.
+		limit := 0
+		if thorough {
+			limit = len(g.Alternatives)
+		}
 		if e.shelfOnly(g) {
 			// As far as this provider can say, the reader is caught up. What
 			// the other providers hold is what decides whether there is
-			// anywhere to go, so this row is checked now rather than whenever
-			// the warm pass reaches it.
+			// anywhere to go, so this row asks about its first choice now
+			// rather than waiting for the warm pass.
 			g.CaughtUp = true
-			e.check(ctx, g, &spent, budget, pause, true)
+			e.check(ctx, g, &spent, budget, pause, max(limit, 1))
 			g.ContinueOn = e.offer(g)
 			continue
 		}
 		// The row's own next book comes before widening its switcher: it is
 		// what the row is for.
 		e.next(ctx, g, &spent, budget, pause)
-		e.check(ctx, g, &spent, budget, pause, thorough)
+		e.check(ctx, g, &spent, budget, pause, limit)
 	}
-	fillTwins(v)
+	e.fillTwins(v)
 }
 
 // next fills the row's own next book from its provider's catalogue. A failed
@@ -436,13 +418,14 @@ func (e *Engine) next(ctx context.Context, g *Group, spent *int, budget int, pau
 		case <-time.After(pause):
 		}
 	}
+	if fresh {
+		// Charged whatever the answer; see check.
+		*spent++
+	}
 	entry, found, err := e.lookahead.Next(ctx, q)
 	if err != nil {
 		log.Printf("series: looking up the next book in %q: %v", g.Name, err)
 		return
-	}
-	if fresh {
-		*spent++
 	}
 	if !found {
 		g.CaughtUp = true
@@ -462,7 +445,11 @@ func (e *Engine) next(ctx context.Context, g *Group, spent *int, budget int, pau
 // fillTwins gives a twin alternative — the same series name tracked as its own
 // row on another provider — the answer that row already has, rather than
 // asking the same question twice under another key.
-func fillTwins(v *View) {
+//
+// Only a row that was actually answered may speak: a row on a provider with no
+// catalogue is "caught up" merely because nobody could ask it, and passing
+// that on would label a switch a dead end when it leads to a book.
+func (e *Engine) fillTwins(v *View) {
 	for i := range v.Groups {
 		g := &v.Groups[i]
 		for j := range g.Alternatives {
@@ -475,7 +462,8 @@ func fillTwins(v *View) {
 				if twin == g || twin.Source != alt.Source || key(twin.Name) != key(alt.Name) {
 					continue
 				}
-				if twin.CaughtUp || twin.NextTitle != "" {
+				answered := twin.NextFromShelf || library.ResolvesSeries(e.src, twin.Source)
+				if answered && (twin.CaughtUp || twin.NextTitle != "") {
 					alt.Checked = true
 					alt.NextTitle, alt.NextPosition = twin.NextTitle, twin.NextPosition
 				}

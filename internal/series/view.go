@@ -606,44 +606,71 @@ func inGroup(b *book, g *Group) bool {
 	return false
 }
 
-// posIn returns a book's slot in the given series identity, falling back to
-// its primary claim's slot when it has none there — two orderings number the
-// same book differently, and an approximate slot beats none.
-func posIn(b *book, source, name string) (float64, bool) {
+// slotIn returns a book's slot in the given series identity. exact says the
+// identity placed the book itself; otherwise the slot is borrowed from the
+// book's primary claim, since two orderings number the same book differently
+// and an approximate slot beats none.
+func slotIn(b *book, source, name string) (pos float64, exact, placed bool) {
 	for _, m := range b.memberships {
 		if m.Source == source && key(m.Name) == key(name) {
 			if m.Position == nil {
-				return 0, false
+				return 0, true, false
 			}
-			return *m.Position, true
+			return *m.Position, true, true
 		}
 	}
 	if len(b.memberships) > 0 && b.memberships[0].Position != nil {
-		return *b.memberships[0].Position, true
+		return *b.memberships[0].Position, false, true
 	}
-	return 0, false
+	return 0, false, false
 }
 
-// furthestIn is the slot the group's read and in-progress books reach in the
-// named ordering: where the row would stand if it followed that identity.
-// finish works the same slot out for the display ordering, alongside the book
-// whose face the row wears.
-func furthestIn(g *Group, source, name string) *float64 {
-	var furthest *float64
-	for _, b := range g.books {
-		if !b.read && !b.reading {
-			continue
+// posIn is slotIn's slot alone, for the places where any slot will do.
+func posIn(b *book, source, name string) (float64, bool) {
+	pos, _, placed := slotIn(b, source, name)
+	return pos, placed
+}
+
+// furthestBookIn finds how far the group's read and in-progress books reach in
+// the named ordering, and which book stands there — where the row would sit if
+// it followed that identity.
+//
+// Books the identity places itself decide it. A borrowed slot is a number from
+// a different ordering: an umbrella's book 15 must not stand in for a
+// sub-series' book 3, or the catalogue is asked what follows a place the
+// reader has never been. Borrowed slots are used only when the identity places
+// nothing at all, where an approximate slot still beats none.
+func furthestBookIn(g *Group, source, name string) (*book, *float64) {
+	reach := func(exactOnly bool) (*book, *float64) {
+		var at *float64
+		var who *book
+		for _, b := range g.books {
+			if !b.read && !b.reading {
+				continue
+			}
+			pos, exact, placed := slotIn(b, source, name)
+			if !placed || exactOnly && !exact {
+				continue
+			}
+			// A finished book owns a slot it shares with an in-progress one.
+			tie := at != nil && pos == *at && b.read && !who.read
+			if at == nil || pos > *at || tie {
+				v := pos
+				at, who = &v, b
+			}
 		}
-		pos, placed := posIn(b, source, name)
-		if !placed {
-			continue
-		}
-		if furthest == nil || pos > *furthest {
-			v := pos
-			furthest = &v
-		}
+		return who, at
 	}
-	return furthest
+	if who, at := reach(true); at != nil {
+		return who, at
+	}
+	return reach(false)
+}
+
+// furthestIn is furthestBookIn's slot alone.
+func furthestIn(g *Group, source, name string) *float64 {
+	_, at := furthestBookIn(g, source, name)
+	return at
 }
 
 // isNovella treats a half slot (3.5) as side material between two novels.
@@ -659,8 +686,7 @@ func isNovella(pos float64) bool {
 // volume the reader skipped.
 func finish(g *Group, books []*book, prefs picker.Prefs) {
 	readSlots := map[float64]bool{}
-	var furthest *float64
-	var furthestBook, latestBook *book
+	var latestBook *book
 	var latestFinish time.Time
 	for _, b := range g.books {
 		if !b.read && !b.reading {
@@ -669,18 +695,14 @@ func finish(g *Group, books []*book, prefs picker.Prefs) {
 		if b.read && b.finishedAt.After(latestFinish) {
 			latestFinish, latestBook = b.finishedAt, b
 		}
-		pos, placed := posIn(b, g.Source, g.Name)
-		if !placed {
-			continue
-		}
-		readSlots[pos] = true
-		// A finished book owns a slot it shares with an in-progress one.
-		tie := furthest != nil && pos == *furthest && b.read && !furthestBook.read
-		if furthest == nil || pos > *furthest || tie {
-			v := pos
-			furthest, furthestBook = &v, b
+		// Any slot marks a slot as read: the shelf's next book is chosen by
+		// what is left over, where an approximate number still rules a volume
+		// out.
+		if pos, placed := posIn(b, g.Source, g.Name); placed {
+			readSlots[pos] = true
 		}
 	}
+	furthestBook, furthest := furthestBookIn(g, g.Source, g.Name)
 	g.Position = furthest
 	g.PositionReading = furthestBook != nil && !furthestBook.read
 	switch {
