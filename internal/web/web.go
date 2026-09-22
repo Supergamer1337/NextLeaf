@@ -280,6 +280,10 @@ type panel struct {
 	Parked   []series.Group
 	Dropped  []series.Group
 	Finished []series.Group
+	// Pending is true while any row is still waiting on a catalogue. The
+	// drawer says so, since the row it applies to may sit in a section the
+	// reader has collapsed.
+	Pending bool
 }
 
 // Count is how many series the drawer holds, for the toggle's label.
@@ -308,6 +312,14 @@ func group(v series.View) panel {
 		default:
 			p.Active = append(p.Active, g)
 		}
+		if g.NextPending {
+			p.Pending = true
+		}
+		for _, alt := range g.Alternatives {
+			if alt.Pending {
+				p.Pending = true
+			}
+		}
 	}
 	return p
 }
@@ -320,11 +332,40 @@ func handleShell(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleView renders the card and drawer as one fragment. "another" flips
-// from the series continuation to a variety pick.
+// from the series continuation to a variety pick; "drawer" asks for the
+// drawer alone, which is what the refresh below uses.
 func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	if r.URL.Query().Has("drawer") {
+		s.refreshDrawer(ctx, w)
+		return
+	}
 	renderView(w, s.viewOf(ctx, r.URL.Query().Has("another"), true), http.StatusOK)
+}
+
+// refreshDrawer re-renders the drawer alone, for a page left open while the
+// catalogue answers are still coming in. The card is deliberately left alone:
+// re-running the pick would deal the reader a different book every time the
+// drawer caught up with itself.
+func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter) {
+	if s.engine == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	view, err := s.engine.View(ctx)
+	if err != nil {
+		// Nothing swapped, so the drawer the reader is looking at stays put.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	var buf bytes.Buffer
+	if err := viewTmpl.ExecuteTemplate(&buf, "drawerPanel", viewData{Panel: group(view)}); err != nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = buf.WriteTo(w)
 }
 
 // viewOf builds the fragment's model. catalogue says whether this render may

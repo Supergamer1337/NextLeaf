@@ -236,12 +236,17 @@ func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pa
 		return
 	}
 	for _, c := range e.candidates(g) {
-		if mode == untilOffered && e.offer(g) != nil {
-			return
+		at := mode
+		if at == untilOffered && e.offer(g) != nil {
+			// The arrow is decided. The rest is wheel detail, left to the warm
+			// pass — but it is still coming, and the wheel says so rather than
+			// going quiet on it.
+			at = cachedOnly
 		}
 		pos := furthestIn(g, c.claim.Source, c.claim.Name)
 		if pos == nil {
-			// Nothing to ask after: the row would switch into silence.
+			// Nothing to ask after, so no answer is coming: the row would
+			// switch into silence, and saying "checking" would never end.
 			continue
 		}
 		q := library.SeriesQuery{
@@ -249,7 +254,9 @@ func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pa
 			IncludeNovellas: e.prefs.IncludeNovellas,
 		}
 		if fresh := !e.lookahead.Cached(q); fresh {
-			if mode == cachedOnly || *spent >= budget {
+			if at == cachedOnly || *spent >= budget {
+				// An answer is coming, from a later render or the warm pass.
+				c.alt.Pending = true
 				continue
 			}
 			if pause > 0 {
@@ -267,6 +274,7 @@ func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pa
 		entry, found, err := e.lookahead.Next(ctx, q)
 		if err != nil {
 			log.Printf("series: checking what %q offers beyond %q: %v", c.claim.Source, g.Name, err)
+			c.alt.Pending = true
 			continue
 		}
 		c.alt.Checked = true
@@ -440,11 +448,14 @@ func (e *Engine) next(ctx context.Context, g *Group, spent *int, budget int, pau
 	}
 	fresh := !e.lookahead.Cached(q)
 	if fresh && *spent >= budget {
+		// An answer is coming, from a later render or the warm pass.
+		g.NextPending = true
 		return
 	}
 	if fresh && pause > 0 {
 		select {
 		case <-ctx.Done():
+			g.NextPending = true
 			return
 		case <-time.After(pause):
 		}
@@ -456,6 +467,7 @@ func (e *Engine) next(ctx context.Context, g *Group, spent *int, budget int, pau
 	entry, found, err := e.lookahead.Next(ctx, q)
 	if err != nil {
 		log.Printf("series: looking up the next book in %q: %v", g.Name, err)
+		g.NextPending = true
 		return
 	}
 	if !found {

@@ -95,13 +95,31 @@
        the page, so a decision never disturbs the drawer the reader is standing
        in: no reopening, and the scroll position survives on its own. */}}
   <a class="drawer-toggle" id="drawer-toggle" href="#series" hx-swap-oob="true"{{if not .Panel.Any}} hidden{{end}}>Series <span class="drawer-count">{{.Panel.Count}}</span></a>
-  <div class="drawer-body" id="drawer-body" hx-swap-oob="innerHTML">
+  <div class="drawer-body" id="drawer-body" hx-swap-oob="innerHTML">{{template "drawerPanel" .}}</div>
+{{end}}
+
+{{/* The drawer's rows, rendered on their own so the refresh below can bring
+     them back without touching the card. */}}
+{{define "drawerPanel"}}
+      {{if .Panel.Pending}}
+      {{/* Answers arrive over the minute after a restart, and a row without
+           one reads exactly like a row with nothing in it. Saying so is half
+           the job; the other half is fetching the answers as they land, since
+           a reader who leaves the page open never asked for a stale one.
+
+           Only the drawer travels, and it brings its own indicator and its
+           own sync: inheriting the page's would dim the card and cancel
+           whatever the reader is doing. */}}
+      <p class="drawer-status" role="status"
+         hx-get="/view?drawer=1" hx-trigger="every 20s"
+         hx-target="#drawer-body" hx-swap="innerHTML"
+         hx-indicator="this" hx-sync="this:drop">Still checking a few series…</p>
+      {{end}}
       {{template "drawerGroup" dict "Label" "Reading next — pinned" "Items" .Panel.Pinned "Undo" "Unpin" "Flat" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Open" true "CanPick" true "CanPark" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now" "CanPick" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "CanPick" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
-  </div>
 {{end}}
 
 {{define "cover"}}

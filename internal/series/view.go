@@ -36,6 +36,10 @@ type Group struct {
 	NextFromShelf bool
 	// CaughtUp is set by the engine when a lookup says nothing is left.
 	CaughtUp bool
+	// NextPending marks a row whose own next book could be looked up but has
+	// not been yet. Rendering it silent would make a row that is still being
+	// worked out look like one with nothing in it.
+	NextPending bool
 	// ContinueOn is set by the engine on a row whose shelf has run out and
 	// whose provider has no catalogue to ask: the same series on a provider
 	// that has one, once that catalogue has confirmed it holds a book past
@@ -83,21 +87,35 @@ type Alternative struct {
 	// Checked marks that the provider has answered for this identity. An
 	// unchecked one says nothing rather than reading as a dead end.
 	Checked bool
+	// Pending marks an identity whose provider could answer for it but has
+	// not yet — the render ran out of lookups, or the warm pass has not come
+	// round. One nobody can ask is neither checked nor pending: no answer is
+	// coming, and the reader should not be told to wait for one.
+	Pending bool
 }
 
 // NextLabel says what this identity holds after the reader's place in it:
-// the book, or that there is nothing more. Empty until its provider has
-// answered — an unasked identity must not read as finished.
-func (a Alternative) NextLabel() string { return nextLabel(a.Checked, a.NextTitle, a.NextPosition) }
+// the book, that there is nothing more, or that the answer is still coming.
+// Empty when no answer is coming at all — an unasked identity must not read
+// as finished, and must not leave the reader waiting either.
+func (a Alternative) NextLabel() string {
+	return nextLabel(a.Checked, a.Pending, a.NextTitle, a.NextPosition)
+}
 
 // NextLabel says what the row offers next, in the same words the wheel uses
 // for the identities it could be switched to.
 func (g Group) NextLabel() string {
-	return nextLabel(g.CaughtUp || g.NextTitle != "", g.NextTitle, g.NextPosition)
+	return nextLabel(g.CaughtUp || g.NextTitle != "", g.NextPending, g.NextTitle, g.NextPosition)
 }
 
-func nextLabel(checked bool, title string, pos *float64) string {
+// waiting is what a row or identity says while its answer is still coming. It
+// is not "nothing left": the difference is the whole point of saying it.
+const waiting = "Checking…"
+
+func nextLabel(checked, pending bool, title string, pos *float64) string {
 	switch {
+	case !checked && pending:
+		return waiting
 	case !checked:
 		return ""
 	case title == "":
