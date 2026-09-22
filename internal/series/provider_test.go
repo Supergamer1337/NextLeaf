@@ -2,6 +2,7 @@ package series
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"nextleaf/internal/library"
@@ -29,12 +30,16 @@ type catalogue struct {
 	findErr error
 	// answer overrides next/found per query, for a catalogue whose reply
 	// depends on which of its series is asked about.
-	answer func(library.SeriesQuery) (library.Entry, bool)
+	answer  func(library.SeriesQuery) (library.Entry, bool)
+	nextErr error
 }
 
 func (c *catalogue) Name() string { return c.name }
 func (c *catalogue) NextInSeries(_ context.Context, q library.SeriesQuery) (library.Entry, bool, error) {
 	c.asked = append(c.asked, q)
+	if c.nextErr != nil {
+		return library.Entry{}, false, c.nextErr
+	}
 	if c.answer != nil {
 		e, ok := c.answer(q)
 		return e, ok, nil
@@ -461,7 +466,10 @@ func TestAnUncheckedIdentitySaysNothingAtAll(t *testing.T) {
 
 func TestTheArrowSkipsACandidateThatLeadsNowhere(t *testing.T) {
 	// Hardcover ranks the umbrella first, and it is finished; the trilogy
-	// under it is not. The offer follows the one that leads somewhere.
+	// under it is not. The offer follows the one that leads somewhere — once
+	// the warm pass has asked about both. A request asks about the first
+	// choice alone, so until then the row shows no way on rather than a
+	// guess.
 	claim := func(name, slug string, pos float64) library.Series {
 		return library.Series{Name: name, Slug: slug, Position: library.At(pos), Source: "hardcover"}
 	}
@@ -472,13 +480,181 @@ func TestTheArrowSkipsACandidateThatLeadsNowhere(t *testing.T) {
 		return library.Entry{Book: library.Book{Title: "The Alloy of Law"}}, q.Series.Slug == "mistborn"
 	}
 	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "The Hero of Ages", "The Final Empire Books", 3, "9780765350381")}}}
+	e := twoProviders(t, hc, gm)
+	ctx := context.Background()
 
-	v, err := twoProviders(t, hc, gm).View(context.Background())
+	v, err := e.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "The Final Empire Books"); g.ContinueOn != nil {
+		t.Errorf("ContinueOn = %+v before anything is known of the second candidate", g.ContinueOn)
+	}
+
+	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	v, err = e.View(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	g := groupNamed(t, v, "The Final Empire Books")
 	if g.ContinueOn == nil || g.ContinueOn.Name != "Mistborn" {
 		t.Errorf("ContinueOn = %+v, want the candidate that actually has a book", g.ContinueOn)
+	}
+}
+
+// manyClaims is a shelf-only row whose books hardcover files under several
+// series, only one of which has anything left.
+func manyClaims(live string, dead ...string) *catalogue {
+	claims := []library.Series{}
+	for _, name := range append([]string{live}, dead...) {
+		claims = append(claims, library.Series{Name: name, Slug: key(name), Position: library.At(3), Source: "hardcover"})
+	}
+	hc := &catalogue{byISBN: map[string][]library.Series{"9780000000001": claims}}
+	hc.answer = func(q library.SeriesQuery) (library.Entry, bool) {
+		return library.Entry{Book: library.Book{Title: "Book Four"}}, q.Series.Slug == key(live)
+	}
+	return hc
+}
+
+func TestARequestChecksTheCandidateTheOfferWouldTakeFirst(t *testing.T) {
+	// The alternatives are sorted by name for display; spending the budget in
+	// that order would leave the one the offer prefers unasked, and the row
+	// showing no way on at all.
+	hc := manyClaims("Zzz Saga", "Alpha", "Beta", "Gamma")
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Book Three", "Zzz Saga", 3, "9780000000001")}}}
+
+	v, err := twoProviders(t, hc, gm).View(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := groupNamed(t, v, "Zzz Saga")
+	if g.ContinueOn == nil || g.ContinueOn.Name != "Zzz Saga" {
+		t.Errorf("ContinueOn = %+v, want the preferred candidate offered", g.ContinueOn)
+	}
+	if len(hc.asked) != 1 || hc.asked[0].Series.Slug != "zzz saga" {
+		t.Errorf("asked = %+v, want one lookup, spent on the preferred candidate", hc.asked)
+	}
+}
+
+func TestOneStuckRowCannotStarveTheRowsBelowIt(t *testing.T) {
+	// A row that has run out checks one candidate, as it always has. Spending
+	// the whole request on its alternatives would leave the rows under it
+	// rendering silent — neither a next book nor an honest "nothing left".
+	hc := manyClaims("Zzz Saga", "Alpha", "Beta", "Gamma")
+	hc.fakeSource = fakeSource{reads: []library.Entry{readOn("hardcover", "The Last Wish", "The Witcher", 1)}}
+	hc.answer = func(q library.SeriesQuery) (library.Entry, bool) {
+		return library.Entry{Book: library.Book{Title: "Sword of Destiny"}}, q.Series.Name == "The Witcher" || q.Series.Slug == "zzz saga"
+	}
+	stuck := readOn("grimmory", "Book Three", "Zzz Saga", 3, "9780000000001")
+	stuck.FinishedAt = day2 // sorts above the hardcover row
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{stuck}}}
+
+	v, err := twoProviders(t, hc, gm).View(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "The Witcher"); g.NextTitle != "Sword of Destiny" {
+		t.Errorf("The Witcher: Next = %q, CaughtUp = %v; the row below was starved of its own lookup", g.NextTitle, g.CaughtUp)
+	}
+}
+
+func TestAFailingCatalogueIsStillChargedToTheBudget(t *testing.T) {
+	// Errors are never cached, so a lookup that fails and costs nothing would
+	// be retried on every render, once per candidate, for as long as the
+	// backend stays down.
+	hc := manyClaims("Zzz Saga", "Alpha", "Beta", "Gamma", "Delta", "Epsilon")
+	hc.nextErr = errors.New("rate limited")
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Book Three", "Zzz Saga", 3, "9780000000001")}}}
+
+	if _, err := twoProviders(t, hc, gm).compute(context.Background(), 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(hc.asked) > 6 {
+		t.Errorf("asked %d times, want no more than one try per candidate", len(hc.asked))
+	}
+
+	hc2 := manyClaims("Zzz Saga", "Alpha", "Beta", "Gamma", "Delta", "Epsilon")
+	hc2.nextErr = errors.New("rate limited")
+	if _, err := twoProviders(t, hc2, gm).View(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(hc2.asked) > maxRequestLookups {
+		t.Errorf("asked %d times on one request, want the failures charged to the budget of %d", len(hc2.asked), maxRequestLookups)
+	}
+}
+
+func TestADroppedSeriesIsLookedUpByNobody(t *testing.T) {
+	hc := manyClaims("Zzz Saga")
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Book Three", "Zzz Saga", 3, "9780000000001")}}}
+	e := twoProviders(t, hc, gm)
+	ctx := context.Background()
+	if _, err := e.Decide(ctx, "drop", "Zzz Saga", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(hc.asked) != 0 || hc.finds != 0 {
+		t.Errorf("asked = %d, finds = %d; a dropped series offers nothing, so nothing is looked up for it", len(hc.asked), hc.finds)
+	}
+}
+
+func TestATwinWithNoCatalogueSaysNothingInTheWheel(t *testing.T) {
+	// Grimmory's row is "caught up" only because nobody could ask it. Passing
+	// that on as the twin's answer would label a switch a dead end when it
+	// leads to a book.
+	gmRead := readOn("grimmory", "Dune", "Dune", 1)
+	hcRead := readOn("hardcover", "Dune Messiah", "Dune", 2)
+	hc := &catalogue{
+		fakeSource: fakeSource{
+			reads:  []library.Entry{hcRead},
+			toRead: []library.Entry{entry("Children of Dune", "Dune", 3, "hardcover")},
+		},
+	}
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{gmRead}}}
+
+	v, err := twoProviders(t, hc, gm).compute(context.Background(), 1<<20, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range v.Groups {
+		for _, alt := range g.Alternatives {
+			if alt.Source == "grimmory" && alt.NextLabel() != "" {
+				t.Errorf("%q's grimmory twin says %q, but grimmory has no catalogue to say it with", g.Name, alt.NextLabel())
+			}
+		}
+	}
+}
+
+func TestAnIdentityIsAskedAboutAtItsOwnNumbering(t *testing.T) {
+	// The umbrella numbers this reader at 15 and the sub-series at 3. Asking
+	// the sub-series what follows book 15 walks off the end of it, and the
+	// wheel would call a live series finished.
+	sub := library.Series{Name: "Subseries", Slug: "sub", Position: library.At(3), Source: "hardcover"}
+	umbrella := library.Series{Name: "Umbrella", Slug: "umbrella", Position: library.At(15), Source: "hardcover"}
+	placed := readOn("grimmory", "Book Three", "Shelf Series", 3, "9780000000001")
+	unplaced := readOn("grimmory", "Side Story", "Shelf Series", 4, "9780000000002")
+	hc := &catalogue{byISBN: map[string][]library.Series{
+		"9780000000001": {sub, umbrella},
+		"9780000000002": {umbrella},
+	}}
+	hc.answer = func(q library.SeriesQuery) (library.Entry, bool) {
+		after, _ := q.Series.Slot()
+		return library.Entry{Book: library.Book{Title: "Book Four"}}, q.Series.Slug == "sub" && after == 3
+	}
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{placed, unplaced}}}
+
+	v, err := twoProviders(t, hc, gm).compute(context.Background(), 1<<20, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := groupNamed(t, v, "Shelf Series")
+	for _, alt := range g.Alternatives {
+		if alt.Name == "Subseries" && alt.NextTitle != "Book Four" {
+			t.Errorf("Subseries offers %q; it was asked at a slot borrowed from another ordering: %+v", alt.NextTitle, hc.asked)
+		}
 	}
 }
