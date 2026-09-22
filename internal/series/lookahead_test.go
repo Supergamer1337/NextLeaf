@@ -85,20 +85,39 @@ func TestLookaheadTreatsAdvancingPositionAsANewQuestion(t *testing.T) {
 	}
 }
 
-func TestLookaheadDoesNotCacheFailures(t *testing.T) {
+func TestLookaheadHoldsAFailureBrieflyThenTriesAgain(t *testing.T) {
 	ctx := context.Background()
 	r := &countingResolver{err: errors.New("rate limited")}
 	l := NewLookahead(r, 24*time.Hour)
-	l.now = func() time.Time { return day0 }
+	now := day0
+	l.now = func() time.Time { return now }
 
-	// Caching an error would blind the reader to a series for a whole day.
-	for i := 0; i < 2; i++ {
+	// A throttled backend answers every row at once. Retrying each of them on
+	// every render puts the round trip back into every page load for as long
+	// as the backend stays down, which the reader feels as a slow app.
+	for i := 0; i < 3; i++ {
 		if _, _, err := l.Next(ctx, query("Mistborn", 3)); err == nil {
 			t.Fatal("Next should surface the resolver's error")
 		}
 	}
+	if r.calls != 1 {
+		t.Errorf("resolver called %d times, want 1: a fresh failure is held", r.calls)
+	}
+
+	// Held briefly, though: caching it like an answer would blind the reader
+	// to a series for a whole day.
+	now = day0.Add(failureTTL + time.Second)
+	if _, _, err := l.Next(ctx, query("Mistborn", 3)); err == nil {
+		t.Fatal("Next should surface the resolver's error")
+	}
 	if r.calls != 2 {
-		t.Errorf("resolver called %d times, want 2: errors must not be cached", r.calls)
+		t.Errorf("resolver called %d times, want 2: the failure is retried once it is stale", r.calls)
+	}
+
+	// And a failure never satisfies a caller asking whether an answer is held.
+	now = day0
+	if l.Cached(query("Mistborn", 3)) {
+		t.Error("a held failure is not an answer")
 	}
 }
 
