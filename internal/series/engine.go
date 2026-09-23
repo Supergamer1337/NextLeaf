@@ -730,8 +730,9 @@ type Recommendation struct {
 	// past one: stepping over a series is a park, not a reroll.
 	Continuation bool
 	// Group is the display name decisions should be recorded against, which
-	// is not always the series the book itself is labelled with.
-	Group string
+	// is not always the series the book itself is labelled with, and Source
+	// the provider of that row.
+	Group, Source string
 }
 
 // Recommend produces one recommendation: continue the series that ranks
@@ -769,7 +770,7 @@ func (e *Engine) recommend(ctx context.Context, reroll bool, budget int, keep st
 				continue
 			}
 			rec := picker.ContinueSeries(*g.NextEntry, g.LastRating)
-			return Recommendation{Rec: rec, OK: true, Decidable: true, Continuation: true, Group: g.Name}, v, nil
+			return Recommendation{Rec: rec, OK: true, Decidable: true, Continuation: true, Group: g.Name, Source: g.Source}, v, nil
 		}
 	}
 
@@ -799,7 +800,7 @@ func (e *Engine) recommend(ctx context.Context, reroll bool, budget int, keep st
 	}
 	out := Recommendation{Rec: rec, OK: ok}
 	if g, found := groupFor(rec.Entry, v.Groups); found {
-		out.Decidable, out.Group = true, g.Name
+		out.Decidable, out.Group, out.Source = true, g.Name, g.Source
 	}
 	return out, v, nil
 }
@@ -853,17 +854,18 @@ func groupFor(entry library.Entry, groups []Group) (Group, bool) {
 	return Group{}, false
 }
 
-// Decide records a statement about the named series. For "switch", to names
-// the alternative the reader wants the series tracked under. The returned
-// uncached flag says the decision left the group with no cached next-in-series
-// answer — a switch keys the cache under a new name, and a cleared drop
-// revives a group enrich and Warm have been skipping — so re-rendering it
-// needs a lookup budget.
+// Decide records a statement about the named series; source picks between
+// same-named rows on different providers, and empty takes the first. For
+// "switch", to names the alternative the reader wants the series tracked
+// under. The returned uncached flag says the decision left the group with no
+// cached next-in-series answer — a switch keys the cache under a new name,
+// and a cleared drop revives a group enrich and Warm have been skipping — so
+// re-rendering it needs a lookup budget.
 //
 // It works from the unenriched view: recording a statement needs the group
 // and its anchors, never the catalogue, so a slow backend cannot stretch the
 // POST the reader is waiting on.
-func (e *Engine) Decide(ctx context.Context, action, name, to string) (uncached bool, err error) {
+func (e *Engine) Decide(ctx context.Context, action, name, source, to string) (uncached bool, err error) {
 	in, err := e.input(ctx)
 	if err != nil {
 		return false, err
@@ -871,7 +873,7 @@ func (e *Engine) Decide(ctx context.Context, action, name, to string) (uncached 
 	v := Compute(in)
 	var group *Group
 	for i := range v.Groups {
-		if key(v.Groups[i].Name) == key(name) {
+		if key(v.Groups[i].Name) == key(name) && (source == "" || v.Groups[i].Source == source) {
 			group = &v.Groups[i]
 			break
 		}

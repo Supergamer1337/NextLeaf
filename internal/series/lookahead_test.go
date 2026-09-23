@@ -3,6 +3,7 @@ package series
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -235,5 +236,45 @@ func TestLookaheadDoesNotHoldAnAskItsCallerCancelled(t *testing.T) {
 	}
 	if !l.Failed(query("Mistborn", 3)) {
 		t.Error("a failed ask is not marked failed")
+	}
+}
+
+type resolverFunc func(context.Context, library.SeriesQuery) (library.Entry, bool, error)
+
+func (f resolverFunc) NextInSeries(ctx context.Context, q library.SeriesQuery) (library.Entry, bool, error) {
+	return f(ctx, q)
+}
+
+func TestAFailureDoesNotUndoAnAnswerThatLandedMeanwhile(t *testing.T) {
+	// The background pass and a decision's render can ask the same question at
+	// once. The one that fails last must not wipe out the one that answered.
+	slow := make(chan struct{})
+	var calls atomic.Int32
+	l := NewLookahead(resolverFunc(func(context.Context, library.SeriesQuery) (library.Entry, bool, error) {
+		if calls.Add(1) == 1 {
+			<-slow
+			return library.Entry{}, false, errors.New("rate limited")
+		}
+		return mistborn4(), true, nil
+	}), 24*time.Hour)
+	l.now = func() time.Time { return day0 }
+	ctx := context.Background()
+
+	failed := make(chan struct{})
+	go func() { _, _, _ = l.Next(ctx, query("Mistborn", 3)); close(failed) }()
+	for calls.Load() < 1 {
+		time.Sleep(time.Millisecond)
+	}
+	if _, _, err := l.Next(ctx, query("Mistborn", 3)); err != nil {
+		t.Fatal(err)
+	}
+	close(slow)
+	<-failed
+
+	if entry, found, known := l.Last(query("Mistborn", 3)); !known || !found || entry.Book.Title != "The Alloy of Law" {
+		t.Errorf("Last = %q, %v, %v; the late failure undid the answer", entry.Book.Title, found, known)
+	}
+	if got, _, err := l.Next(ctx, query("Mistborn", 3)); err != nil || got.Book.Title != "The Alloy of Law" {
+		t.Errorf("Next = %q, %v; want the answer, not the failure that lost the race", got.Book.Title, err)
 	}
 }

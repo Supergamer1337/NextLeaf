@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,6 +21,10 @@ type Cached struct {
 	src Source
 	ttl time.Duration
 	now func() time.Time // overridable in tests
+	// ahead is set once Refresh has run: from then on the refresh renews what
+	// is held, and a read serves it however old rather than wait on a source
+	// the refresh may just have found down.
+	ahead atomic.Bool
 
 	readingMu sync.Mutex
 	reading   []Entry
@@ -62,7 +67,7 @@ func (c *Cached) Name() string { return c.src.Name() }
 func (c *Cached) Unwrap() Source { return c.src }
 
 func (c *Cached) fresh(at time.Time, ok bool) bool {
-	return ok && c.now().Sub(at) < c.ttl
+	return ok && (c.ahead.Load() || c.now().Sub(at) < c.ttl)
 }
 
 // Health reports whether any of this source's queries is being served from
@@ -235,6 +240,7 @@ func Refresh(ctx context.Context, s Source) (changed bool, err error) {
 // readers would have to wait for it either way. A failed fetch keeps what is
 // held, marked stale, as a failed read does.
 func (c *Cached) Refresh(ctx context.Context) (bool, error) {
+	c.ahead.Store(true)
 	// The three lists at once: each is its own round trip.
 	var changed [3]bool
 	var errs [3]error

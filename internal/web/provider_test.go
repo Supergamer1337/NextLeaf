@@ -700,3 +700,52 @@ func TestNothingListensWithoutSeriesTracking(t *testing.T) {
 		t.Errorf("the status gives the listener a generation to ask from:\n%s", status)
 	}
 }
+
+// witcherTwins is The Witcher read on both providers: two rows of one name.
+func witcherTwins() library.Source {
+	read := func(title string, pos float64, source string) library.Entry {
+		return library.Entry{
+			Book: library.Book{
+				Title: title, Authors: []string{"Andrzej Sapkowski"},
+				Series: &library.Series{Name: "The Witcher", Position: library.At(pos), Source: source},
+			},
+			Status: library.StatusRead, FinishedAt: time.Now().Add(-24 * time.Hour),
+		}
+	}
+	return library.Combine(
+		namedStub{name: "hardcover", stubSource: stubSource{reads: []library.Entry{read("The Last Wish", 1, "hardcover")}}},
+		namedStub{name: "grimmory", stubSource: stubSource{reads: []library.Entry{read("Sword of Destiny", 2, "grimmory")}}},
+	)
+}
+
+func TestADecisionOnATwinRowLandsOnThatRow(t *testing.T) {
+	src := witcherTwins()
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
+	h := NewHandler(Deps{Source: src, Engine: engine})
+	body := html.UnescapeString(getBody(t, h, "/view"))
+	for _, source := range []string{"hardcover", "grimmory"} {
+		if !strings.Contains(body, `"source":"`+source+`"`) {
+			t.Errorf("no decision in the drawer names the %s row", source)
+		}
+		if !strings.Contains(body, `name="source" value="`+source+`"`) {
+			t.Errorf("the %s row's switcher does not name its row", source)
+		}
+	}
+
+	rec := post(t, h, "/series/drop", url.Values{"name": {"The Witcher"}, "source": {"grimmory"}})
+	if rec.Code != 200 {
+		t.Fatalf("drop: status = %d", rec.Code)
+	}
+	if undo := between(html.UnescapeString(rec.Body.String()), `notice--done`, `</p>`); !strings.Contains(undo, `"source":"grimmory"`) {
+		t.Errorf("the undo would clear whichever twin comes first:\n%s", undo)
+	}
+	v, err := engine.View(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range v.Groups {
+		if g.Name == "The Witcher" && (g.Decision == series.Dropped) != (g.Source == "grimmory") {
+			t.Errorf("the %s row: decision = %v, after dropping the grimmory row", g.Source, g.Decision)
+		}
+	}
+}

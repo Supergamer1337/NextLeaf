@@ -351,12 +351,13 @@ func TestAFinishedSeriesShowsTheCoverOfTheLastBookRead(t *testing.T) {
 
 func TestStaleSourcesAreCalledOutOnThePage(t *testing.T) {
 	flaky := &breakableSource{stubSource: midSeries()}
-	cached := library.NewCached(flaky, time.Nanosecond)
-	h := ready(t, cached, testStore(t))
+	cached := library.NewCached(flaky, time.Hour)
+	engine := series.NewEngine(testStore(t), cached, picker.Prefs{IncludeNovellas: true})
+	h := NewHandler(Deps{Source: cached, Engine: engine})
 
-	getBody(t, h, "/view") // prime the cache
+	<-engine.RefreshLibrary()
 	flaky.broken = true
-	time.Sleep(2 * time.Nanosecond)
+	<-engine.RefreshLibrary() // the background refresh finds it down
 	body := getBody(t, h, "/view")
 	if !strings.Contains(body, "couldn’t be reached") {
 		t.Error("no notice that the source data may be out of date")

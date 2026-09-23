@@ -247,3 +247,42 @@ func TestARefreshFetchesEveryListAtOnce(t *testing.T) {
 		t.Errorf("at most %d fetches were in flight at once, want all six lists of both sources", got)
 	}
 }
+
+func TestOnceRefreshedAheadAReadNeverWaitsOnTheSource(t *testing.T) {
+	// Refreshed in the background, an expired list is the refresh's to renew.
+	// A read fetching for itself would put a down source's timeout into every
+	// page load, and the refresh has already said the source is down.
+	ctx := context.Background()
+	src := &fakeSource{}
+	c := NewCached(src, time.Hour)
+	now := time.Now()
+	c.now = func() time.Time { return now }
+	if _, err := c.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Hour)
+	src.block = make(chan struct{}) // down, and hanging
+	defer close(src.block)
+
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		for _, read := range []func() ([]Entry, error){
+			func() ([]Entry, error) { return c.CurrentlyReading(ctx) },
+			func() ([]Entry, error) { return c.RecentReads(ctx, 20) },
+			func() ([]Entry, error) { return c.ToRead(ctx) },
+		} {
+			if got, err := read(); err != nil || len(got) != 1 {
+				t.Errorf("read = %v, %v; want what is held", got, err)
+			}
+		}
+	}()
+	select {
+	case <-served:
+	case <-time.After(time.Second):
+		t.Fatal("a read past the TTL waited on the source")
+	}
+	if r, rs, tr := atomic.LoadInt64(&src.reading), atomic.LoadInt64(&src.reads), atomic.LoadInt64(&src.toRead); r != 1 || rs != 1 || tr != 1 {
+		t.Errorf("fetched %d, %d, %d times; want the refresh's fetch alone", r, rs, tr)
+	}
+}
