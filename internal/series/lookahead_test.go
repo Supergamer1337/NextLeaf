@@ -211,3 +211,29 @@ func TestTheLastAnswerOutlastsItsFreshness(t *testing.T) {
 		t.Errorf("Last = (%q, %v, %v), want the answer the failed re-check could not replace", entry.Book.Title, found, ok)
 	}
 }
+
+func TestLookaheadDoesNotHoldAnAskItsCallerCancelled(t *testing.T) {
+	// A reader navigating away, or shutdown, cuts an ask short. The catalogue
+	// did not fail, so the question is neither held nor marked failed: it is
+	// still to be answered.
+	r := &countingResolver{err: context.Canceled}
+	l := NewLookahead(r, 24*time.Hour)
+	l.now = func() time.Time { return day0 }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := l.Next(ctx, query("Mistborn", 3)); err == nil {
+		t.Fatal("Next should surface the cancellation")
+	}
+	if l.Cached(query("Mistborn", 3)) || l.Failed(query("Mistborn", 3)) {
+		t.Error("a cancelled ask was held as the catalogue's failure")
+	}
+
+	// A catalogue that fails on its own is another matter.
+	r.err = errors.New("unauthorized")
+	if _, _, err := l.Next(context.Background(), query("Mistborn", 3)); err == nil {
+		t.Fatal("Next should surface the resolver's error")
+	}
+	if !l.Failed(query("Mistborn", 3)) {
+		t.Error("a failed ask is not marked failed")
+	}
+}

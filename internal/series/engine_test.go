@@ -3,6 +3,7 @@ package series
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"strings"
 	"testing"
 
@@ -314,5 +315,47 @@ func TestAContinuationSaysSo(t *testing.T) {
 	}
 	if rec.Continuation {
 		t.Error("a variety pick claims to be a continuation")
+	}
+}
+
+func TestAFollowUpKeepsTheCardOnScreen(t *testing.T) {
+	// A refresh that lands after the page painted redraws it. Dealing a fresh
+	// random card then would swap the book out from under the reader.
+	var toRead []library.Entry
+	for _, title := range []string{"A", "B", "C", "D", "E", "F", "G", "H"} {
+		toRead = append(toRead, library.Entry{Book: library.Book{Title: title}, Status: library.StatusWantToRead})
+	}
+	e := testEngine(t, fakeSource{toRead: toRead})
+	ctx := context.Background()
+	for seed := int64(1); seed <= 20; seed++ {
+		e.rng = rand.New(rand.NewSource(seed))
+		rec, _, err := e.RecommendKeeping(ctx, library.BookKey(toRead[5]), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec.Rec.Entry.Book.Title != "F" {
+			t.Fatalf("seed %d dealt %q over the card on screen", seed, rec.Rec.Entry.Book.Title)
+		}
+	}
+
+	gone := library.BookKey(library.Entry{Book: library.Book{Title: "Read since"}})
+	if rec, _, err := e.RecommendKeeping(ctx, gone, 0); err != nil || !rec.OK {
+		t.Errorf("a card no longer on the list left nothing in its place: %v, %v", rec.OK, err)
+	}
+}
+
+func TestAContinuationStillTakesOverAKeptCard(t *testing.T) {
+	// A book finished elsewhere is what a follow-up is for: its sequel comes
+	// first, as on any other load.
+	src := fakeSource{
+		reads:  []library.Entry{read("Book 3", "Mistborn", 3, day0)},
+		toRead: []library.Entry{tbr("Book 4", "Mistborn", 4, day0), tbr("Standalone", "", 0, day0)},
+	}
+	rec, _, err := testEngine(t, src).RecommendKeeping(context.Background(), library.BookKey(src.toRead[1]), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rec.Continuation || rec.Rec.Entry.Book.Title != "Book 4" {
+		t.Errorf("recommended %q, want the continuation over the kept card", rec.Rec.Entry.Book.Title)
 	}
 }

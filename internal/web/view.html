@@ -5,7 +5,7 @@
   {{/* It gives way to a request of the reader's in flight, whose answer is
        drawn from the refreshed library anyway; and it can be asked for again,
        for when it lands under an open wheel. */}}
-  <span class="card-follow" hx-get="/view?after={{.}}" hx-trigger="load, follow" hx-sync="#app:drop" hx-indicator="this" hidden></span>
+  <span class="card-follow" hx-get="/view?after={{.}}{{with $.CardKey}}&keep={{.}}{{end}}" hx-trigger="load, follow" hx-sync="#app:drop" hx-indicator="this" hidden></span>
   {{end}}
   {{/* No role="status" here: #app is already a polite live region, and a
        nested one would announce every notice twice. */}}

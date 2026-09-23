@@ -2,6 +2,7 @@ package picker
 
 import (
 	"math/rand"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -215,5 +216,50 @@ func TestContinueSeriesKeepsEntryProvenance(t *testing.T) {
 	}
 	if rec.Entry.Status != library.StatusWantToRead {
 		t.Errorf("Status = %v, want StatusWantToRead", rec.Entry.Status)
+	}
+}
+
+func TestKeepRescoresTheCardOnScreen(t *testing.T) {
+	recent := []library.Entry{
+		{Book: book("R1", []string{"Fantasy"}, nil)},
+		{Book: book("R2", []string{"Fantasy"}, nil)},
+		{Book: book("R3", []string{"Fantasy"}, nil)},
+	}
+	cands := []library.Entry{
+		{Book: book("A", []string{"History"}, nil)},
+		{Book: book("B", []string{"Romance"}, nil)},
+		{Book: book("C", []string{"Fantasy"}, nil)},
+	}
+	rec, ok := Keep(Prefs{IncludeNovellas: true}, cands, recent, nil, library.BookKey(cands[2]))
+	if !ok || rec.Entry.Book.Title != "C" {
+		t.Fatalf("Keep = (%q, %v), want C/true", rec.Entry.Book.Title, ok)
+	}
+	// The card reads as it did when it was dealt.
+	for seed := int64(1); ; seed++ {
+		dealt, _ := Pick(rand.New(rand.NewSource(seed)), Prefs{IncludeNovellas: true}, cands, recent, nil)
+		if dealt.Entry.Book.Title != "C" {
+			continue
+		}
+		if !reflect.DeepEqual(rec.Pros, dealt.Pros) || !reflect.DeepEqual(rec.Cons, dealt.Cons) || len(rec.Cons) == 0 {
+			t.Errorf("kept with pros %v, cons %v; dealt with pros %v, cons %v", rec.Pros, rec.Cons, dealt.Pros, dealt.Cons)
+		}
+		break
+	}
+
+	if _, ok := Keep(Prefs{IncludeNovellas: true}, cands, recent, nil, library.BookKey(library.Entry{Book: book("Gone", nil, nil)})); ok {
+		t.Error("kept a book that is no longer a candidate")
+	}
+	if _, ok := Keep(Prefs{IncludeNovellas: true}, cands, recent, nil, ""); ok {
+		t.Error("kept a card with no key")
+	}
+}
+
+func TestKeepDropsAVolumeThatIsNoLongerNext(t *testing.T) {
+	// The reader added book 1 of a series whose book 2 is on screen: book 1
+	// is the one to read now.
+	two := library.Entry{Book: library.Book{Title: "Two", Series: &library.Series{Name: "Saga", Position: library.At(2)}}}
+	one := library.Entry{Book: library.Book{Title: "One", Series: &library.Series{Name: "Saga", Position: library.At(1)}}}
+	if _, ok := Keep(Prefs{IncludeNovellas: true}, []library.Entry{two, one}, nil, nil, library.BookKey(two)); ok {
+		t.Error("kept a later volume over the one before it")
 	}
 }

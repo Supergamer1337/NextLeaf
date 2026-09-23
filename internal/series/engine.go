@@ -48,6 +48,9 @@ type Engine struct {
 	finders []library.SeriesFinder
 	mu      sync.Mutex
 	found   map[string]foundClaims
+	// findFailed holds the book keys whose last lookup failed: no answer is
+	// coming for them until a later pass asks again.
+	findFailed map[string]bool
 
 	// gen counts answers landed; changed is closed when the next one does.
 	gen     uint64
@@ -75,7 +78,7 @@ type foundClaims struct {
 // SeriesResolver capability, when present, powers new-release lookups.
 func NewEngine(store *Store, src library.Source, prefs picker.Prefs) *Engine {
 	e := &Engine{
-		src: src, store: store, prefs: prefs, now: time.Now, found: map[string]foundClaims{},
+		src: src, store: store, prefs: prefs, now: time.Now, found: map[string]foundClaims{}, findFailed: map[string]bool{},
 		changed: make(chan struct{}), nudge: make(chan struct{}, 1),
 		pace: warmPause, retryGap: failureTTL,
 	}
@@ -394,7 +397,7 @@ func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pa
 		ask := mode == everyIdentity || mode == untilOffered && !offered
 		entry, found, held := e.lookup(ctx, q, spent, budget, pause, ask, mode == everyIdentity)
 		if !held {
-			c.alt.Pending = true
+			c.alt.Pending = !e.lookahead.Failed(q)
 			continue
 		}
 		c.alt.Checked = true
@@ -412,7 +415,7 @@ func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pa
 // the budget lasts. A known answer is shown even when it is due a re-check,
 // and only a refresh — the background pass — spends a lookup re-checking one;
 // a failed re-check leaves it standing. held is false only when nothing is
-// known yet: an answer is still to come.
+// known yet: an answer is still to come, unless the last try failed.
 func (e *Engine) lookup(ctx context.Context, q library.SeriesQuery, spent *int, budget int, pause time.Duration, ask, refresh bool) (entry library.Entry, found, held bool) {
 	last, lastFound, known := e.lookahead.Last(q)
 	asked := false
@@ -457,6 +460,7 @@ func alternativeFor(g *Group, m library.Series) *Alternative {
 
 // unasked reports whether any of the row's books could be looked up by ISBN
 // and never has been. A stale lookup does not count: its answer still shows.
+// Nor does a failed one: no answer is coming until a later pass.
 func (e *Engine) unasked(g *Group) bool {
 	if len(e.finders) == 0 {
 		return false
@@ -469,7 +473,7 @@ func (e *Engine) unasked(g *Group) bool {
 		}
 		asked := false
 		for _, k := range b.plainKeys {
-			if _, ok := e.found[k]; ok {
+			if _, ok := e.found[k]; ok || e.findFailed[k] {
 				asked = true
 			}
 		}
@@ -543,6 +547,13 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 		}
 		spent++
 		if failed {
+			e.mu.Lock()
+			for _, b := range asking {
+				for _, k := range b.plainKeys {
+					e.findFailed[k] = true
+				}
+			}
+			e.mu.Unlock()
 			continue
 		}
 
@@ -633,7 +644,7 @@ func (e *Engine) next(ctx context.Context, g *Group, spent *int, budget int, pau
 	}
 	entry, found, held := e.lookup(ctx, q, spent, budget, pause, true, refresh)
 	if !held {
-		g.NextPending = true
+		g.NextPending = !e.lookahead.Failed(q)
 		return
 	}
 	if !found {
@@ -735,6 +746,17 @@ func (e *Engine) Recommend(ctx context.Context, reroll bool) (Recommendation, Vi
 // decision handler passes zero: a park or a drop is recorded and re-rendered
 // without waiting on a catalogue that may be slow.
 func (e *Engine) RecommendWithin(ctx context.Context, reroll bool, budget int) (Recommendation, View, error) {
+	return e.recommend(ctx, reroll, budget, "")
+}
+
+// RecommendKeeping is RecommendWithin for a page already showing the book
+// keyed keep: a series continuation still comes first, but in place of a new
+// variety pick the card stays, if it is still on the list.
+func (e *Engine) RecommendKeeping(ctx context.Context, keep string, budget int) (Recommendation, View, error) {
+	return e.recommend(ctx, false, budget, keep)
+}
+
+func (e *Engine) recommend(ctx context.Context, reroll bool, budget int, keep string) (Recommendation, View, error) {
 	v, err := e.viewWithin(ctx, budget)
 	if err != nil {
 		return Recommendation{}, View{}, err
@@ -767,11 +789,14 @@ func (e *Engine) RecommendWithin(ctx context.Context, reroll bool, budget int) (
 	// A dropped series is out of the running entirely, so its books leave the
 	// variety pool too.
 	candidates := withoutDropped(toRead, v.Groups)
-	rng := e.rng
-	if rng == nil {
-		rng = rand.New(rand.NewSource(e.now().UnixNano()))
+	rec, ok := picker.Keep(e.prefs, candidates, reads, reading, keep)
+	if !ok {
+		rng := e.rng
+		if rng == nil {
+			rng = rand.New(rand.NewSource(e.now().UnixNano()))
+		}
+		rec, ok = picker.Pick(rng, e.prefs, candidates, reads, reading)
 	}
-	rec, ok := picker.Pick(rng, e.prefs, candidates, reads, reading)
 	out := Recommendation{Rec: rec, OK: ok}
 	if g, found := groupFor(rec.Entry, v.Groups); found {
 		out.Decidable, out.Group = true, g.Name
