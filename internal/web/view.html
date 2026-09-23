@@ -124,7 +124,7 @@
      region: replaced on every change, it would be announced every time. */}}
 {{define "drawerStatus"}}
   <span class="drawer-status{{if .Panel.Pending}}{{else if .Settled}} is-done{{else}} is-idle{{end}}" id="drawer-status" hx-swap-oob="true"
-        data-gen="{{.Gen}}"{{if .Panel.Pending}} data-waiting{{end}}>{{if .Panel.Pending}}Checking {{.Panel.Checking}} series…{{else if .Settled}}Up to date{{end}}</span>
+        {{if .Listening}}data-gen="{{.Gen}}"{{if .Panel.Pending}} data-waiting{{end}}{{end}}>{{if .Panel.Pending}}Checking {{.Panel.Checking}} series…{{else if .Settled}}Up to date{{end}}</span>
 {{end}}
 
 {{/* The drawer's rows, on their own so the refresh can fetch them without

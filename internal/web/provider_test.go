@@ -525,11 +525,12 @@ func TestARerolledCardIsNeverFollowedUp(t *testing.T) {
 	}
 }
 
-func TestAPageHasOneDrawerListenerHoweverOftenItIsRedrawn(t *testing.T) {
+func TestTheDrawerListenerLivesWhereNoRedrawReaches(t *testing.T) {
 	// A listener living on something a redraw replaces is left running by
 	// every redraw: five rerolls held six requests open, a browser's whole
 	// allowance for one site. The page's one listener sits where no swap
-	// reaches, and replaces its own request rather than adding another.
+	// reaches, and replaces its own request rather than adding another. This
+	// pins that structure; the markup cannot show the requests themselves.
 	h := ready(t, midSeries(), testStore(t))
 	shell := getBody(t, h, "/")
 	listener := between(shell, `id="drawer-listen"`, `>`)
@@ -570,8 +571,9 @@ func TestAFollowUpNeverCancelsTheReadersOwnRequest(t *testing.T) {
 }
 
 func TestAWaitingRefreshEndsWhenItsRequestDoes(t *testing.T) {
-	// Shutdown ends every request's context. A refresh still waiting then must
-	// not hold the server open for the rest of its wait.
+	// A reader who closes the tab ends the request's context. A refresh still
+	// waiting for a change must end with it, not hold a goroutine for the
+	// rest of its wait.
 	engine := series.NewEngine(testStore(t), midSeries(), picker.Prefs{})
 	h := NewHandler(Deps{Source: midSeries(), Engine: engine, Wait: time.Minute})
 	gen, _ := engine.Changes()
@@ -611,5 +613,45 @@ func TestAWaitingRefreshAnswersAsSoonAsTheServerDrains(t *testing.T) {
 	}
 	if rec.Code != 200 {
 		t.Errorf("status = %d, want the drawer answered as it stands", rec.Code)
+	}
+}
+
+func TestAWaitingFollowUpAnswersAsSoonAsTheServerDrains(t *testing.T) {
+	// A follow-up waits on the library refresh behind its page, which may be
+	// slow; a draining server must not wait for it.
+	lib := &changingLibrary{}
+	src := library.NewCached(lib, time.Hour)
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{})
+	<-engine.RefreshLibrary()
+	release := make(chan struct{})
+	defer close(release)
+	lib.mu.Lock()
+	lib.hold = release
+	lib.mu.Unlock()
+	engine.RefreshLibrary() // held: the follow-up has something to wait on
+
+	draining := make(chan struct{})
+	h := NewHandler(Deps{Source: src, Engine: engine, Wait: time.Minute, Draining: draining})
+	_, gen := engine.Library()
+	done := make(chan struct{})
+	go func() {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/view?after="+strconv.FormatUint(gen, 10), nil))
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(draining)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("a waiting follow-up held a draining server open")
+	}
+}
+
+func TestNothingListensWithoutSeriesTracking(t *testing.T) {
+	// With no series tracking there is nothing for the drawer to hear, and a
+	// listener would only ask, every few seconds, to be told so.
+	body := getBody(t, NewHandler(Deps{Source: midSeries()}), "/view")
+	if status := between(body, `id="drawer-status"`, `>`); strings.Contains(status, "data-gen") {
+		t.Errorf("the status gives the listener a generation to ask from:\n%s", status)
 	}
 }

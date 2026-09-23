@@ -570,7 +570,12 @@
       // The drawer's one listener asks for the next change since the
       // generation the drawer shows, and is asked again after each answer.
       var listener = document.getElementById("drawer-listen");
+      // One retry at most: asking again cancels any that is pending, or a
+      // drawer answering "nothing" at once would gain a retry per redraw.
+      var retry = null;
       function listen() {
+        clearTimeout(retry);
+        retry = null;
         var st = document.getElementById("drawer-status");
         if (listener && st && st.dataset.gen) { htmx.trigger(listener, "listen"); }
       }
@@ -753,7 +758,9 @@
           // Dropped by a restart or a proxy's timeout, or replaced: ask again
           // shortly, unless a request is already out. Nothing to tell the
           // reader.
-          setTimeout(function () {
+          clearTimeout(retry);
+          retry = setTimeout(function () {
+            retry = null;
             if (!listener.classList.contains("htmx-request")) { listen(); }
           }, 5000);
           return;

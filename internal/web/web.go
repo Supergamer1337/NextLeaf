@@ -300,8 +300,10 @@ type viewData struct {
 	Continuation bool
 	Panel        panel
 	// Gen is the engine's generation when the drawer was rendered, so a
-	// waiting drawer can ask for whatever lands after it.
-	Gen uint64
+	// waiting drawer can ask for whatever lands after it. Listening is false
+	// with no series tracking, when there is nothing to listen for.
+	Gen       uint64
+	Listening bool
 	// Settled marks the render in which a waiting drawer got its last answer.
 	Settled bool
 	// FollowUp is the library generation a page was painted from, when a
@@ -468,7 +470,7 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	data := viewData{Panel: group(view), Gen: gen}
+	data := viewData{Panel: group(view), Gen: gen, Listening: true}
 	if data.Panel.Pending {
 		s.engine.Nudge()
 	}
@@ -498,6 +500,7 @@ func (s *server) viewOf(ctx context.Context, reroll, catalogue bool) viewData {
 		err  error
 	)
 	data.Gen, _ = s.engine.Changes()
+	data.Listening = true
 	if catalogue {
 		rec, view, err = s.engine.Recommend(ctx, reroll)
 	} else {
