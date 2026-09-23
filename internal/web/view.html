@@ -5,7 +5,7 @@
   {{/* It gives way to a request of the reader's in flight, whose answer is
        drawn from the refreshed library anyway; and it can be asked for again,
        for when it lands under an open wheel. */}}
-  <span class="card-follow" hx-get="/view?after={{.}}{{with $.CardKey}}&keep={{.}}{{end}}{{if $.Stale}}&stale=1{{end}}" hx-trigger="load, follow" hx-sync="#app:drop" hx-indicator="this" hidden></span>
+  <span class="card-follow" hx-get="/view?after={{.}}{{with $.CardKey}}&keep={{.}}{{end}}{{with $.StaleKey}}&stale={{.}}{{end}}" hx-trigger="load, follow" hx-sync="#app:drop" hx-indicator="this" hidden></span>
   {{end}}
   {{/* No role="status" here: #app is already a polite live region, and a
        nested one would announce every notice twice. */}}
@@ -123,8 +123,8 @@
      generation the drawer shows, and whether it is waiting. Not a live
      region: replaced on every change, it would be announced every time. */}}
 {{define "drawerStatus"}}
-  <span class="drawer-status{{if .Panel.Pending}}{{else if .Settled}} is-done{{if .Panel.Unanswered}} is-partial{{end}}{{else}} is-idle{{end}}" id="drawer-status" hx-swap-oob="true"
-        {{if .Listening}}data-gen="{{.Gen}}"{{if .Panel.Pending}} data-waiting{{end}}{{end}}>{{if .Panel.Pending}}Checking {{.Panel.Checking}} series…{{else if .Settled}}{{if .Panel.Unanswered}}Couldn’t check every series; trying again later{{else}}Up to date{{end}}{{end}}</span>
+  <span class="drawer-status{{if .Panel.Pending}}{{else if .Panel.Unanswered}} is-partial{{else if .Settled}} is-done{{else}} is-idle{{end}}" id="drawer-status" hx-swap-oob="true"
+        {{if .Listening}}data-gen="{{.Gen}}"{{if .Panel.Pending}} data-waiting{{end}}{{end}}>{{if .Panel.Pending}}Checking {{.Panel.Checking}} series…{{else if .Panel.Unanswered}}Couldn’t check every series; trying again later{{else if .Settled}}Up to date{{end}}</span>
 {{end}}
 
 {{/* The drawer's rows, on their own so the refresh can fetch them without

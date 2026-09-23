@@ -3,6 +3,7 @@ package series
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1492,28 +1493,35 @@ func TestAFailedISBNLookupStopsSayingItIsChecking(t *testing.T) {
 	hc := &catalogue{findErr: errors.New("unauthorized")}
 	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Death's End", "Three-Body", 3, "9780765377104")}}}
 	e := twoProviders(t, hc, gm)
+	now := day0
+	e.now = func() time.Time { return now }
 	ctx := context.Background()
-
-	v, err := e.compute(ctx, 1<<20, 0, true)
-	if err != nil {
-		t.Fatal(err)
+	pass := func() View {
+		t.Helper()
+		v, err := e.compute(ctx, 1<<20, 0, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
 	}
-	if g := groupNamed(t, v, "Three-Body"); !g.Pending() {
+
+	if g := groupNamed(t, pass(), "Three-Body"); !g.Pending() {
 		t.Error("after one failure the row should be tried again soon")
 	}
-	if v, err = e.compute(ctx, 1<<20, 0, true); err != nil {
-		t.Fatal(err)
+	// Soon, not at once: a pass straight after is still within the hold.
+	pass()
+	if hc.finds != 1 {
+		t.Fatalf("looked up %d times back to back; a failure is held before it is retried", hc.finds)
 	}
-	if g := groupNamed(t, v, "Three-Body"); g.Pending() || !g.Unanswered {
+	now = now.Add(failureTTL + time.Second)
+	if g := groupNamed(t, pass(), "Three-Body"); g.Pending() || !g.Unanswered {
 		t.Errorf("after failing twice: Pending = %v, Unanswered = %v; want it quiet and known unanswered", g.Pending(), g.Unanswered)
 	}
 
 	// A later pass asks again.
 	hc.findErr = nil
-	if v, err = e.compute(ctx, 1<<20, 0, true); err != nil {
-		t.Fatal(err)
-	}
-	if hc.finds != 3 || groupNamed(t, v, "Three-Body").Unanswered {
+	now = now.Add(failureTTL + time.Second)
+	if g := groupNamed(t, pass(), "Three-Body"); hc.finds != 3 || g.Unanswered {
 		t.Errorf("looked up by ISBN %d times, want the failure retried by the next pass", hc.finds)
 	}
 }
@@ -1572,5 +1580,45 @@ func TestADecisionLandsOnTheTwinItNames(t *testing.T) {
 	}
 	if _, err := e.Decide(ctx, "drop", "The Witcher", "goodreads", ""); !errors.Is(err, ErrUnknownSeries) {
 		t.Errorf("a decision on a row no provider has: err = %v, want ErrUnknownSeries", err)
+	}
+}
+
+// barrierCatalogue fails every lookup by ISBN, and holds each until two are
+// out at once.
+type barrierCatalogue struct {
+	*catalogue
+	out  atomic.Int32
+	both chan struct{}
+}
+
+func (c *barrierCatalogue) SeriesByISBN(context.Context, []string) (map[string][]library.Series, error) {
+	if c.out.Add(1) == 2 {
+		close(c.both)
+	}
+	<-c.both
+	return nil, errors.New("rate limited")
+}
+
+func TestTwoISBNLookupsFailingAtOnceAreOneFailure(t *testing.T) {
+	// The background pass and a decision's render can look the same row up
+	// together. Both failing is one hiccup, not the retry failing too.
+	hc := &barrierCatalogue{catalogue: &catalogue{}, both: make(chan struct{})}
+	gm := shelf{name: "grimmory", fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Death's End", "Three-Body", 3, "9780765377104")}}}
+	hc.name = "hardcover"
+	e := NewEngine(openStore(t), library.Combine(hc, gm), picker.Prefs{IncludeNovellas: true})
+	e.SourceOrder = []string{"hardcover", "grimmory"}
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(func() { _, _ = e.compute(ctx, 1<<20, 0, true) })
+	}
+	wg.Wait()
+	v, err := e.viewWithin(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "Three-Body"); g.Unanswered || !g.Pending() {
+		t.Errorf("Unanswered = %v, Pending = %v; two lookups failing together gave the row up", g.Unanswered, g.Pending())
 	}
 }

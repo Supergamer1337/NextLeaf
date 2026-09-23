@@ -397,15 +397,49 @@ func TestASourceFoundDownBehindThePageIsCalledOutAtOnce(t *testing.T) {
 }
 
 func TestADrawerThatGaveUpOnASeriesIsNotUpToDate(t *testing.T) {
+	// Whether the drawer watched it happen or was opened after, it says so
+	// for as long as it is true, rather than once in passing.
 	v := series.View{Groups: []series.Group{{Name: "The Witcher", Source: "hardcover", Unanswered: true}}}
-	rec := httptest.NewRecorder()
-	renderView(rec, viewData{Configured: true, Listening: true, Settled: true, Panel: group(v)}, http.StatusOK)
-	status := between(rec.Body.String(), `id="drawer-status"`, `</span>`)
-	if strings.Contains(status, "Up to date") {
-		t.Errorf("the drawer says it is up to date with a series it could not check:\n%s", status)
+	for _, settled := range []bool{true, false} {
+		rec := httptest.NewRecorder()
+		renderView(rec, viewData{Configured: true, Listening: true, Settled: settled, Panel: group(v)}, http.StatusOK)
+		status := between(rec.Body.String(), `id="drawer-status"`, `</span>`)
+		if strings.Contains(status, "Up to date") || strings.Contains(status, "is-done") {
+			t.Errorf("settled %v: the drawer says it is done with a series it could not check:\n%s", settled, status)
+		}
+		if !strings.Contains(status, "Couldn’t check") || strings.Contains(status, "is-idle") {
+			t.Errorf("settled %v: the drawer does not say what it could not check:\n%s", settled, status)
+		}
 	}
-	if !strings.Contains(status, "Couldn’t check") {
-		t.Errorf("the drawer does not say what it could not check:\n%s", status)
+}
+
+func TestAFollowUpHearsWhichSourceIsDown(t *testing.T) {
+	// One source recovering as another goes down changes no list, and leaves
+	// something down either way; the notice must still name the right one.
+	hc := &breakableSource{stubSource: midSeries(), name: "hardcover", broken: true}
+	gm := &breakableSource{stubSource: stubSource{}, name: "grimmory"}
+	src := library.Combine(library.NewCached(hc, time.Hour), library.NewCached(gm, time.Hour))
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
+	h := NewHandler(Deps{Source: src, Engine: engine, LoadFresh: time.Nanosecond})
+	hc.broken = false
+	<-engine.RefreshLibrary()
+	hc.broken = true
+	<-engine.RefreshLibrary() // hardcover is down
+
+	hc.broken, gm.broken = false, true
+	hold := make(chan struct{})
+	hc.hold, gm.hold = hold, hold
+	body := getBody(t, h, "/view")
+	if !strings.Contains(body, "Hardcover couldn’t be reached") {
+		t.Fatal("the page does not say hardcover is down")
+	}
+	close(hold)
+	follow := between(body, `class="card-follow"`, `>`)
+	path := html.UnescapeString(follow[strings.Index(follow, "/view?after="):])
+	path = path[:strings.Index(path, `"`)]
+	after := getBody(t, h, path)
+	if strings.Contains(after, "Hardcover couldn’t be reached") || !strings.Contains(after, "Grimmory couldn’t be reached") {
+		t.Errorf("the follow-up does not say grimmory is now the one down:\n%s", between(after, `id="deck"`, `class="rec`))
 	}
 }
 
@@ -520,34 +554,42 @@ func TestAnUnplacedSeriesShowsNoPositionRatherThanZero(t *testing.T) {
 // breakableSource errors on demand, for staleness tests.
 type breakableSource struct {
 	stubSource
+	name   string // grimmory when empty
 	broken bool
-	// hold, when set, keeps a broken source from answering until closed.
+	// hold, when set, keeps the source from answering until closed.
 	hold chan struct{}
 }
 
-func (s *breakableSource) down() error {
+func (s *breakableSource) wait() {
 	if s.hold != nil {
 		<-s.hold
 	}
-	return errTestDown
 }
 
-func (s *breakableSource) Name() string { return "grimmory" }
+func (s *breakableSource) Name() string {
+	if s.name == "" {
+		return "grimmory"
+	}
+	return s.name
+}
 func (s *breakableSource) CurrentlyReading(ctx context.Context) ([]library.Entry, error) {
+	s.wait()
 	if s.broken {
-		return nil, s.down()
+		return nil, errTestDown
 	}
 	return s.stubSource.CurrentlyReading(ctx)
 }
 func (s *breakableSource) RecentReads(ctx context.Context, limit int) ([]library.Entry, error) {
+	s.wait()
 	if s.broken {
-		return nil, s.down()
+		return nil, errTestDown
 	}
 	return s.stubSource.RecentReads(ctx, limit)
 }
 func (s *breakableSource) ToRead(ctx context.Context) ([]library.Entry, error) {
+	s.wait()
 	if s.broken {
-		return nil, s.down()
+		return nil, errTestDown
 	}
 	return s.stubSource.ToRead(ctx)
 }
