@@ -133,7 +133,7 @@
       {{template "drawerGroup" dict "Label" "Reading next — pinned" "Items" .Panel.Pinned "Undo" "Unpin" "Flat" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Open" true "CanPick" true "CanPark" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now" "CanPick" true "CanDrop" true}}
-      {{template "drawerGroup" dict "Label" "Continues elsewhere" "Items" .Panel.Continuable "CanStop" true "CanDrop" true}}
+      {{template "drawerGroup" dict "Label" "Continues elsewhere" "Items" .Panel.Continuable "CanKeep" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "CanPick" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
 {{end}}
@@ -215,16 +215,16 @@
             {{if $.CanPark}}
             <button class="drawer-act" type="button" hx-post="/series/park" hx-vals="{{$vals}}" hx-disabled-elt="this">Park</button>
             {{end}}
-            {{if $.CanStop}}
-            {{/* Turns the offer down for good: the series tracked is the one
-                 the reader meant to read. */}}
-            <button class="drawer-act" type="button" hx-post="/series/stop" hx-vals="{{$vals}}" hx-disabled-elt="this">Stop here</button>
+            {{if $.CanKeep}}
+            {{/* Keeps to this series as tracked and turns the other orderings
+                 down; the series still carries on by its own books. */}}
+            <button class="drawer-act" type="button" hx-post="/series/keep" hx-vals="{{$vals}}" hx-disabled-elt="this" title="Keep to this series, and stop suggesting other providers' orderings of it">Keep this series</button>
             {{end}}
             {{if $.CanDrop}}
             <button class="drawer-act" type="button" hx-post="/series/drop" hx-vals="{{$vals}}" hx-disabled-elt="this">Drop</button>
             {{end}}
-            {{if .Stopped}}
-            <button class="drawer-act" type="button" hx-post="/series/clear" hx-vals="{{$vals}}" hx-disabled-elt="this">Offer again</button>
+            {{if .Kept}}
+            <button class="drawer-act" type="button" hx-post="/series/clear" hx-vals="{{$vals}}" hx-disabled-elt="this">Suggest others</button>
             {{end}}
             {{if $.Undo}}
             <button class="drawer-act" type="button" hx-post="/series/clear" hx-vals="{{$vals}}" hx-disabled-elt="this">{{$.Undo}}</button>
@@ -242,7 +242,7 @@
           <img class="wheel-cover" alt="" hidden>
           {{template "wheelItem" dict "To" "" "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Next" .NextLabel "Checking" .NextPending "Desc" "Currently tracked." "Cover" (or .NextCoverURL .CoverURL)}}
           {{range .Alternatives}}
-          {{template "wheelItem" dict "To" .Name "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Next" .NextLabel "Checking" .Pending "Desc" .Description "Cover" .CoverURL}}
+          {{template "wheelItem" dict "To" .Name "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Next" .NextLabel "Checking" .Pending "Continues" .NextTitle "Desc" .Description "Cover" .CoverURL}}
           {{end}}
           <div class="wheel-controls">
             <button type="button" class="wheel-ok">Use this</button>
@@ -273,7 +273,7 @@
      data-to is what confirming submits — empty means keep the current
      identity — and data-cover is the face the row wears while it shows. */}}
 {{define "wheelItem"}}
-<div class="wheel-item" data-to="{{.To}}" data-cover="{{.Cover}}" hidden>
+<div class="wheel-item" data-to="{{.To}}" data-cover="{{.Cover}}"{{if .Continues}} data-continues{{end}} hidden>
   <span class="drawer-name">{{.Name}}</span>
   <span class="wheel-meta">
     {{if .Source}}<span class="switch-source">{{ucfirst .Source}}</span>{{end}}

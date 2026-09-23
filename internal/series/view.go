@@ -117,8 +117,8 @@ func (g Group) NextLabel() string {
 // its slot.
 func (a Alternative) NextBook() string { return nextBook(a.NextTitle, a.NextPosition) }
 
-// Stopped reports whether the reader has turned down continuing the series.
-func (g Group) Stopped() bool { return g.Decision == Stopped }
+// Kept reports whether the reader keeps to this series as tracked.
+func (g Group) Kept() bool { return g.Decision == Kept }
 
 func nextLabel(checked, pending bool, title string, pos *float64) string {
 	switch {
@@ -596,22 +596,21 @@ func applyStatements(groups map[string]*Group, books []*book, statements []State
 				} else {
 					g.Decision = Parked
 				}
-			case KindDrop, KindStop:
-				// Adding one of the series' books back undoes either.
+			case KindDrop:
+				// Adding one of the series' books back undoes the drop.
 				undone := false
 				for _, b := range books {
 					if b.toRead && b.addedAt.After(st.MadeAt) && inGroup(b, g) {
 						undone = true
 					}
 				}
-				switch {
-				case undone:
+				if undone {
 					g.Decision = Active
-				case st.Kind == KindDrop:
+				} else {
 					g.Decision = Dropped
-				default:
-					g.Decision = Stopped
 				}
+			case KindKeep:
+				g.Decision = Kept
 			case KindPin:
 				g.Decision = Pinned
 				g.pinnedBook, g.pinMadeAt = st.PinnedBook, st.MadeAt

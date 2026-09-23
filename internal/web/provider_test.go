@@ -278,6 +278,16 @@ func TestTheArrowOpensTheSwitcherRatherThanSwitching(t *testing.T) {
 	if !strings.Contains(arrow, `data-to="Remembrance of Earth&#39;s Past"`) {
 		t.Errorf("the arrow does not say which series to open the switcher on:\n%s", arrow)
 	}
+	// Opened from the arrow, the wheel answers "where does this continue?",
+	// so it cycles only the identities that do; the switcher button still
+	// shows them all.
+	cont := between(body, `class="wheel-item" data-to="Remembrance`, `>`)
+	if !strings.Contains(cont, "data-continues") {
+		t.Errorf("an identity with a next book is not marked as continuing:\n%s", cont)
+	}
+	if strings.Contains(between(body, `class="wheel-item" data-to=""`, `>`), "data-continues") {
+		t.Error("the series the reader has run out of is marked as continuing")
+	}
 }
 
 // twoClaimsOneAnswered is a Hardcover row whose own next book is answered on
@@ -341,7 +351,7 @@ func TestACollapsedSectionSaysItHoldsAnUnsettledSeries(t *testing.T) {
 	}
 }
 
-func TestAContinuableSeriesIsCountedApartAndCanBeTurnedDown(t *testing.T) {
+func TestAContinuableSeriesIsCountedApartAndCanBeKeptToItsOwnSeries(t *testing.T) {
 	h := ready(t, shelfAndCatalogue(), testStore(t))
 	body := getBody(t, h, "/view")
 
@@ -352,28 +362,29 @@ func TestAContinuableSeriesIsCountedApartAndCanBeTurnedDown(t *testing.T) {
 	if !strings.Contains(body, "Next on Hardcover: The Redemption of Time") {
 		t.Error("the row does not say what it would continue with, or where")
 	}
-	if !strings.Contains(body, `hx-post="/series/stop"`) {
-		t.Fatal("there is no way to say no to continuing it")
+	if !strings.Contains(body, `hx-post="/series/keep"`) || !strings.Contains(body, "Keep this series") {
+		t.Fatal("there is no way to keep to this series and turn the others down")
 	}
 
-	// Turning it down files it with the finished ones, for good.
-	rec := post(t, h, "/series/stop", url.Values{"name": {"Three-Body"}, "from": {"drawer"}})
+	// Keeping it files it with the finished ones, for good.
+	rec := post(t, h, "/series/keep", url.Values{"name": {"Three-Body"}, "from": {"drawer"}})
 	if rec.Code != 200 {
-		t.Fatalf("stop: status = %d, body = %s", rec.Code, rec.Body)
+		t.Fatalf("keep: status = %d, body = %s", rec.Code, rec.Body)
 	}
 	after := rec.Body.String()
 	if !strings.Contains(section(after, "Finished"), "Three-Body") {
-		t.Error("a stopped series is not filed with the finished ones")
+		t.Error("a kept series is not filed with the finished ones")
 	}
 	if strings.Contains(after, "Continues elsewhere") || strings.Contains(after, "row-follow") {
-		t.Error("a stopped series is still offered for continuing")
+		t.Error("a kept series is still offered for continuing elsewhere")
 	}
 	// And it can be taken back.
-	if !strings.Contains(section(after, "Finished"), `hx-post="/series/clear"`) {
-		t.Error("a stopped series has no way to be offered again")
+	fin := section(after, "Finished")
+	if !strings.Contains(fin, `hx-post="/series/clear"`) || !strings.Contains(fin, "Suggest others") {
+		t.Error("a kept series has no way to have the others suggested again")
 	}
 	rec = post(t, h, "/series/clear", url.Values{"name": {"Three-Body"}, "from": {"drawer"}})
 	if !strings.Contains(section(rec.Body.String(), "Continues elsewhere"), "Three-Body") {
-		t.Error("clearing the stop does not bring the offer back")
+		t.Error("clearing the keep does not bring the offer back")
 	}
 }

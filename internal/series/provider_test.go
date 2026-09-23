@@ -876,9 +876,10 @@ func continuable(t *testing.T) (*Engine, *catalogue, shelf) {
 	return twoProviders(t, hc, gm), hc, gm
 }
 
-func TestStoppingHereEndsTheOffer(t *testing.T) {
-	// The reader tracks the trilogy because the trilogy is what they meant to
-	// read. More books elsewhere are an offer they can turn down for good.
+func TestKeepingASeriesEndsTheOfferToContinueElsewhere(t *testing.T) {
+	// The reader tracks the trilogy's own ordering because that is the one
+	// they mean to follow. Another provider's longer ordering is an offer
+	// they can turn down for good.
 	e, hc, _ := continuable(t)
 	ctx := context.Background()
 	v, err := e.View(ctx)
@@ -889,8 +890,8 @@ func TestStoppingHereEndsTheOffer(t *testing.T) {
 		t.Fatal("no offer to turn down")
 	}
 
-	if _, err := e.Decide(ctx, "stop", "Three-Body", ""); err != nil {
-		t.Fatalf("stop: %v", err)
+	if _, err := e.Decide(ctx, "keep", "Three-Body", ""); err != nil {
+		t.Fatalf("keep: %v", err)
 	}
 	asked := len(hc.asked)
 	v, err = e.compute(ctx, 1<<20, 0, true)
@@ -898,7 +899,7 @@ func TestStoppingHereEndsTheOffer(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := groupNamed(t, v, "Three-Body")
-	if g.Decision != Stopped || g.ContinueOn != nil || !g.CaughtUp {
+	if g.Decision != Kept || g.ContinueOn != nil || !g.CaughtUp {
 		t.Errorf("Decision = %v, ContinueOn = %+v, CaughtUp = %v; want a finished row with no offer", g.Decision, g.ContinueOn, g.CaughtUp)
 	}
 	if g.Pending() {
@@ -909,13 +910,13 @@ func TestStoppingHereEndsTheOffer(t *testing.T) {
 	}
 }
 
-func TestClearingAStopOffersAgain(t *testing.T) {
+func TestClearingAKeepOffersAgain(t *testing.T) {
 	e, _, _ := continuable(t)
 	ctx := context.Background()
 	if _, err := e.View(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Decide(ctx, "stop", "Three-Body", ""); err != nil {
+	if _, err := e.Decide(ctx, "keep", "Three-Body", ""); err != nil {
 		t.Fatal(err)
 	}
 	uncached, err := e.Decide(ctx, "clear", "Three-Body", "")
@@ -923,7 +924,7 @@ func TestClearingAStopOffersAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !uncached {
-		t.Error("clearing a stop revives lookups the engine has been skipping, so the re-render needs a budget")
+		t.Error("clearing a keep revives lookups the engine has been skipping, so the re-render needs a budget")
 	}
 	v, err := e.View(ctx)
 	if err != nil {
@@ -934,14 +935,14 @@ func TestClearingAStopOffersAgain(t *testing.T) {
 	}
 }
 
-func TestAStopIsSpentWhenTheSeriesIsWantedAgain(t *testing.T) {
-	// Adding one of its books to the list says the reader wants more after
-	// all, the same signal that undoes a drop.
-	later := tbr("The Redemption of Time", "Three-Body", 4, day2)
+func TestAKeptSeriesStillCarriesOnByItself(t *testing.T) {
+	// Keeping to this ordering says nothing against its own next book: when
+	// one turns up on the shelf, it is offered, and the keep still stands.
+	later := tbr("Three-Body 4", "Three-Body", 4, day2)
 	later.Book.Series.Source = "grimmory"
 	e, _, _ := continuable(t)
 	e.now = func() time.Time { return day1 }
-	if _, err := e.Decide(context.Background(), "stop", "Three-Body", ""); err != nil {
+	if _, err := e.Decide(context.Background(), "keep", "Three-Body", ""); err != nil {
 		t.Fatal(err)
 	}
 	v := Compute(Input{
@@ -950,8 +951,12 @@ func TestAStopIsSpentWhenTheSeriesIsWantedAgain(t *testing.T) {
 		Statements:  mustStatements(t, e),
 		SourceOrder: e.SourceOrder,
 	})
-	if g := groupNamed(t, v, "Three-Body"); g.Decision == Stopped {
-		t.Error("a book of the series added after the stop should spend it")
+	g := groupNamed(t, v, "Three-Body")
+	if g.Decision != Kept {
+		t.Errorf("Decision = %v: a book of the kept series is no reason to drop the keep", g.Decision)
+	}
+	if g.NextTitle != "Three-Body 4" {
+		t.Errorf("Next = %q: the kept series should still carry on by itself", g.NextTitle)
 	}
 }
 

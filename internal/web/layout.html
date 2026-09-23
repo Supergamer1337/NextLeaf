@@ -365,6 +365,7 @@
       transition: color 0.15s ease, border-color 0.15s ease;
     }
     .spinning .wheel-ghost { display: flex; }
+    .spinning .wheel-ghost[hidden] { display: none; }
     /* backwards keeps the ghosts invisible through their delay, so the row
        is seen to lift first and the cards to come out from behind it. */
     .spinning .wheel-prev { animation: fan-up 0.2s cubic-bezier(0.2, 0.8, 0.3, 1.15) 0.07s backwards; }
@@ -578,13 +579,23 @@
       // item and which peeks show.
       function items(row) { return row.querySelectorAll(".wheel-item"); }
       function at(row) { return parseInt(row.dataset.wheelAt || "0", 10); }
+      // The candidates this wheel cycles through, as indexes into items().
+      // Opened from the arrow it answers "where does this continue?", so it
+      // holds only the ones that do; the switcher button shows them all.
+      function order(row) {
+        var idx = [];
+        items(row).forEach(function (el, k) {
+          if (row.dataset.wheelOnly !== "continues" || "continues" in el.dataset) { idx.push(k); }
+        });
+        return idx;
+      }
 
       function showAt(list, i) {
         list.forEach(function (el, k) { el.hidden = k !== i; });
       }
 
       function render(row, dir) {
-        var list = items(row), i = at(row), n = list.length;
+        var list = items(row), idx = order(row), n = idx.length, i = idx[at(row)];
         showAt(list, i);
         // The card wears the cover the row would have if the shown candidate
         // were picked, falling back to the row's own for a coverless one.
@@ -599,8 +610,12 @@
         // The wheel loops, so both directions always show where they lead:
         // with two candidates that is the same place, and the same card above
         // and below is the honest picture of a loop.
-        showAt(row.querySelector(".wheel-prev").querySelectorAll(".wheel-peek"), (i - 1 + n) % n);
-        showAt(row.querySelector(".wheel-next").querySelectorAll(".wheel-peek"), (i + 1) % n);
+        var k = at(row);
+        showAt(row.querySelector(".wheel-prev").querySelectorAll(".wheel-peek"), idx[(k - 1 + n) % n]);
+        showAt(row.querySelector(".wheel-next").querySelectorAll(".wheel-peek"), idx[(k + 1) % n]);
+        // A single candidate has nowhere to cycle to.
+        row.querySelector(".wheel-prev").hidden = n < 2;
+        row.querySelector(".wheel-next").hidden = n < 2;
         if (dir) {
           var item = list[i];
           item.classList.remove("roll-up", "roll-down");
@@ -610,7 +625,7 @@
       }
 
       function cycle(row, d) {
-        var n = items(row).length;
+        var n = order(row).length;
         row.dataset.wheelAt = String((at(row) + d + n) % n);
         render(row, d);
       }
@@ -619,8 +634,9 @@
       function spin(row, to) {
         if (openRow === row && !to) { closeWheel(); return; }
         closeWheel();
-        var start = 0;
-        items(row).forEach(function (el, k) { if (to && el.dataset.to === to) { start = k; } });
+        if (to) { row.dataset.wheelOnly = "continues"; } else { delete row.dataset.wheelOnly; }
+        var list = items(row), start = 0;
+        order(row).forEach(function (k, pos) { if (to && list[k].dataset.to === to) { start = pos; } });
         row.dataset.wheelAt = String(start);
         render(row);
         row.classList.add("spinning");
@@ -631,7 +647,7 @@
       }
 
       function confirmWheel(row) {
-        var c = items(row)[at(row)].dataset;
+        var c = items(row)[order(row)[at(row)]].dataset;
         if (!c.to) { closeWheel(); return; } // kept the current identity
         var form = row.querySelector(".wheel-form");
         form.querySelector("input[name=to]").value = c.to;
