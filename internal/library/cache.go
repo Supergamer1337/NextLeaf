@@ -2,6 +2,9 @@ package library
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -191,4 +194,78 @@ func (c *Cached) ToRead(ctx context.Context) ([]Entry, error) {
 	c.noteSuccess("toRead")
 	c.toRead, c.toReadAt, c.toReadOK = entries, c.now(), true
 	return entries, nil
+}
+
+// Refresher is an OPTIONAL Source capability: fetching everything afresh
+// ahead of need, so that reads are served without waiting on the backend.
+// changed reports whether the source said anything different.
+type Refresher interface {
+	Refresh(ctx context.Context) (changed bool, err error)
+}
+
+// Refresh refreshes every Refresher within s, seeing through Multi and other
+// wrappers.
+func Refresh(ctx context.Context, s Source) (changed bool, err error) {
+	switch v := s.(type) {
+	case Refresher:
+		return v.Refresh(ctx)
+	case *Multi:
+		var errs []error
+		for _, sub := range v.sources {
+			c, err := Refresh(ctx, sub)
+			changed = changed || c
+			errs = append(errs, err)
+		}
+		return changed, errors.Join(errs...)
+	case unwrapper:
+		return Refresh(ctx, v.Unwrap())
+	}
+	return false, nil
+}
+
+// Refresh fetches every query afresh and swaps the results in. Readers are not
+// made to wait on it: they are served what is held until the new data lands.
+// Only a query with nothing held yet is fetched under its lock, since its
+// readers would have to wait for it either way. A failed fetch keeps what is
+// held, marked stale, as a failed read does.
+func (c *Cached) Refresh(ctx context.Context) (bool, error) {
+	var changed [3]bool
+	err := errors.Join(
+		c.swapIn(ctx, "reading", &c.readingMu, &c.readingOK, &changed[0], c.src.CurrentlyReading,
+			func() []Entry { return c.reading },
+			func(e []Entry) { c.reading, c.readingAt = e, c.now() }),
+		c.swapIn(ctx, "reads", &c.readsMu, &c.readsOK, &changed[1],
+			func(ctx context.Context) ([]Entry, error) { return c.src.RecentReads(ctx, 0) },
+			func() []Entry { return c.reads },
+			func(e []Entry) { c.reads, c.readsLimit, c.readsAt = e, 0, c.now() }),
+		c.swapIn(ctx, "toRead", &c.toReadMu, &c.toReadOK, &changed[2], c.src.ToRead,
+			func() []Entry { return c.toRead },
+			func(e []Entry) { c.toRead, c.toReadAt = e, c.now() }),
+	)
+	return changed[0] || changed[1] || changed[2], err
+}
+
+func (c *Cached) swapIn(ctx context.Context, query string, mu *sync.Mutex, ok, changed *bool,
+	fetch func(context.Context) ([]Entry, error), held func() []Entry, keep func([]Entry)) error {
+	mu.Lock()
+	cold := !*ok
+	if !cold {
+		mu.Unlock()
+	}
+	entries, err := fetch(ctx)
+	if !cold {
+		mu.Lock()
+	}
+	defer mu.Unlock()
+	if err != nil {
+		if *ok {
+			c.noteFallback(query, err)
+		}
+		return fmt.Errorf("refreshing %s: %w", query, err)
+	}
+	c.noteSuccess(query)
+	*changed = !*ok || !reflect.DeepEqual(held(), entries)
+	keep(entries)
+	*ok = true
+	return nil
 }

@@ -3,6 +3,7 @@ package series
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1144,5 +1145,141 @@ func TestAnAnswerDueARecheckIsShownWhileItIsRechecked(t *testing.T) {
 	}
 	if g := groupNamed(t, v, "The Witcher"); g.NextTitle != "Sword of Destiny" || g.NextPending {
 		t.Errorf("Next = %q, pending %v; a failed re-check must leave the last answer standing", g.NextTitle, g.NextPending)
+	}
+}
+
+// refreshingShelf counts the passes that refreshed it ahead of need.
+type refreshingShelf struct {
+	shelf
+	refreshed *int32
+}
+
+func (r refreshingShelf) Refresh(context.Context) (bool, error) {
+	atomic.AddInt32(r.refreshed, 1)
+	return false, nil
+}
+
+func TestEachPassRefreshesTheLibraryFirst(t *testing.T) {
+	// A page load reads what the last pass fetched, so it is the pass, not the
+	// reader, that waits on the backend.
+	var refreshed int32
+	gm := refreshingShelf{shelf: shelf{name: "grimmory"}, refreshed: &refreshed}
+	e := NewEngine(openStore(t), library.Combine(&catalogue{name: "hardcover"}, gm), picker.Prefs{})
+	e.pace = 0
+	e.Warm(context.Background())
+	if atomic.LoadInt32(&refreshed) != 1 {
+		t.Errorf("refreshed %d times, want once per pass", refreshed)
+	}
+}
+
+func TestANudgeRightAfterAScheduledPassIsNotKeptWaiting(t *testing.T) {
+	// The gap between passes only stops renders nudging in a loop; the first
+	// nudge after a scheduled pass is answered at once.
+	e, _, _ := continuable(t)
+	e.pace, e.retryGap = 0, time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, changed := e.Changes()
+	go e.Run(ctx, time.Hour)
+	passEnd := func(within time.Duration) bool {
+		deadline := time.After(within)
+		for {
+			_, c := e.Changes()
+			select {
+			case <-c:
+			case <-time.After(150 * time.Millisecond):
+				return true // quiet: the pass is over
+			case <-deadline:
+				return false
+			}
+		}
+	}
+	<-changed
+	passEnd(5 * time.Second)
+
+	_, changed = e.Changes()
+	e.Nudge()
+	select {
+	case <-changed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a nudge right after a scheduled pass was kept waiting")
+	}
+	passEnd(5 * time.Second)
+
+	_, changed = e.Changes()
+	e.Nudge()
+	select {
+	case <-changed:
+		t.Error("a second nudge straight after the first was not spaced out")
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+// changingShelf is a library whose refreshes report a change while changes is
+// above zero, and which can hold a refresh until released.
+type changingShelf struct {
+	shelf
+	refreshed *int32
+	changes   *int32
+	hold      chan struct{}
+}
+
+func (c changingShelf) Refresh(context.Context) (bool, error) {
+	atomic.AddInt32(c.refreshed, 1)
+	if c.hold != nil {
+		<-c.hold
+	}
+	return atomic.AddInt32(c.changes, -1) >= 0, nil
+}
+
+func TestALibraryRefreshIsSharedAndCountsOnlyChanges(t *testing.T) {
+	var refreshed, changes int32 = 0, 1
+	gm := changingShelf{shelf: shelf{name: "grimmory"}, refreshed: &refreshed, changes: &changes, hold: make(chan struct{})}
+	e := NewEngine(openStore(t), library.Combine(&catalogue{name: "hardcover"}, gm), picker.Prefs{})
+
+	first, second := e.RefreshLibrary(), e.RefreshLibrary()
+	close(gm.hold)
+	<-first
+	<-second
+	if atomic.LoadInt32(&refreshed) != 1 {
+		t.Errorf("refreshed %d times, want two callers sharing one refresh", refreshed)
+	}
+	at, gen := e.Library()
+	if at.IsZero() || gen != 1 {
+		t.Errorf("Library = (%v, %d), want a refresh time and one change", at, gen)
+	}
+
+	<-e.RefreshLibrary() // says nothing new
+	if _, again := e.Library(); again != gen {
+		t.Errorf("generation moved to %d on a refresh that changed nothing", again)
+	}
+}
+
+func TestARowNotYetLookedUpByISBNSaysItIsStillChecking(t *testing.T) {
+	// A finished row learns where it might continue from an ISBN lookup. Until
+	// that has happened, "nothing left" is not yet the whole answer.
+	hc := &catalogue{byISBN: map[string][]library.Series{}}
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Death's End", "Three-Body", 3, "9780765377104")}}}
+	e := twoProviders(t, hc, gm)
+	ctx := context.Background()
+
+	v, err := e.viewWithin(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "Three-Body"); !g.Pending() {
+		t.Error("a row never looked up by ISBN reads as settled")
+	}
+
+	// Looked up, and nothing found: that is an answer.
+	if _, err := e.View(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if v, err = e.viewWithin(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "Three-Body"); g.Pending() {
+		t.Error("a row whose lookup found nothing still says it is checking")
 	}
 }

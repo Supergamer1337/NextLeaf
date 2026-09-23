@@ -53,6 +53,14 @@ type Engine struct {
 	gen     uint64
 	changed chan struct{}
 	nudge   chan struct{}
+
+	// The reader's library is refreshed ahead of need (see RefreshLibrary):
+	// libAt is when a refresh last finished, libGen counts the ones that
+	// changed something, and libDone is closed when the one in flight ends.
+	libMu   sync.Mutex
+	libAt   time.Time
+	libGen  uint64
+	libDone chan struct{}
 	// pace spaces the background pass's lookups; retryGap is the least time
 	// between passes (see Run). Fields so tests need not wait on them.
 	pace, retryGap time.Duration
@@ -145,16 +153,68 @@ func (e *Engine) Nudge() {
 	}
 }
 
+// RefreshLibrary fetches the reader's library afresh unless a refresh is
+// already in flight, and returns a channel closed when it is done. Readers are
+// served what is held meanwhile, so nothing waits on it unless it chooses to.
+// A refresh that changes the library wakes waiting drawers, and nudges the
+// background pass for any new questions it raises.
+func (e *Engine) RefreshLibrary() <-chan struct{} {
+	e.libMu.Lock()
+	defer e.libMu.Unlock()
+	if e.libDone != nil {
+		return e.libDone
+	}
+	done := make(chan struct{})
+	e.libDone = done
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		changed, err := library.Refresh(ctx, e.src)
+		if err != nil {
+			log.Printf("series: refreshing the library: %v", err)
+		}
+		e.libMu.Lock()
+		e.libAt = e.now()
+		if changed {
+			e.libGen++
+		}
+		e.libDone = nil
+		e.libMu.Unlock()
+		close(done)
+		if changed {
+			e.bump()
+			e.Nudge()
+		}
+	}()
+	return done
+}
+
+// Library reports when the library was last refreshed, and how many
+// refreshes have changed it.
+func (e *Engine) Library() (at time.Time, gen uint64) {
+	e.libMu.Lock()
+	defer e.libMu.Unlock()
+	return e.libAt, e.libGen
+}
+
+// LibraryRefreshing returns the channel of the refresh in flight, nil if none.
+func (e *Engine) LibraryRefreshing() <-chan struct{} {
+	e.libMu.Lock()
+	defer e.libMu.Unlock()
+	return e.libDone
+}
+
 // Nudged delivers a nudge not yet taken up; Run is what waits on it.
 func (e *Engine) Nudged() <-chan struct{} { return e.nudge }
 
-// Run keeps the lookup cache filled until ctx ends: a pass at once, then one
-// every interval, and sooner when nudged. Passes start at least retryGap
-// apart, since a failure is held that long and a sooner pass could not
-// answer anything new.
+// Run keeps the library and the lookup cache fresh until ctx ends, so page
+// loads read and never wait: a pass at once, then one every interval, and one
+// whenever a render nudges. Nudged passes run at once but at least retryGap
+// apart: a failure is held that long, so a sooner one could not answer
+// anything new, and renders would otherwise nudge in a loop.
 func (e *Engine) Run(ctx context.Context, every time.Duration) {
+	var lastNudged time.Time
 	for {
-		started := time.Now()
 		e.Warm(ctx)
 		select {
 		case <-ctx.Done():
@@ -164,8 +224,9 @@ func (e *Engine) Run(ctx context.Context, every time.Duration) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(time.Until(started.Add(e.retryGap))):
+			case <-time.After(time.Until(lastNudged.Add(e.retryGap))):
 			}
+			lastNudged = time.Now()
 		}
 	}
 }
@@ -394,6 +455,31 @@ func alternativeFor(g *Group, m library.Series) *Alternative {
 	return nil
 }
 
+// unasked reports whether any of the row's books could be looked up by ISBN
+// and never has been. A stale lookup does not count: its answer still shows.
+func (e *Engine) unasked(g *Group) bool {
+	if len(e.finders) == 0 {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, b := range g.books {
+		if len(b.isbns) == 0 {
+			continue
+		}
+		asked := false
+		for _, k := range b.plainKeys {
+			if _, ok := e.found[k]; ok {
+				asked = true
+			}
+		}
+		if !asked {
+			return true
+		}
+	}
+	return false
+}
+
 // discover looks up, by ISBN, the series a catalogue files a row's books
 // under. One lookup covers a row; answers, including empty ones, are kept for
 // a day, and it returns how many it spent. A request looks up only rows that
@@ -520,6 +606,7 @@ func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Dur
 		if g.Decision == Kept {
 			return
 		}
+		g.finding = !e.hasContinuation(g) && e.unasked(g)
 		e.check(ctx, g, &spent, budget, pause, stuck)
 		g.ContinueOn = e.offer(g)
 	})
@@ -591,21 +678,29 @@ func (e *Engine) fillTwins(v *View) {
 	}
 }
 
-// Warm walks every group and fills the lookup cache, paced so it cannot trip
-// the source's rate limit. Even the first pass is paced: run flat out against
-// Hardcover it tripped the limit within seconds.
+// Warm refreshes the library, then asks the catalogue whatever is new or due,
+// paced so it cannot trip the source's rate limit. Even the first pass is
+// paced: run flat out against Hardcover it tripped the limit within seconds.
 func (e *Engine) Warm(ctx context.Context) {
 	select { // this pass covers any nudge made before it
 	case <-e.nudge:
 	default:
 	}
+	select {
+	case <-e.RefreshLibrary():
+	case <-ctx.Done():
+		return
+	}
 	pass, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
+	before, _ := e.Changes()
 	// Generous rather than exact: the budget only has to outlast the rows.
 	if _, err := e.compute(pass, 1<<20, e.pace, true); err != nil {
 		log.Printf("series warm: %v", err)
 	}
-	log.Print("series next-book lookups refreshed")
+	if after, _ := e.Changes(); after != before {
+		log.Print("series lookups refreshed")
+	}
 	// Whatever is still outstanding now waits on a later pass, and a drawer
 	// waiting on this one should hear that it is over.
 	e.bump()

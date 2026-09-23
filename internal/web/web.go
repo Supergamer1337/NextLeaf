@@ -121,21 +121,28 @@ type Deps struct {
 	// answering anyway; zero means the default. Kept under common proxy
 	// timeouts.
 	Wait time.Duration
+	// LoadFresh is how old the library may be before a page load refreshes
+	// it behind the page; zero means the default.
+	LoadFresh time.Duration
 }
 
 // server holds the handler's dependencies.
 type server struct {
-	src    library.Source
-	engine *series.Engine
-	wait   time.Duration
+	src       library.Source
+	engine    *series.Engine
+	wait      time.Duration
+	loadFresh time.Duration
 }
 
 // NewHandler returns the application's HTTP handler. d.Source may be nil, in
 // which case the selector explains that no source is configured.
 func NewHandler(d Deps) http.Handler {
-	s := &server{src: d.Source, engine: d.Engine, wait: d.Wait}
+	s := &server{src: d.Source, engine: d.Engine, wait: d.Wait, loadFresh: d.LoadFresh}
 	if s.wait == 0 {
 		s.wait = 20 * time.Second
+	}
+	if s.loadFresh == 0 {
+		s.loadFresh = 30 * time.Second
 	}
 
 	mux := http.NewServeMux()
@@ -293,6 +300,9 @@ type viewData struct {
 	Gen uint64
 	// Settled marks the render in which a waiting drawer got its last answer.
 	Settled bool
+	// FollowUp is the library generation a page was painted from, when a
+	// refresh behind it may bring something newer.
+	FollowUp string
 }
 
 // panel is the series drawer: every tracked series, grouped by what applies
@@ -358,27 +368,78 @@ func handleShell(w http.ResponseWriter, _ *http.Request) {
 
 // handleView renders the card and drawer as one fragment. "another" flips
 // from the series continuation to a variety pick; "drawer" asks for the
-// drawer alone.
+// drawer alone, and "after" for the follow-up to a page painted from an old
+// library.
+//
+// A page load never waits on a backend. It paints from what is held and asks
+// the catalogue nothing; the background pass does that. If the library is
+// getting old, it is refreshed behind the page, and the page follows up for
+// the result, so a book just added to a list still shows at once.
 func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	if r.URL.Query().Has("drawer") {
-		s.refreshDrawer(ctx, w, r.URL.Query().Get("since"))
+	q := r.URL.Query()
+	switch {
+	case q.Has("drawer"):
+		s.refreshDrawer(ctx, w, q.Get("since"), q.Has("waiting"))
+		return
+	case q.Has("after"):
+		s.followUp(ctx, w, q.Get("after"))
 		return
 	}
-	renderView(w, s.viewOf(ctx, r.URL.Query().Has("another"), true), http.StatusOK)
+	reroll := q.Has("another")
+	var followUp string
+	if s.engine != nil {
+		at, gen := s.engine.Library()
+		if time.Since(at) > s.loadFresh {
+			s.engine.RefreshLibrary()
+			// With nothing held yet the render fetches for itself, so there is
+			// nothing newer to follow up with; and a follow-up would undo a
+			// reroll.
+			if !at.IsZero() && !reroll {
+				followUp = strconv.FormatUint(gen, 10)
+			}
+		}
+	}
+	data := s.viewOf(ctx, reroll, false)
+	data.FollowUp = followUp
+	renderView(w, data, http.StatusOK)
 }
 
-// refreshDrawer renders the drawer alone, for a drawer still waiting on
-// answers. Given the generation it last saw, it waits for the next answer to
-// land, up to s.wait, so the drawer hears of it at once without polling. It
-// asks nothing itself: the background pass does the fetching, and is nudged
-// if anything is still missing.
+// followUp answers a page painted from an old library: once the refresh behind
+// it is done, the whole view again if the library changed since generation
+// seen, and 204 — nothing to swap — if it did not.
+func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen string) {
+	after, err := strconv.ParseUint(seen, 10, 64)
+	if s.engine == nil || err != nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if done := s.engine.LibraryRefreshing(); done != nil {
+		select {
+		case <-done:
+		case <-time.After(s.wait):
+		case <-ctx.Done():
+			return
+		}
+	}
+	if _, gen := s.engine.Library(); gen <= after {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	renderView(w, s.viewOf(ctx, false, false), http.StatusOK)
+}
+
+// refreshDrawer renders the drawer alone, for an open page listening for
+// change. Given the generation it last saw, it waits for the next change, up
+// to s.wait, so the drawer hears of it at once without polling. It asks
+// nothing itself: the background pass does the fetching, and is nudged if
+// anything is still missing.
 //
 // The card is left alone on purpose: re-running the pick would deal the
 // reader a different book on every refresh. Any failure answers 204, so the
 // drawer on screen stays put.
-func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since string) {
+func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since string, waiting bool) {
 	if s.engine == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -404,10 +465,9 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since
 	data := viewData{Panel: group(view), Gen: gen}
 	if data.Panel.Pending {
 		s.engine.Nudge()
-	} else {
-		// Only a waiting drawer refreshes, so settled now means just settled.
-		data.Settled = true
 	}
+	// A drawer that was waiting and is not any more has just settled.
+	data.Settled = waiting && !data.Panel.Pending
 	var buf bytes.Buffer
 	if err := viewTmpl.ExecuteTemplate(&buf, "drawerRefresh", data); err != nil {
 		w.WriteHeader(http.StatusNoContent)
@@ -418,8 +478,8 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since
 }
 
 // viewOf builds the fragment's model. catalogue says whether this render may
-// spend fresh next-in-series lookups; the decision path passes false so
-// recording a park never waits on a slow backend.
+// spend fresh next-in-series lookups: only a decision that left its row with
+// nothing known does, so the result of the reader's click shows in one step.
 func (s *server) viewOf(ctx context.Context, reroll, catalogue bool) viewData {
 	data := viewData{Configured: s.src != nil}
 	if s.src == nil || s.engine == nil {

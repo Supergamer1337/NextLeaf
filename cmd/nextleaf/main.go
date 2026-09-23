@@ -20,9 +20,10 @@ import (
 	"nextleaf/internal/web"
 )
 
-// warmInterval is how often the next-in-series cache is refreshed in the
-// background, which is also what notices a newly published book on its own.
-const warmInterval = 24 * time.Hour
+// refreshInterval is how often the background pass refreshes the library and
+// asks the catalogue whatever is due, so page loads find it done. Most passes
+// ask nothing: answers are re-checked daily, or weekly for finished series.
+const refreshInterval = 15 * time.Minute
 
 func main() {
 	if err := config.LoadDotEnv(".env"); err != nil {
@@ -109,7 +110,7 @@ func startSeriesTracking(source library.Source, order []string) (*series.Engine,
 
 	engine := series.NewEngine(store, source, picker.Prefs{IncludeNovellas: includeNovellas()})
 	engine.SourceOrder = order
-	go engine.Run(context.Background(), warmInterval)
+	go engine.Run(context.Background(), refreshInterval)
 	return engine, store
 }
 

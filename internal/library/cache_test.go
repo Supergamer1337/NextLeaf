@@ -127,3 +127,86 @@ func TestCachedSingleFlight(t *testing.T) {
 		t.Errorf("RecentReads hit backend %d times under concurrency, want 1", got)
 	}
 }
+
+func TestARefreshDoesNotMakeReadersWait(t *testing.T) {
+	// Refreshing ahead of need is only worth it if a reader arriving mid-fetch
+	// is served what is held, rather than queued behind the fetch.
+	ctx := context.Background()
+	src := &fakeSource{}
+	c := NewCached(src, time.Hour)
+	if _, err := c.RecentReads(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	src.block = make(chan struct{})
+	done := make(chan error, 1)
+	go func() { _, err := c.Refresh(ctx); done <- err }()
+	for atomic.LoadInt64(&src.reads) < 2 { // the refresh is now inside the fetch
+		time.Sleep(time.Millisecond)
+	}
+
+	served := make(chan struct{})
+	go func() {
+		if _, err := c.RecentReads(ctx, 0); err != nil {
+			t.Error(err)
+		}
+		close(served)
+	}()
+	select {
+	case <-served:
+	case <-time.After(time.Second):
+		t.Fatal("a reader waited on the refresh")
+	}
+	close(src.block)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt64(&src.reads); got != 2 {
+		t.Errorf("reads fetched %d times, want the first fetch and the refresh only", got)
+	}
+}
+
+func TestAFailedRefreshKeepsWhatIsHeld(t *testing.T) {
+	ctx := context.Background()
+	src := &fakeSource{}
+	c := NewCached(src, time.Hour)
+	if _, err := c.RecentReads(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	src.readsErr = errors.New("down")
+	if _, err := c.Refresh(ctx); err == nil {
+		t.Error("a failed refresh said nothing")
+	}
+	got, err := c.RecentReads(ctx, 0)
+	if err != nil || len(got) != 1 {
+		t.Errorf("RecentReads = %v, %v; want what was held before the failed refresh", got, err)
+	}
+	if !c.Health().Stale {
+		t.Error("data kept past a failed refresh is not reported stale")
+	}
+}
+
+func TestRefreshReachesEverySourceInAMulti(t *testing.T) {
+	ctx := context.Background()
+	a, b := &fakeSource{}, &fakeSource{}
+	src := Combine(NewCached(a, time.Hour), NewCached(b, time.Hour))
+	if _, err := Refresh(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadInt64(&a.reads) != 1 || atomic.LoadInt64(&b.reads) != 1 {
+		t.Errorf("reads fetched %d and %d times, want each source refreshed once", a.reads, b.reads)
+	}
+}
+
+func TestARefreshSaysWhetherAnythingChanged(t *testing.T) {
+	// A page only needs redrawing when the library actually moved.
+	ctx := context.Background()
+	src := &fakeSource{}
+	c := NewCached(src, time.Hour)
+	if changed, err := c.Refresh(ctx); err != nil || !changed {
+		t.Errorf("first refresh: changed = %v, %v; want true, having held nothing", changed, err)
+	}
+	if changed, err := c.Refresh(ctx); err != nil || changed {
+		t.Errorf("second refresh: changed = %v, %v; want false, the source said the same", changed, err)
+	}
+}
