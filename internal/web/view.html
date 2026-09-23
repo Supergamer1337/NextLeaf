@@ -94,24 +94,42 @@
   {{/* Only these two pieces of the drawer travel. The overlay itself stays in
        the page, so a decision never disturbs the drawer the reader is standing
        in: no reopening, and the scroll position survives on its own. */}}
-  <a class="drawer-toggle" id="drawer-toggle" href="#series" hx-swap-oob="true"{{if not .Panel.Any}} hidden{{end}}>Series <span class="drawer-count">{{.Panel.Count}}</span></a>
-  <div class="drawer-body" id="drawer-body" hx-swap-oob="innerHTML">{{template "drawerPanel" .}}</div>
+  {{template "drawerToggle" .}}
+  {{template "drawerStatus" .}}
+  {{/* Morphed as a whole: a morph keeps the rows' nodes, so covers are not
+       reloaded and nothing unchanged moves. */}}
+  <div class="drawer-body" id="drawer-body" hx-swap-oob="morph">{{template "drawerPanel" .}}</div>
+{{end}}
+
+{{/* What a waiting drawer's refresh brings back: its rows, and the toggle and
+     status that travel beside them. */}}
+{{define "drawerRefresh"}}{{template "drawerToggle" .}}{{template "drawerStatus" .}}{{template "drawerPanel" .}}{{end}}
+
+{{define "drawerToggle"}}
+  <a class="drawer-toggle" id="drawer-toggle" href="#series" hx-swap-oob="true"{{if not .Panel.Any}} hidden{{end}}>Series <span class="drawer-count">{{.Panel.Count}}</span>{{template "pendingDot" .Panel.Pending}}</a>
+{{end}}
+
+{{/* The drawer's status, in its header so coming and going never moves the
+     rows. While answers are outstanding it asks for the next one to land and
+     re-renders the moment one does; each answer brings a fresh copy of this
+     element, whose load asks again. Not a live region: re-inserted on every
+     answer, it would be announced every time. */}}
+{{define "drawerStatus"}}
+  {{if .Panel.Pending}}
+  <span class="drawer-status" id="drawer-status" hx-swap-oob="true"
+        hx-get="/view?drawer=1&since={{.Gen}}" hx-trigger="load"
+        hx-target="#drawer-body" hx-swap="morph:innerHTML"
+        hx-indicator="this" hx-sync="this:drop">Checking {{.Panel.Checking}} series…</span>
+  {{else if .Settled}}
+  <span class="drawer-status is-done" id="drawer-status" hx-swap-oob="true">Up to date</span>
+  {{else}}
+  <span class="drawer-status is-idle" id="drawer-status" hx-swap-oob="true"></span>
+  {{end}}
 {{end}}
 
 {{/* The drawer's rows, on their own so the refresh can fetch them without
      touching the card. */}}
 {{define "drawerPanel"}}
-      {{if .Panel.Pending}}
-      {{/* Refetches the drawer until every answer is in. It brings its own
-           indicator and sync, since the page's would dim the card and cancel
-           the reader's requests, and holds off while a wheel is open, since a
-           swap closes it. Not a live region: it is re-inserted on every
-           refresh, and would be announced every time. */}}
-      <p class="drawer-status"
-         hx-get="/view?drawer=1" hx-trigger="every 20s [!document.querySelector('.drawer-row.spinning')]"
-         hx-target="#drawer-body" hx-swap="innerHTML"
-         hx-indicator="this" hx-sync="this:drop">Still checking a few series…</p>
-      {{end}}
       {{template "drawerGroup" dict "Label" "Reading next — pinned" "Items" .Panel.Pinned "Undo" "Unpin" "Flat" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Open" true "CanPick" true "CanPark" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now" "CanPick" true "CanDrop" true}}
@@ -120,9 +138,11 @@
       {{template "drawerGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
 {{end}}
 
-{{/* Marks a series, or a folded section holding one, whose answers are still
-     coming. The drawer's status line wears the same dot, as its legend. */}}
-{{define "pendingDot"}}<span class="pending-dot" role="img" aria-label="Still checking" title="Still checking"></span>{{end}}
+{{/* Marks a series, a folded section, or the closed drawer's toggle while
+     answers are still coming. Always rendered, and hidden when idle, so it
+     never rewraps a name by appearing. The status wears the same dot, as its
+     legend. */}}
+{{define "pendingDot"}}{{if .}}<span class="pending-dot" role="img" aria-label="Still checking" title="Still checking"></span>{{else}}<span class="pending-dot is-idle" aria-hidden="true"></span>{{end}}{{end}}
 
 {{define "cover"}}
   {{- if .Book.CoverURL -}}
@@ -143,7 +163,7 @@
 </div>
 {{else}}
 <details class="drawer-group" data-group="{{.Label}}"{{if .Open}} open{{end}}>
-  <summary class="drawer-label drawer-summary">{{.Label}} <span class="drawer-tally">{{len .Items}}</span>{{if anyPending .Items}}{{template "pendingDot"}}{{end}}</summary>
+  <summary class="drawer-label drawer-summary">{{.Label}} <span class="drawer-tally">{{len .Items}}</span>{{template "pendingDot" (anyPending .Items)}}</summary>
   {{template "drawerRows" .}}
 </details>
 {{end}}
@@ -165,17 +185,17 @@
       <div class="drawer-cell">
         <div class="row-body">
           <span class="row-head">
-            <span class="drawer-name">{{.Name}}</span>{{if .Pending}}{{template "pendingDot"}}{{end}}
+            <span class="drawer-name">{{.Name}}</span>{{template "pendingDot" .Pending}}
           </span>
           <span class="row-tags">
             {{if .Source}}<span class="row-badge switch-source">{{ucfirst .Source}}</span>{{end}}
             {{with .ContinueOn}}
-            {{/* The same series on a provider with a catalogue. An icon, not a
-                 sentence: the tooltip says where it leads, and taking it is an
-                 ordinary switch the wheel can undo. */}}
+            {{/* The same series on a provider with a catalogue. It opens the
+                 wheel on that series rather than switching: the reader sees
+                 what it holds, and what else there is, before choosing. */}}
             {{$hint := printf "Continue on %s" (ucfirst .Source)}}
             {{if ne .Name $tracked}}{{$hint = printf "%s as “%s”" $hint .Name}}{{end}}
-            <button class="row-follow" type="button" title="{{$hint}}" aria-label="{{$hint}}" hx-post="/series/switch" hx-vals="{{hxvals "name" $tracked "to" .Name "from" "drawer"}}" hx-disabled-elt="this">
+            <button class="row-follow" type="button" title="{{$hint}}" aria-label="{{$hint}}" data-to="{{.Name}}">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
             {{end}}
