@@ -3,11 +3,14 @@ package web
 import (
 	"context"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"nextleaf/internal/library"
+	"nextleaf/internal/picker"
+	"nextleaf/internal/series"
 )
 
 // namedStub is a stubSource under another name, so two can be combined.
@@ -99,11 +102,11 @@ func TestTheWheelNamesWhatEachIdentityHoldsNext(t *testing.T) {
 	h := ready(t, shelfAndCatalogue(), testStore(t))
 	body := getBody(t, h, "/view")
 
-	current := between(body, `data-to=""`, `</div>`)
+	current := between(body, `class="wheel-item" data-to=""`, `</div>`)
 	if !strings.Contains(current, "Nothing left to read") {
 		t.Errorf("the tracked identity does not say it has run out:\n%s", current)
 	}
-	alt := between(body, `data-to="Remembrance`, `</div>`)
+	alt := between(body, `class="wheel-item" data-to="Remembrance`, `</div>`)
 	if !strings.Contains(alt, "Next: The Redemption of Time") {
 		t.Errorf("the alternative does not say what it offers:\n%s", alt)
 	}
@@ -164,40 +167,51 @@ func waitingLibrary() library.Source {
 
 func TestTheDrawerSaysWhenAnswersAreStillComing(t *testing.T) {
 	// A row with no answer yet renders the same as one with nothing in it,
-	// unless it says otherwise. The drawer says so for the whole panel too,
-	// since the row may be inside a section the reader has collapsed.
-	h := ready(t, waitingLibrary(), testStore(t))
+	// unless it says otherwise.
+	st := testStore(t)
+	engine := series.NewEngine(st, waitingLibrary(), picker.Prefs{IncludeNovellas: true})
+	h := NewHandler(Deps{Source: waitingLibrary(), Engine: engine})
 	body := getBody(t, h, "/view")
 
 	if !strings.Contains(body, "Checking…") {
 		t.Error("a row waiting on a lookup renders silent, as though it held nothing")
 	}
-	if !strings.Contains(body, "drawer-status") {
-		t.Error("the drawer does not say that answers are still coming")
+	status := between(body, `id="drawer-status"`, `</span>`)
+	if !strings.Contains(status, "Checking") {
+		t.Errorf("the drawer does not say answers are still coming:\n%s", status)
 	}
-	// And it refreshes itself: the state changes on its own, so a reader who
-	// leaves the page open must not be left with a stale one.
-	if !strings.Contains(body, `hx-get="/view?drawer=1"`) {
-		t.Error("nothing refreshes the drawer while it is still filling in")
+	// It lives in the drawer's header, so appearing and going cannot push
+	// the rows about.
+	if strings.Contains(between(body, `id="drawer-body"`, `class="drawer-group`), "drawer-status") {
+		t.Error("the status sits in the list, where it shifts the rows when it comes and goes")
 	}
-	// But never under a reader spinning a wheel: a swap closes it.
-	if !strings.Contains(body, `every 20s [!document.querySelector('.drawer-row.spinning')]`) {
-		t.Error("the refresh fires even while a wheel is open, and would close it")
+	if !strings.Contains(between(body, `id="drawer-toggle"`, `</a>`), `class="pending-dot"`) {
+		t.Error("with the drawer closed, nothing says answers are still coming")
 	}
-	// Re-inserted every twenty seconds, a live region would be announced
-	// every twenty seconds.
-	if strings.Contains(between(body, `class="drawer-status"`, `>`), "role=") {
-		t.Error("the status line is a live region, re-announced on every refresh")
+	// It asks to be told of the next change rather than polling on a timer.
+	if !strings.Contains(status, `hx-trigger="load"`) || !strings.Contains(status, "/view?drawer=1&since=") {
+		t.Errorf("the drawer is not waiting on the next change:\n%s", status)
+	}
+	// Re-inserted on every refresh, a live region would be announced every
+	// time.
+	if strings.Contains(status, "role=") {
+		t.Error("the status is a live region, re-announced on every refresh")
+	}
+	// And the background pass is asked to come round for what is missing.
+	select {
+	case <-engine.Nudged():
+	default:
+		t.Error("a render with answers still to come did not nudge the background pass")
 	}
 
 	// The refresh only touches the drawer: re-rendering the card would deal
-	// the reader a different book every twenty seconds.
+	// the reader a different book every time.
 	drawer := getBody(t, h, "/view?drawer=1")
 	if strings.Contains(drawer, "Recommended") || strings.Contains(drawer, `id="deck"`) {
 		t.Error("the drawer refresh re-renders the recommendation card")
 	}
-	if !strings.Contains(drawer, "The Witcher") {
-		t.Error("the drawer refresh does not carry the rows")
+	if !strings.Contains(drawer, "The Witcher") || !strings.Contains(drawer, `id="drawer-status"`) {
+		t.Error("the drawer refresh does not carry the rows and their status")
 	}
 }
 
@@ -205,11 +219,64 @@ func TestASettledDrawerSaysNothingAndStopsRefreshing(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
 	body := getBody(t, h, "/view")
 
-	if strings.Contains(body, "Checking…") || strings.Contains(body, "drawer-status") || strings.Contains(body, "pending-dot") {
+	if strings.Contains(body, "Checking") || strings.Contains(body, `class="pending-dot"`) {
 		t.Error("the drawer claims to be still checking when every answer is in")
 	}
 	if strings.Contains(body, "drawer=1") {
-		t.Error("the drawer keeps polling after it has everything")
+		t.Error("the drawer keeps asking for changes after it has everything")
+	}
+	// Nothing had been outstanding, so there is nothing to announce as done.
+	if strings.Contains(body, "Up to date") {
+		t.Error("an ordinary render announces it is up to date")
+	}
+}
+
+func TestTheRefreshAnswersTheMomentThereIsSomethingNew(t *testing.T) {
+	st := testStore(t)
+	engine := series.NewEngine(st, waitingLibrary(), picker.Prefs{IncludeNovellas: true})
+	h := NewHandler(Deps{Source: waitingLibrary(), Engine: engine, Wait: 300 * time.Millisecond})
+	getBody(t, h, "/view")
+	gen, _ := engine.Changes()
+
+	// Nothing new since this generation: it waits, then answers anyway.
+	start := time.Now()
+	getBody(t, h, "/view?drawer=1&since="+strconv.FormatUint(gen, 10))
+	if waited := time.Since(start); waited < 250*time.Millisecond {
+		t.Errorf("answered after %v with nothing new to show", waited)
+	}
+
+	// Something landed after the generation the drawer last saw: at once.
+	start = time.Now()
+	getBody(t, h, "/view?drawer=1&since="+strconv.FormatUint(gen-1, 10))
+	if waited := time.Since(start); waited > 150*time.Millisecond {
+		t.Errorf("waited %v with a change already waiting", waited)
+	}
+}
+
+func TestADrawerThatSettlesSaysSoAtOnce(t *testing.T) {
+	// Only a drawer that was waiting refreshes, so a settled refresh is the
+	// moment it finished: that is when it says so.
+	h := ready(t, midSeries(), testStore(t))
+	drawer := getBody(t, h, "/view?drawer=1")
+	status := between(drawer, `id="drawer-status"`, `</span>`)
+	if !strings.Contains(status, "Up to date") {
+		t.Errorf("a drawer that has just settled does not say so:\n%s", status)
+	}
+	if strings.Contains(status, "hx-get") {
+		t.Error("a settled drawer keeps asking for changes")
+	}
+}
+
+func TestTheArrowOpensTheSwitcherRatherThanSwitching(t *testing.T) {
+	// The arrow suggests where to continue; the reader sees what that holds,
+	// and what else there is, before the row follows anything.
+	body := getBody(t, ready(t, shelfAndCatalogue(), testStore(t)), "/view")
+	arrow := between(body, `class="row-follow"`, `>`)
+	if strings.Contains(arrow, "hx-post") {
+		t.Errorf("the arrow switches without showing where it leads:\n%s", arrow)
+	}
+	if !strings.Contains(arrow, `data-to="Remembrance of Earth&#39;s Past"`) {
+		t.Errorf("the arrow does not say which series to open the switcher on:\n%s", arrow)
 	}
 }
 
@@ -254,7 +321,7 @@ func TestEachUnsettledSeriesIsMarked(t *testing.T) {
 	// the marker says its other series are still being checked.
 	body := getBody(t, ready(t, twoClaimsOneAnswered(), testStore(t)), "/view")
 	row := between(body, `<span class="drawer-name">The Lord of the Rings</span>`, `class="row-tags"`)
-	if !strings.Contains(row, "pending-dot") {
+	if !strings.Contains(row, `class="pending-dot"`) {
 		t.Errorf("a row with series still being checked is not marked:\n%s", row)
 	}
 	if !strings.Contains(body, "Next: The Two Towers") {
@@ -266,10 +333,10 @@ func TestACollapsedSectionSaysItHoldsAnUnsettledSeries(t *testing.T) {
 	// Finished starts folded, so a marker on the row alone would be hidden.
 	body := getBody(t, ready(t, finishedAndUnchecked(), testStore(t)), "/view")
 	summary := between(body, `data-group="Finished"`, `</summary>`)
-	if !strings.Contains(summary, "pending-dot") {
+	if !strings.Contains(summary, `class="pending-dot"`) {
 		t.Errorf("the folded Finished section does not say it holds a series still being checked:\n%s", summary)
 	}
-	if strings.Contains(between(body, `data-group="Current"`, `</summary>`), "pending-dot") {
+	if strings.Contains(between(body, `data-group="Current"`, `</summary>`), `class="pending-dot"`) {
 		t.Error("a section with nothing unsettled is marked")
 	}
 }

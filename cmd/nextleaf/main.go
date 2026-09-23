@@ -109,15 +109,7 @@ func startSeriesTracking(source library.Source, order []string) (*series.Engine,
 
 	engine := series.NewEngine(store, source, picker.Prefs{IncludeNovellas: includeNovellas()})
 	engine.SourceOrder = order
-	go func() {
-		for {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-			engine.Warm(ctx)
-			cancel()
-			log.Print("series next-book lookups refreshed")
-			time.Sleep(warmInterval)
-		}
-	}()
+	go engine.Run(context.Background(), warmInterval)
 	return engine, store
 }
 

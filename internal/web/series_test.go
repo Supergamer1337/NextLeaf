@@ -624,7 +624,7 @@ func TestADecisionReturnsTheRefreshedDrawer(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, `id="drawer-body" hx-swap-oob="innerHTML"`) {
+	if !strings.Contains(body, `id="drawer-body" hx-swap-oob="morph"`) {
 		t.Error("the response carries no drawer body to swap back into the page")
 	}
 	if !strings.Contains(body, "Parked") {

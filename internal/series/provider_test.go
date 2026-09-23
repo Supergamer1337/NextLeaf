@@ -964,6 +964,76 @@ func mustStatements(t *testing.T, e *Engine) []Statement {
 	return st
 }
 
+func TestTheViewSaysWhenItHasMovedOn(t *testing.T) {
+	// A drawer waiting on answers is told the moment one lands, rather than
+	// finding out on a timer.
+	e, _, _ := continuable(t)
+	ctx := context.Background()
+	gen, changed := e.Changes()
+
+	if _, err := e.View(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	default:
+		t.Fatal("answers landed, but nothing waiting on them was told")
+	}
+	if now, _ := e.Changes(); now <= gen {
+		t.Errorf("generation = %d, want it past %d", now, gen)
+	}
+
+	// Reading answers back changes nothing a render would show.
+	_, changed = e.Changes()
+	if _, err := e.View(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+		t.Error("a render served from the cache claimed the view had moved on")
+	default:
+	}
+}
+
+func TestANudgedEngineFetchesPromptlyAndTellsWhenDone(t *testing.T) {
+	// A render with answers still to come nudges the background pass, which
+	// fetches them and says so, without waiting for the next daily run.
+	e, hc, _ := continuable(t)
+	e.pace, e.retryGap = 0, 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, changed := e.Changes()
+	go e.Run(ctx, 24*time.Hour)
+	select {
+	case <-changed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first pass never ran")
+	}
+	for { // let the first pass finish
+		_, c := e.Changes()
+		select {
+		case <-c:
+			continue
+		case <-time.After(200 * time.Millisecond):
+		}
+		break
+	}
+
+	before := len(hc.asked)
+	e.Nudge()
+	e.Nudge() // nudges coalesce
+	_, changed = e.Changes()
+	select {
+	case <-changed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a nudge did not bring a pass round")
+	}
+	if len(hc.asked) != before {
+		t.Errorf("the nudged pass asked %d questions it already had answers to", len(hc.asked)-before)
+	}
+}
+
 func TestAMergedRowIsNamedTheSameWhicheverBookWasReadLast(t *testing.T) {
 	// Both providers file these books under "The Saga", and a book they share
 	// sits at the same slot in both, so the rows are one. Which name it wears

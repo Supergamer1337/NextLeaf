@@ -11,6 +11,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -116,18 +117,26 @@ var viewTmpl = template.Must(
 type Deps struct {
 	Source library.Source // reading-data source; nil when unconfigured
 	Engine *series.Engine
+	// Wait is how long a drawer refresh waits for something new before
+	// answering anyway; zero means the default. Kept under common proxy
+	// timeouts.
+	Wait time.Duration
 }
 
 // server holds the handler's dependencies.
 type server struct {
 	src    library.Source
 	engine *series.Engine
+	wait   time.Duration
 }
 
 // NewHandler returns the application's HTTP handler. d.Source may be nil, in
 // which case the selector explains that no source is configured.
 func NewHandler(d Deps) http.Handler {
-	s := &server{src: d.Source, engine: d.Engine}
+	s := &server{src: d.Source, engine: d.Engine, wait: d.Wait}
+	if s.wait == 0 {
+		s.wait = 20 * time.Second
+	}
 
 	mux := http.NewServeMux()
 	// {$} matches "/" exactly, so unknown paths fall through to 404 instead of
@@ -279,6 +288,11 @@ type viewData struct {
 	// a series is a park, so the decision is recorded rather than given away.
 	Continuation bool
 	Panel        panel
+	// Gen is the engine's generation when the drawer was rendered, so a
+	// waiting drawer can ask for whatever lands after it.
+	Gen uint64
+	// Settled marks the render in which a waiting drawer got its last answer.
+	Settled bool
 }
 
 // panel is the series drawer: every tracked series, grouped by what applies
@@ -293,9 +307,10 @@ type panel struct {
 	// Continuable holds series finished on their own provider that another
 	// carries on past, counted apart from the ones that are done.
 	Continuable []series.Group
-	// Pending is true while any answer is still to come. The drawer says so
-	// once, since the row it applies to may sit in a collapsed section.
-	Pending bool
+	// Pending is true while any answer is still to come; Checking counts the
+	// series waiting on one.
+	Pending  bool
+	Checking int
 }
 
 // Count is how many series the drawer holds, for the toggle's label.
@@ -328,6 +343,7 @@ func group(v series.View) panel {
 		}
 		if g.Pending() {
 			p.Pending = true
+			p.Checking++
 		}
 	}
 	return p
@@ -347,27 +363,53 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	if r.URL.Query().Has("drawer") {
-		s.refreshDrawer(ctx, w)
+		s.refreshDrawer(ctx, w, r.URL.Query().Get("since"))
 		return
 	}
 	renderView(w, s.viewOf(ctx, r.URL.Query().Has("another"), true), http.StatusOK)
 }
 
-// refreshDrawer renders the drawer alone. The card is left alone on purpose:
-// re-running the pick would deal the reader a different book on every refresh.
-// Any failure answers 204, so the drawer on screen stays put.
-func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter) {
+// refreshDrawer renders the drawer alone, for a drawer still waiting on
+// answers. Given the generation it last saw, it waits for the next answer to
+// land, up to s.wait, so the drawer hears of it at once without polling. It
+// asks nothing itself: the background pass does the fetching, and is nudged
+// if anything is still missing.
+//
+// The card is left alone on purpose: re-running the pick would deal the
+// reader a different book on every refresh. Any failure answers 204, so the
+// drawer on screen stays put.
+func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since string) {
 	if s.engine == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	view, err := s.engine.View(ctx)
+	if seen, err := strconv.ParseUint(since, 10, 64); err == nil {
+		if gen, changed := s.engine.Changes(); gen <= seen {
+			select {
+			case <-changed:
+			case <-time.After(s.wait):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+	// Read before rendering: an answer landing mid-render sends the drawer
+	// straight back for it.
+	gen, _ := s.engine.Changes()
+	view, err := s.engine.ViewCached(ctx)
 	if err != nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	data := viewData{Panel: group(view), Gen: gen}
+	if data.Panel.Pending {
+		s.engine.Nudge()
+	} else {
+		// Only a waiting drawer refreshes, so settled now means just settled.
+		data.Settled = true
+	}
 	var buf bytes.Buffer
-	if err := viewTmpl.ExecuteTemplate(&buf, "drawerPanel", viewData{Panel: group(view)}); err != nil {
+	if err := viewTmpl.ExecuteTemplate(&buf, "drawerRefresh", data); err != nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -389,6 +431,7 @@ func (s *server) viewOf(ctx context.Context, reroll, catalogue bool) viewData {
 		view series.View
 		err  error
 	)
+	data.Gen, _ = s.engine.Changes()
 	if catalogue {
 		rec, view, err = s.engine.Recommend(ctx, reroll)
 	} else {
@@ -401,6 +444,9 @@ func (s *server) viewOf(ctx context.Context, reroll, catalogue bool) viewData {
 		data.Decidable, data.Decide = rec.Decidable, rec.Group
 		data.Continuation = rec.Continuation
 		data.Panel = group(view)
+		if data.Panel.Pending {
+			s.engine.Nudge()
+		}
 	}
 	for _, h := range library.HealthOf(s.src) {
 		if h.Stale {

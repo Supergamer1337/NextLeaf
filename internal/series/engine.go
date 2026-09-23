@@ -45,6 +45,14 @@ type Engine struct {
 	finders []library.SeriesFinder
 	mu      sync.Mutex
 	found   map[string]foundClaims
+
+	// gen counts answers landed; changed is closed when the next one does.
+	gen     uint64
+	changed chan struct{}
+	nudge   chan struct{}
+	// pace spaces the background pass's lookups; retryGap is the least time
+	// between passes (see Run). Fields so tests need not wait on them.
+	pace, retryGap time.Duration
 }
 
 type foundClaims struct {
@@ -55,7 +63,11 @@ type foundClaims struct {
 // NewEngine wires the engine to its collaborators. src's optional
 // SeriesResolver capability, when present, powers new-release lookups.
 func NewEngine(store *Store, src library.Source, prefs picker.Prefs) *Engine {
-	e := &Engine{src: src, store: store, prefs: prefs, now: time.Now, found: map[string]foundClaims{}}
+	e := &Engine{
+		src: src, store: store, prefs: prefs, now: time.Now, found: map[string]foundClaims{},
+		changed: make(chan struct{}), nudge: make(chan struct{}, 1),
+		pace: warmPause, retryGap: failureTTL,
+	}
 	e.finders = library.AsSeriesFinders(src)
 	if resolver, ok := library.AsSeriesResolver(src); ok {
 		e.lookahead = NewLookahead(resolver, lookaheadTTL)
@@ -67,6 +79,60 @@ func NewEngine(store *Store, src library.Source, prefs picker.Prefs) *Engine {
 // answers, spending at most maxRequestLookups fresh queries.
 func (e *Engine) View(ctx context.Context) (View, error) {
 	return e.viewWithin(ctx, maxRequestLookups)
+}
+
+// ViewCached is the view from answers already held, asking nothing new. It
+// is what a drawer refresh shows: the background pass does the fetching.
+func (e *Engine) ViewCached(ctx context.Context) (View, error) { return e.viewWithin(ctx, 0) }
+
+// Changes returns how many answers have landed, and a channel closed when the
+// next one does: the moment a render would show something new.
+func (e *Engine) Changes() (uint64, <-chan struct{}) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.gen, e.changed
+}
+
+func (e *Engine) bump() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.gen++
+	close(e.changed)
+	e.changed = make(chan struct{})
+}
+
+// Nudge asks the background pass to come round now: a render has answers
+// still to come. Nudges made before a pass starts are covered by it.
+func (e *Engine) Nudge() {
+	select {
+	case e.nudge <- struct{}{}:
+	default:
+	}
+}
+
+// Nudged delivers a nudge not yet taken up; Run is what waits on it.
+func (e *Engine) Nudged() <-chan struct{} { return e.nudge }
+
+// Run keeps the lookup cache filled until ctx ends: a pass at once, then one
+// every interval, and sooner when nudged. Passes start at least retryGap
+// apart, since a failure is held that long and a sooner pass could not
+// answer anything new.
+func (e *Engine) Run(ctx context.Context, every time.Duration) {
+	for {
+		started := time.Now()
+		e.Warm(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(every):
+		case <-e.nudge:
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Until(started.Add(e.retryGap))):
+			}
+		}
+	}
 }
 
 // viewWithin is View with the lookup budget named. A budget of zero still uses
@@ -262,6 +328,7 @@ func (e *Engine) lookup(ctx context.Context, q library.SeriesQuery, spent *int, 
 		}
 		// Charged even if it fails: a failure costs a round trip too.
 		*spent++
+		defer e.bump()
 	}
 	entry, found, err = e.lookahead.Next(ctx, q)
 	return entry, found, true, err
@@ -358,6 +425,7 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 			}
 		}
 		e.mu.Unlock()
+		e.bump()
 	}
 	return spent
 }
@@ -468,13 +536,23 @@ func (e *Engine) fillTwins(v *View) {
 }
 
 // Warm walks every group and fills the lookup cache, paced so it cannot trip
-// the source's rate limit. Run at startup and daily. Even the first pass is
-// paced: run flat out against Hardcover it tripped the limit within seconds.
+// the source's rate limit. Even the first pass is paced: run flat out against
+// Hardcover it tripped the limit within seconds.
 func (e *Engine) Warm(ctx context.Context) {
+	select { // this pass covers any nudge made before it
+	case <-e.nudge:
+	default:
+	}
+	pass, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
 	// Generous rather than exact: the budget only has to outlast the rows.
-	if _, err := e.compute(ctx, 1<<20, warmPause, true); err != nil {
+	if _, err := e.compute(pass, 1<<20, e.pace, true); err != nil {
 		log.Printf("series warm: %v", err)
 	}
+	log.Print("series next-book lookups refreshed")
+	// Whatever is still outstanding now waits on a later pass, and a drawer
+	// waiting on this one should hear that it is over.
+	e.bump()
 }
 
 // Recommendation is the engine's pick together with the group a decision on

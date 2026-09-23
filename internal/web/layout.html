@@ -165,6 +165,8 @@
       box-shadow: 0 10px 24px -18px var(--shadow-c);
     }
     .drawer-toggle:hover { border-color: var(--moss); color: var(--moss); }
+    /* A badge on the corner, so the button never changes width. */
+    .drawer-toggle .pending-dot { position: absolute; top: -0.1rem; right: -0.1rem; margin: 0; }
     /* display:inline-flex above would otherwise defeat the hidden attribute. */
     .drawer-toggle[hidden] { display: none; }
     .drawer-count {
@@ -203,6 +205,7 @@
       gap: 1rem; padding: 1.3rem 1.4rem 0.9rem; border-bottom: 1px solid var(--line);
     }
     .drawer-title { margin: 0; font-family: var(--serif); font-size: 1.15rem; font-weight: 600; }
+    .drawer-close { margin-left: auto; }
     .drawer-close { color: var(--muted); text-decoration: none; font-size: 1.4rem; line-height: 1; }
     .drawer-close:hover { color: var(--moss); }
     .drawer-body { overflow-y: auto; padding: 1rem 1.4rem 2rem; }
@@ -245,18 +248,30 @@
     .drawer-group--flat > .drawer-label { display: block; padding: 0.15rem 0; }
     .drawer-next, .drawer-pos { display: block; color: var(--muted); font-size: 0.75rem; margin-top: 0.1rem; }
     /* Answers still coming in. It pulses so the drawer reads as working
-       rather than stuck; reduced motion keeps it still (see below). */
+       rather than stuck; reduced motion keeps it still (see below). It sits
+       in the header, beside the title, so it never moves the rows. */
     .drawer-status {
-      display: inline-flex; align-items: center; gap: 0.5rem;
-      margin: 0 0 0.7rem; padding: 0.3rem 0.75rem 0.3rem 0.6rem;
-      font-size: 0.75rem; color: var(--moss); background: var(--tint); border-radius: 999px;
+      display: inline-flex; align-items: center; gap: 0.5rem; align-self: center;
+      padding: 0.25rem 0.7rem 0.25rem 0.55rem;
+      font-size: 0.72rem; color: var(--moss); background: var(--tint); border-radius: 999px;
     }
+    .drawer-status.is-idle { visibility: hidden; }
     .drawer-status::before, .pending-dot {
       content: ""; width: 0.45rem; height: 0.45rem; border-radius: 50%;
       background: var(--moss); flex: none;
       animation: pending-pulse 1.4s ease-in-out infinite;
     }
+    /* Done: a tick in the dot's place, held long enough to read, then gone.
+       A fade is not motion, so reduced motion keeps it. */
+    .drawer-status.is-done { animation: status-done 3.5s ease forwards; }
+    .drawer-status.is-done::before {
+      content: "✓"; width: auto; height: auto; background: none; animation: none;
+      font-weight: 700; line-height: 1;
+    }
+    @keyframes status-done { 0%, 70% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
+    /* Idle dots keep their space, so one appearing never rewraps a name. */
     .pending-dot { display: inline-block; margin-left: 0.45rem; vertical-align: middle; }
+    .pending-dot.is-idle { visibility: hidden; animation: none; }
     .is-checking { animation: pending-fade 1.4s ease-in-out infinite; }
     @keyframes pending-pulse {
       0%   { transform: scale(0.8); opacity: 0.55; box-shadow: 0 0 0 0 var(--moss); }
@@ -501,6 +516,7 @@
   <aside class="drawer" id="series" aria-label="Series you're tracking">
     <div class="drawer-head">
       <h2 class="drawer-title">Series</h2>
+      <span class="drawer-status is-idle" id="drawer-status"></span>
       <a class="drawer-close" href="#" aria-label="Close">&times;</a>
     </div>
     <div class="drawer-dim"></div>
@@ -532,12 +548,28 @@
 
       function closeDrawer() { location.hash = ""; }
 
+      // A drawer refresh landing under an open wheel would close it, so it is
+      // held until the wheel closes, then fetched afresh.
+      var heldRefresh = false;
+      function isDrawerRefresh(e) {
+        var p = e.detail.pathInfo, c = e.detail.requestConfig;
+        var path = (p && p.requestPath) || (c && c.path) || "";
+        return path.indexOf("drawer=1") >= 0;
+      }
+      function refreshDrawer() {
+        htmx.ajax("GET", "/view?drawer=1", { target: "#drawer-body", swap: "morph:innerHTML" });
+      }
+
       function closeWheel() {
         if (!openRow) { return; }
         openRow.classList.remove("spinning");
         var d = drawer();
         if (d) { d.classList.remove("dimmed"); }
         openRow = null;
+        if (heldRefresh) {
+          heldRefresh = false;
+          refreshDrawer();
+        }
       }
 
       // Wheel state lives on the row, not in a closure, so these handlers keep
@@ -583,10 +615,13 @@
         render(row, d);
       }
 
-      function spin(row) {
-        if (openRow === row) { closeWheel(); return; }
+      // to opens the wheel on that candidate rather than the current one.
+      function spin(row, to) {
+        if (openRow === row && !to) { closeWheel(); return; }
         closeWheel();
-        row.dataset.wheelAt = "0";
+        var start = 0;
+        items(row).forEach(function (el, k) { if (to && el.dataset.to === to) { start = k; } });
+        row.dataset.wheelAt = String(start);
         render(row);
         row.classList.add("spinning");
         var d = drawer();
@@ -612,6 +647,8 @@
         var hit = function (sel) { return e.target.closest(sel); };
         if (hit(".drawer-scrim")) { closeDrawer(); return; }
         if (hit(".drawer-dim")) { closeWheel(); return; }
+        var follow = hit(".row-follow");
+        if (follow) { spin(follow.closest(".drawer-row"), follow.dataset.to); return; }
         var btn = hit(".switcher-btn");
         if (btn) { spin(btn.closest(".drawer-row")); return; }
         var ghost = hit(".wheel-ghost");
@@ -661,7 +698,21 @@
       // the notice slot. Anything that fails without saying where it belongs —
       // a proxy's 502 page, say — would otherwise be morphed over the card.
       document.body.addEventListener("htmx:beforeSwap", function (e) {
+        if (!isDrawerRefresh(e)) { return; }
         var xhr = e.detail.xhr;
+        if ((xhr && xhr.status >= 400) || openRow) { e.detail.shouldSwap = false; }
+        if (openRow) { heldRefresh = true; }
+      });
+      // A refresh that failed — a restart, a proxy's timeout — must not leave
+      // the drawer waiting for good, and is nothing the reader needs told.
+      document.body.addEventListener("htmx:afterRequest", function (e) {
+        if (!isDrawerRefresh(e)) { return; }
+        if (!e.detail.successful || e.detail.xhr.status === 204) { setTimeout(refreshDrawer, 5000); }
+      });
+
+      document.body.addEventListener("htmx:beforeSwap", function (e) {
+        var xhr = e.detail.xhr;
+        if (isDrawerRefresh(e)) { return; }
         if (!xhr || xhr.status < 400 || xhr.getResponseHeader("HX-Retarget")) { return; }
         e.detail.shouldSwap = false;
         var slot = document.getElementById("flash");
@@ -728,7 +779,10 @@
         syncDrawer();
         app.setAttribute("aria-busy", "false");
       });
-      document.body.addEventListener("htmx:beforeRequest", function () {
+      document.body.addEventListener("htmx:beforeRequest", function (e) {
+        // A drawer refresh waits on the server for its answer; the card is not
+        // what is loading, and must not read as busy all the while.
+        if (isDrawerRefresh(e)) { return; }
         app.classList.remove("failed");
         app.setAttribute("aria-busy", "true");
       });
