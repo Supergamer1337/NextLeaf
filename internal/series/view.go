@@ -59,6 +59,7 @@ type Group struct {
 	readKeys    map[string]bool
 	readingKeys map[string]bool
 	memberships []library.Series
+	claims      []library.Series // each book's primary claim, for naming the row
 	books       []*book
 	pinnedBook  string
 	pinMadeAt   time.Time
@@ -215,7 +216,7 @@ func Compute(in Input) View {
 		}
 	}
 
-	groups := buildGroups(books, in.Statements)
+	groups := buildGroups(books, in.Statements, sourceRank(in.SourceOrder))
 	applyStatements(groups, books, in.Statements, finished)
 
 	out := make([]Group, 0, len(groups))
@@ -336,14 +337,7 @@ func mergeBooks(in Input, ix *library.KeyIndex) []*book {
 		add(e, "toread")
 	}
 
-	rank := func(source string) int {
-		for i, name := range in.SourceOrder {
-			if name == source {
-				return i
-			}
-		}
-		return len(in.SourceOrder)
-	}
+	rank := sourceRank(in.SourceOrder)
 	for _, b := range order {
 		// Stable, so each source's own ranking of its claims is kept. A claim
 		// the reader's shelf never made goes last: it is an offer, and must not
@@ -360,6 +354,18 @@ func mergeBooks(in Input, ix *library.KeyIndex) []*book {
 		})
 	}
 	return order
+}
+
+// sourceRank orders sources as configured, unknown ones last.
+func sourceRank(order []string) func(string) int {
+	return func(source string) int {
+		for i, name := range order {
+			if name == source {
+				return i
+			}
+		}
+		return len(order)
+	}
 }
 
 func contains(list []string, s string) bool {
@@ -394,7 +400,7 @@ func groupKey(m library.Series) string { return m.Source + "\x00" + key(m.Name) 
 // buildGroups assigns each read or in-progress book to the group of its
 // primary series claim, honouring prefer statements, and unions groups the
 // reader has said are the same.
-func buildGroups(books []*book, statements []Statement) map[string]*Group {
+func buildGroups(books []*book, statements []Statement, rank func(string) int) map[string]*Group {
 	// The latest prefer statement covering a book decides its primary claim.
 	prefer := map[string]library.Series{} // book key -> preferred membership
 	uf := newUnionFind()
@@ -476,6 +482,7 @@ func buildGroups(books []*book, statements []Statement) map[string]*Group {
 			}
 		}
 		g := ensure(prim)
+		g.claims = append(g.claims, prim)
 		g.books = append(g.books, b)
 		g.BookKeys = append(g.BookKeys, b.key)
 		g.memberships = appendMemberships(g.memberships, b.memberships)
@@ -490,6 +497,14 @@ func buildGroups(books []*book, statements []Statement) map[string]*Group {
 			g.Reading = true
 			g.readingKeys[b.key] = true
 		}
+	}
+
+	// A class is named by rule, never by which of its books was processed
+	// first: that follows fetch order, and would rename a row as the reader
+	// finishes books and claims arrive.
+	for _, g := range groups {
+		m := displayClaim(g.claims, rank)
+		g.Name, g.Source, g.Slug, g.Completed = m.Name, m.Source, m.Slug, m.Completed
 	}
 
 	// The latest prefer naming a class decides how it is displayed.
@@ -508,6 +523,36 @@ func buildGroups(books []*book, statements []Statement) map[string]*Group {
 		}
 	}
 	return groups
+}
+
+// displayClaim picks the name a class wears from its books' own claims: one
+// the reader's shelf made over one found by ISBN, then the source ranked
+// first, then the claim most of its books share, then by name.
+func displayClaim(claims []library.Series, rank func(string) int) library.Series {
+	count := map[string]int{}
+	for _, m := range claims {
+		count[groupKey(m)]++
+	}
+	best := claims[0]
+	for _, m := range claims[1:] {
+		switch {
+		case m.Inferred != best.Inferred:
+			if !m.Inferred {
+				best = m
+			}
+		case rank(m.Source) != rank(best.Source):
+			if rank(m.Source) < rank(best.Source) {
+				best = m
+			}
+		case count[groupKey(m)] != count[groupKey(best)]:
+			if count[groupKey(m)] > count[groupKey(best)] {
+				best = m
+			}
+		case key(m.Name) < key(best.Name):
+			best = m
+		}
+	}
+	return best
 }
 
 func appendMemberships(have, more []library.Series) []library.Series {
