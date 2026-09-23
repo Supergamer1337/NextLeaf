@@ -36,9 +36,8 @@ type Group struct {
 	NextFromShelf bool
 	// CaughtUp is set by the engine when a lookup says nothing is left.
 	CaughtUp bool
-	// NextPending marks a row whose own next book could be looked up but has
-	// not been yet. Rendering it silent would make a row that is still being
-	// worked out look like one with nothing in it.
+	// NextPending marks a row whose next book is still to be looked up, so it
+	// does not read as a row with nothing in it.
 	NextPending bool
 	// ContinueOn is set by the engine on a row whose shelf has run out and
 	// whose provider has no catalogue to ask: the same series on a provider
@@ -79,43 +78,30 @@ type Alternative struct {
 	// identity: the cover of the furthest book read in that ordering.
 	CoverURL string
 
-	// NextTitle and NextPosition are what this identity's provider offers
-	// after the reader's place in it, so switching is chosen with both
-	// destinations in view. Only meaningful once Checked.
+	// NextTitle and NextPosition are what this identity's provider holds past
+	// the reader's place in it, once Checked.
 	NextTitle    string
 	NextPosition *float64
-	// Checked marks that the provider has answered for this identity. An
-	// unchecked one says nothing rather than reading as a dead end.
-	Checked bool
-	// Pending marks an identity whose provider could answer for it but has
-	// not yet — the render ran out of lookups, or the warm pass has not come
-	// round. One nobody can ask is neither checked nor pending: no answer is
-	// coming, and the reader should not be told to wait for one.
+	Checked      bool
+	// Pending marks an answer still to come. An identity nobody can ask is
+	// neither checked nor pending, and says nothing.
 	Pending bool
 }
 
-// NextLabel says what this identity holds after the reader's place in it:
-// the book, that there is nothing more, or that the answer is still coming.
-// Empty when no answer is coming at all — an unasked identity must not read
-// as finished, and must not leave the reader waiting either.
+// NextLabel says what this identity holds past the reader's place in it.
 func (a Alternative) NextLabel() string {
 	return nextLabel(a.Checked, a.Pending, a.NextTitle, a.NextPosition)
 }
 
-// NextLabel says what the row offers next, in the same words the wheel uses
-// for the identities it could be switched to.
+// NextLabel says what the row offers next, in the wheel's words.
 func (g Group) NextLabel() string {
 	return nextLabel(g.CaughtUp || g.NextTitle != "", g.NextPending, g.NextTitle, g.NextPosition)
 }
 
-// waiting is what a row or identity says while its answer is still coming. It
-// is not "nothing left": the difference is the whole point of saying it.
-const waiting = "Checking…"
-
 func nextLabel(checked, pending bool, title string, pos *float64) string {
 	switch {
 	case !checked && pending:
-		return waiting
+		return "Checking…"
 	case !checked:
 		return ""
 	case title == "":
@@ -624,10 +610,8 @@ func inGroup(b *book, g *Group) bool {
 	return false
 }
 
-// slotIn returns a book's slot in the given series identity. exact says the
-// identity placed the book itself; otherwise the slot is borrowed from the
-// book's primary claim, since two orderings number the same book differently
-// and an approximate slot beats none.
+// slotIn returns a book's slot in the given series identity. exact is false
+// when the slot is borrowed from the book's primary claim instead.
 func slotIn(b *book, source, name string) (pos float64, exact, placed bool) {
 	for _, m := range b.memberships {
 		if m.Source == source && key(m.Name) == key(name) {
@@ -643,52 +627,43 @@ func slotIn(b *book, source, name string) (pos float64, exact, placed bool) {
 	return 0, false, false
 }
 
-// posIn is slotIn's slot alone, for the places where any slot will do.
+// posIn is slotIn for callers where a borrowed slot will do.
 func posIn(b *book, source, name string) (float64, bool) {
 	pos, _, placed := slotIn(b, source, name)
 	return pos, placed
 }
 
-// furthestBookIn finds how far the group's read and in-progress books reach in
-// the named ordering, and which book stands there — where the row would sit if
-// it followed that identity.
-//
-// Books the identity places itself decide it. A borrowed slot is a number from
-// a different ordering: an umbrella's book 15 must not stand in for a
-// sub-series' book 3, or the catalogue is asked what follows a place the
-// reader has never been. Borrowed slots are used only when the identity places
-// nothing at all, where an approximate slot still beats none.
-func furthestBookIn(g *Group, source, name string) (*book, *float64) {
-	reach := func(exactOnly bool) (*book, *float64) {
-		var at *float64
-		var who *book
-		for _, b := range g.books {
-			if !b.read && !b.reading {
-				continue
-			}
-			pos, exact, placed := slotIn(b, source, name)
-			if !placed || exactOnly && !exact {
-				continue
-			}
-			// A finished book owns a slot it shares with an in-progress one.
-			tie := at != nil && pos == *at && b.read && !who.read
-			if at == nil || pos > *at || tie {
-				v := pos
-				at, who = &v, b
-			}
+// reachIn finds how far the group's read and in-progress books reach in an
+// ordering, and which book stands there. exactOnly ignores borrowed slots.
+func reachIn(g *Group, source, name string, exactOnly bool) (*book, *float64) {
+	var at *float64
+	var who *book
+	for _, b := range g.books {
+		if !b.read && !b.reading {
+			continue
 		}
-		return who, at
+		pos, exact, placed := slotIn(b, source, name)
+		if !placed || exactOnly && !exact {
+			continue
+		}
+		// A finished book owns a slot it shares with an in-progress one.
+		tie := at != nil && pos == *at && b.read && !who.read
+		if at == nil || pos > *at || tie {
+			v := pos
+			at, who = &v, b
+		}
 	}
-	if who, at := reach(true); at != nil {
-		return who, at
-	}
-	return reach(false)
+	return who, at
 }
 
-// furthestIn is furthestBookIn's slot alone.
-func furthestIn(g *Group, source, name string) *float64 {
-	_, at := furthestBookIn(g, source, name)
-	return at
+// furthestBookIn is where the row sits under an identity. The identity's own
+// numbers decide: an umbrella's book 15 must not stand in for a sub-series'
+// book 3. A borrowed slot is used only when it numbers none of the books.
+func furthestBookIn(g *Group, source, name string) (*book, *float64) {
+	if who, at := reachIn(g, source, name, true); at != nil {
+		return who, at
+	}
+	return reachIn(g, source, name, false)
 }
 
 // isNovella treats a half slot (3.5) as side material between two novels.
@@ -713,9 +688,6 @@ func finish(g *Group, books []*book, prefs picker.Prefs) {
 		if b.read && b.finishedAt.After(latestFinish) {
 			latestFinish, latestBook = b.finishedAt, b
 		}
-		// Any slot marks a slot as read: the shelf's next book is chosen by
-		// what is left over, where an approximate number still rules a volume
-		// out.
 		if pos, placed := posIn(b, g.Source, g.Name); placed {
 			readSlots[pos] = true
 		}

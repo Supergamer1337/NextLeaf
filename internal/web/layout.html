@@ -244,9 +244,7 @@
     }
     .drawer-group--flat > .drawer-label { display: block; padding: 0.15rem 0; }
     .drawer-next, .drawer-pos { display: block; color: var(--muted); font-size: 0.75rem; margin-top: 0.1rem; }
-    /* Quiet on purpose: it reports on the app's own housekeeping, and must
-       not read as a warning or pull the eye off the rows. No animation —
-       nothing here is worth a moving dot in the corner of the eye. */
+    /* Housekeeping, not a warning: quiet, and still. */
     .drawer-status {
       margin: 0 0 0.6rem; font-size: 0.75rem; color: var(--muted);
       display: flex; align-items: center; gap: 0.4rem;
@@ -391,9 +389,8 @@
     .switch-next {
       font-size: 0.72rem; color: var(--ink); line-height: 1.4; margin-top: 0.15rem;
       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-      /* Two lines always reserved: enough for a long title to keep its book
-         number, and a candidate nobody has asked about yet is as tall as one
-         that answers, so cycling never resizes the card. */
+      /* Two lines reserved, so a long title keeps its book number and
+         cycling never resizes the card. */
       min-height: 2.8em;
     }
     .switch-desc {

@@ -32,6 +32,8 @@ type catalogue struct {
 	// depends on which of its series is asked about.
 	answer  func(library.SeriesQuery) (library.Entry, bool)
 	nextErr error
+	// failing makes only the series it names fail.
+	failing map[string]bool
 }
 
 func (c *catalogue) Name() string { return c.name }
@@ -39,6 +41,9 @@ func (c *catalogue) NextInSeries(_ context.Context, q library.SeriesQuery) (libr
 	c.asked = append(c.asked, q)
 	if c.nextErr != nil {
 		return library.Entry{}, false, c.nextErr
+	}
+	if c.failing[q.Series.Name] {
+		return library.Entry{}, false, errors.New("rate limited")
 	}
 	if c.answer != nil {
 		e, ok := c.answer(q)
@@ -455,12 +460,12 @@ func TestAnIdentityWithNothingLeftSaysSoInTheWheel(t *testing.T) {
 	}
 }
 
-func TestAnUncheckedIdentitySaysNothingAtAll(t *testing.T) {
-	// Silence, not "nothing left": nobody has asked yet, and a wheel that
-	// guesses would talk a reader out of a series that has books waiting.
+func TestAnIdentityWithNoAnswerComingSaysNothing(t *testing.T) {
+	// Neither "nothing left", which would talk the reader out of a series
+	// that may have books waiting, nor "checking", which would never end.
 	alt := Alternative{Name: "Dune Chronicles", Source: "hardcover"}
 	if label := alt.NextLabel(); label != "" {
-		t.Errorf("NextLabel = %q, want nothing said for an identity nobody has asked about", label)
+		t.Errorf("NextLabel = %q, want nothing said", label)
 	}
 }
 
@@ -526,9 +531,9 @@ func TestARequestChecksTheCandidateTheOfferWouldTakeFirst(t *testing.T) {
 }
 
 func TestOneStuckRowCannotStarveTheRowsBelowIt(t *testing.T) {
-	// A row that has run out checks one candidate, as it always has. Spending
-	// the whole request on its alternatives would leave the rows under it
-	// rendering silent — neither a next book nor an honest "nothing left".
+	// Every row's own next book is looked up before any row's candidates, so
+	// a stuck row sorted first cannot spend the request and leave the rows
+	// under it silent.
 	hc := manyClaims("Zzz Saga", "Alpha", "Beta", "Gamma")
 	hc.fakeSource = fakeSource{reads: []library.Entry{readOn("hardcover", "The Last Wish", "The Witcher", 1)}}
 	hc.answer = func(q library.SeriesQuery) (library.Entry, bool) {
@@ -548,27 +553,17 @@ func TestOneStuckRowCannotStarveTheRowsBelowIt(t *testing.T) {
 }
 
 func TestAFailingCatalogueIsStillChargedToTheBudget(t *testing.T) {
-	// Errors are never cached, so a lookup that fails and costs nothing would
-	// be retried on every render, once per candidate, for as long as the
-	// backend stays down.
+	// A failure is a round trip like any other. Left uncharged, a backend
+	// that is down would be asked once per candidate on a single render.
 	hc := manyClaims("Zzz Saga", "Alpha", "Beta", "Gamma", "Delta", "Epsilon")
 	hc.nextErr = errors.New("rate limited")
 	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Book Three", "Zzz Saga", 3, "9780000000001")}}}
 
-	if _, err := twoProviders(t, hc, gm).compute(context.Background(), 1<<20, 0, true); err != nil {
+	if _, err := twoProviders(t, hc, gm).View(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(hc.asked) > 6 {
-		t.Errorf("asked %d times, want no more than one try per candidate", len(hc.asked))
-	}
-
-	hc2 := manyClaims("Zzz Saga", "Alpha", "Beta", "Gamma", "Delta", "Epsilon")
-	hc2.nextErr = errors.New("rate limited")
-	if _, err := twoProviders(t, hc2, gm).View(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(hc2.asked) > maxRequestLookups {
-		t.Errorf("asked %d times on one request, want the failures charged to the budget of %d", len(hc2.asked), maxRequestLookups)
+	if len(hc.asked) > maxRequestLookups {
+		t.Errorf("asked %d times on one request, want the failures charged to the budget of %d", len(hc.asked), maxRequestLookups)
 	}
 }
 
@@ -775,5 +770,94 @@ func TestAnUncheckedIdentitySaysItIsStillBeingChecked(t *testing.T) {
 		if alt.Pending {
 			t.Errorf("%q still says it is being checked after the warm pass", alt.Name)
 		}
+	}
+}
+
+func TestAnUnnumberedClaimIsNotAskedAtAnotherOrderingsSlot(t *testing.T) {
+	// Hardcover files one of the reader's books under "Sub" without a slot,
+	// and the other not at all. Nothing places the reader in Sub, so asking
+	// after the umbrella's book 15 would answer a question about a place they
+	// have never been.
+	sub := library.Series{Name: "Sub", Slug: "sub", Source: "hardcover"}
+	umbrella := library.Series{Name: "Umbrella", Slug: "umbrella", Position: library.At(15), Source: "hardcover"}
+	hc := &catalogue{
+		byISBN: map[string][]library.Series{
+			"9780000000001": {sub, umbrella},
+			"9780000000002": {umbrella},
+		},
+		next: library.Entry{Book: library.Book{Title: "Somewhere"}}, found: true,
+	}
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{
+		readOn("grimmory", "Book One", "Shelf Series", 1, "9780000000001"),
+		readOn("grimmory", "Book Two", "Shelf Series", 2, "9780000000002"),
+	}}}
+
+	v, err := twoProviders(t, hc, gm).compute(context.Background(), 1<<20, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range hc.asked {
+		if q.Series.Slug == "sub" {
+			t.Errorf("Sub was asked after slot %v, a number from another ordering", *q.Series.Position)
+		}
+	}
+	for _, alt := range groupNamed(t, v, "Shelf Series").Alternatives {
+		if alt.Name == "Sub" && (alt.NextLabel() != "" || alt.Pending) {
+			t.Errorf("Sub says %q, pending %v; with no slot to ask after, no answer is coming", alt.NextLabel(), alt.Pending)
+		}
+	}
+}
+
+func TestATwinStillBeingCheckedSaysSo(t *testing.T) {
+	// The twin's own row is waiting on its catalogue; the wheel entry pointing
+	// at it is waiting on the same answer.
+	hcRead := readOn("hardcover", "The Last Wish", "The Witcher", 1)
+	gmRead := readOn("grimmory", "Sword of Destiny", "The Witcher", 2)
+	hc := &catalogue{fakeSource: fakeSource{reads: []library.Entry{hcRead}}, nextErr: errors.New("rate limited")}
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{gmRead}}}
+
+	v, err := twoProviders(t, hc, gm).View(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range v.Groups {
+		if g.Source != "grimmory" {
+			continue
+		}
+		for _, alt := range g.Alternatives {
+			if alt.Source == "hardcover" && alt.NextLabel() != "Checking…" {
+				t.Errorf("the hardcover twin says %q while its own row is still checking", alt.NextLabel())
+			}
+		}
+	}
+}
+
+func TestAHeldFailureCostsNothing(t *testing.T) {
+	// Four series fail and are held for a minute. Reading a held failure back
+	// is not a round trip; charging it as one would spend every later render
+	// on them and leave the fifth series waiting for the whole minute.
+	var reads []library.Entry
+	failing := map[string]bool{}
+	for _, name := range []string{"A", "B", "C", "D"} {
+		reads = append(reads, readOn("hardcover", "Book "+name, "Series "+name, 1))
+		failing["Series "+name] = true
+	}
+	late := readOn("hardcover", "Book E", "Series E", 1)
+	late.FinishedAt = day0.AddDate(0, 0, -1) // sorts last
+	reads = append(reads, late)
+	hc := &catalogue{fakeSource: fakeSource{reads: reads}, failing: failing,
+		next: library.Entry{Book: library.Book{Title: "Book Two"}}, found: true}
+	e := twoProviders(t, hc, shelf{})
+	ctx := context.Background()
+
+	if _, err := e.View(ctx); err != nil {
+		t.Fatal(err)
+	}
+	v, err := e.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "Series E"); g.NextTitle != "Book Two" {
+		t.Errorf("Series E: Next = %q, pending %v; the held failures spent its lookup", g.NextTitle, g.NextPending)
 	}
 }

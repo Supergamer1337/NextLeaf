@@ -280,9 +280,8 @@ type panel struct {
 	Parked   []series.Group
 	Dropped  []series.Group
 	Finished []series.Group
-	// Pending is true while any row is still waiting on a catalogue. The
-	// drawer says so, since the row it applies to may sit in a section the
-	// reader has collapsed.
+	// Pending is true while any answer is still to come. The drawer says so
+	// once, since the row it applies to may sit in a collapsed section.
 	Pending bool
 }
 
@@ -333,7 +332,7 @@ func handleShell(w http.ResponseWriter, _ *http.Request) {
 
 // handleView renders the card and drawer as one fragment. "another" flips
 // from the series continuation to a variety pick; "drawer" asks for the
-// drawer alone, which is what the refresh below uses.
+// drawer alone.
 func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -344,10 +343,9 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 	renderView(w, s.viewOf(ctx, r.URL.Query().Has("another"), true), http.StatusOK)
 }
 
-// refreshDrawer re-renders the drawer alone, for a page left open while the
-// catalogue answers are still coming in. The card is deliberately left alone:
-// re-running the pick would deal the reader a different book every time the
-// drawer caught up with itself.
+// refreshDrawer renders the drawer alone. The card is left alone on purpose:
+// re-running the pick would deal the reader a different book on every refresh.
+// Any failure answers 204, so the drawer on screen stays put.
 func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter) {
 	if s.engine == nil {
 		w.WriteHeader(http.StatusNoContent)
@@ -355,7 +353,6 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter) {
 	}
 	view, err := s.engine.View(ctx)
 	if err != nil {
-		// Nothing swapped, so the drawer the reader is looking at stays put.
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

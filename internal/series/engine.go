@@ -78,12 +78,8 @@ func (e *Engine) viewWithin(ctx context.Context, budget int) (View, error) {
 
 // compute builds the view and spends the lookup budget on it: first finding
 // series for rows whose provider cannot look ahead, which changes what Compute
-// sees, then asking what comes next.
-//
-// thorough widens both passes from "what this render needs" to "everything a
-// reader might open": every row's books looked up on every provider, and every
-// identity they turn up asked what it holds next. It belongs to the warm pass,
-// which is paced and has no reader waiting on it.
+// sees, then asking what comes next. thorough, for the warm pass, looks up
+// every row and every identity rather than only what this render needs.
 func (e *Engine) compute(ctx context.Context, budget int, pause time.Duration, thorough bool) (View, error) {
 	in, err := e.input(ctx)
 	if err != nil {
@@ -157,19 +153,18 @@ func (e *Engine) unclaimed(g *Group) bool {
 	return !hasMembership(g.memberships, library.Series{Source: g.Source, Name: g.Name})
 }
 
-// candidate is a series the row could be continued or tracked under: the
-// alternative the reader sees, with the claim behind it, since only the claim
-// carries the identifier that provider's catalogue answers to.
+// candidate is a series the row could be continued under: the alternative the
+// reader sees, and the claim behind it, which carries the provider's own
+// identifier.
 type candidate struct {
 	claim library.Series
 	alt   *Alternative
 }
 
-// candidates are the row's continuation candidates in preference order: the
-// claim sharing the row's name first, then the order its provider ranks them.
-// offer, check and hasContinuation all read this one order, so a request never
-// spends its budget on a candidate the offer would not have taken first —
-// the alternatives themselves are sorted by name, for the wheel to read.
+// candidates are the row's candidates on providers with a catalogue, in the
+// order the offer prefers them: the claim sharing the row's name, then the
+// provider's own ranking. Checking in any other order — the alternatives are
+// sorted by name — spends the budget on candidates the offer would not take.
 func (e *Engine) candidates(g *Group) []candidate {
 	var same, rest []candidate
 	for _, m := range g.memberships {
@@ -190,18 +185,12 @@ func (e *Engine) candidates(g *Group) []candidate {
 	return append(same, rest...)
 }
 
-// hasContinuation reports whether a candidate exists at all, which is what
-// decides whether a row still needs looking up by ISBN. Whether the candidate
-// leads anywhere is offer's question, and costs a catalogue round trip.
 func (e *Engine) hasContinuation(g *Group) bool { return len(e.candidates(g)) > 0 }
 
-// offer is the continuation to show on a row that has run out: the first
-// candidate whose provider has said it really holds a book past where the
-// reader stands. An unchecked candidate is never offered — every series has a
-// counterpart somewhere, finished ones included, and following one only
-// renames the row that already said "nothing left". A candidate that leads
-// nowhere is skipped rather than ending the search: the next one may be the
-// sub-series the reader is actually following.
+// offer is the continuation for a row that has run out: the first candidate
+// whose catalogue has confirmed a book past the reader's place. Unchecked
+// candidates are never offered, since every series has a counterpart
+// somewhere, finished ones included.
 func (e *Engine) offer(g *Group) *Alternative {
 	for _, c := range e.candidates(g) {
 		if c.alt.NextTitle != "" {
@@ -211,69 +200,38 @@ func (e *Engine) offer(g *Group) *Alternative {
 	return nil
 }
 
-// checkMode says how far a render may go to find out what each identity
-// offers next.
+// checkMode is how much a render may ask to fill in its candidates.
 type checkMode int
 
 const (
-	// cachedOnly uses answers already held and asks for nothing. What has not
-	// been looked up stays unspoken.
-	cachedOnly checkMode = iota
-	// untilOffered asks in preference order and stops at the first identity
-	// that leads somewhere — that is the one the arrow takes, and the reader
-	// is looking at the row right now.
-	untilOffered
-	// everyIdentity asks about all of them, filling the wheel. It belongs to
-	// the warm pass, which has nobody waiting on it.
-	everyIdentity
+	cachedOnly    checkMode = iota // ask nothing
+	untilOffered                   // ask until one candidate leads somewhere
+	everyIdentity                  // ask about all of them: the warm pass
 )
 
-// check fills each candidate with what that identity offers next, so the wheel
-// names both destinations rather than making the reader switch to find out.
-// Cached answers are always used; mode decides how much may be asked for.
+// check fills in what each candidate holds next, for the wheel and the offer.
 func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pause time.Duration, mode checkMode) {
 	if e.lookahead == nil {
 		return
 	}
+	offered := false
 	for _, c := range e.candidates(g) {
-		at := mode
-		if at == untilOffered && e.offer(g) != nil {
-			// The arrow is decided. The rest is wheel detail, left to the warm
-			// pass — but it is still coming, and the wheel says so rather than
-			// going quiet on it.
-			at = cachedOnly
-		}
-		pos := furthestIn(g, c.claim.Source, c.claim.Name)
+		// Only the identity's own numbers place the reader in it; with none,
+		// there is nothing to ask after and no answer is coming.
+		_, pos := reachIn(g, c.claim.Source, c.claim.Name, true)
 		if pos == nil {
-			// Nothing to ask after, so no answer is coming: the row would
-			// switch into silence, and saying "checking" would never end.
 			continue
 		}
 		q := library.SeriesQuery{
 			Series:          library.Series{Name: c.claim.Name, Position: pos, Slug: c.claim.Slug, Source: c.claim.Source},
 			IncludeNovellas: e.prefs.IncludeNovellas,
 		}
-		if fresh := !e.lookahead.Cached(q); fresh {
-			if at == cachedOnly || *spent >= budget {
-				// An answer is coming, from a later render or the warm pass.
-				c.alt.Pending = true
-				continue
-			}
-			if pause > 0 {
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(pause):
-				}
-			}
-			// Charged whatever the answer: a failure is a round trip like any
-			// other, and errors are never cached, so an uncharged one would be
-			// retried on every render for as long as the backend stays down.
-			*spent++
-		}
-		entry, found, err := e.lookahead.Next(ctx, q)
+		ask := mode == everyIdentity || mode == untilOffered && !offered
+		entry, found, held, err := e.lookup(ctx, q, spent, budget, pause, ask)
 		if err != nil {
 			log.Printf("series: checking what %q offers beyond %q: %v", c.claim.Source, g.Name, err)
+		}
+		if !held || err != nil {
 			c.alt.Pending = true
 			continue
 		}
@@ -283,11 +241,32 @@ func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pa
 			if entry.Book.Series != nil {
 				c.alt.NextPosition = entry.Book.Series.Position
 			}
+			offered = true
 		}
 	}
 }
 
-// alternativeFor finds the offered alternative matching a claim.
+// lookup answers q from the cache, or asks the catalogue if ask allows and the
+// budget lasts. held is false when q went unasked; its answer is still to come.
+func (e *Engine) lookup(ctx context.Context, q library.SeriesQuery, spent *int, budget int, pause time.Duration, ask bool) (entry library.Entry, found, held bool, err error) {
+	if !e.lookahead.Cached(q) {
+		if !ask || *spent >= budget {
+			return library.Entry{}, false, false, nil
+		}
+		if pause > 0 {
+			select {
+			case <-ctx.Done():
+				return library.Entry{}, false, false, nil
+			case <-time.After(pause):
+			}
+		}
+		// Charged even if it fails: a failure costs a round trip too.
+		*spent++
+	}
+	entry, found, err = e.lookahead.Next(ctx, q)
+	return entry, found, true, err
+}
+
 func alternativeFor(g *Group, m library.Series) *Alternative {
 	for i, alt := range g.Alternatives {
 		if alt.Source == m.Source && key(alt.Name) == key(m.Name) {
@@ -299,13 +278,9 @@ func alternativeFor(g *Group, m library.Series) *Alternative {
 
 // discover looks up, by ISBN, the series a catalogue files a row's books
 // under. One lookup covers a row; answers, including empty ones, are kept for
-// a day, and it returns how many it spent.
-//
-// A request only looks up what it needs to answer: rows that have run out of
-// shelf with nowhere to continue, and rows following a series found this way
-// before. The warm pass looks up every row, so that opening any row's switcher
-// shows every identity every provider files those books under — the reader's
-// choice is not limited to the provider they happen to be tracked on.
+// a day, and it returns how many it spent. A request looks up only rows that
+// have nowhere to continue or follow a series found this way before; the warm
+// pass looks up every row, so any row's wheel offers every provider's series.
 func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.Duration, thorough bool) int {
 	if len(e.finders) == 0 {
 		return 0
@@ -313,8 +288,11 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 	spent := 0
 	for i := range v.Groups {
 		g := &v.Groups[i]
+		if g.Decision == Dropped {
+			continue
+		}
 		needed := e.unclaimed(g) || (e.shelfOnly(g) && !e.hasContinuation(g))
-		if !needed && (!thorough || g.Decision == Dropped) {
+		if !needed && !thorough {
 			continue
 		}
 		var isbns []string
@@ -386,28 +364,26 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 
 // enrich fills in what only a catalogue can know: the next book beyond the
 // shelf, and whether the reader is caught up. A row is only ever looked up in
-// its own provider's catalogue. Failed lookups leave a group unknown rather
-// than wrongly finished.
+// its own provider's catalogue, and a dropped one not at all.
 //
-// The budget is spent in the order a reader needs the answers, not in the
-// order the rows happen to sit. What each row holds next comes first, so one
-// row's switcher is never filled at the cost of another row's content; then
-// where a row that has run out can be continued, which is the one question
-// such a row exists to answer; and last the rest of the wheel, which only the
-// warm pass goes and fetches.
+// The budget goes where the reader needs it first: every row's own next book,
+// so one row's wheel never costs another row its content; then where a row
+// that has run out can be continued; then the rest of the wheel.
 func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Duration, thorough bool) {
 	spent := 0
 	rows := func(want func(*Group) bool, do func(*Group)) {
 		for i := range v.Groups {
-			g := &v.Groups[i]
-			// A dropped series offers nothing, so nothing is looked up for it.
-			if g.Decision != Dropped && want(g) {
+			if g := &v.Groups[i]; g.Decision != Dropped && want(g) {
 				do(g)
 			}
 		}
 	}
+	stuck, wheel := untilOffered, cachedOnly
+	if thorough {
+		stuck, wheel = everyIdentity, everyIdentity
+	}
 
-	rows(func(g *Group) bool { return true }, func(g *Group) {
+	rows(func(*Group) bool { return true }, func(g *Group) {
 		if e.shelfOnly(g) {
 			// As far as this provider can say, the reader is caught up.
 			g.CaughtUp = true
@@ -415,58 +391,31 @@ func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Dur
 		}
 		e.next(ctx, g, &spent, budget, pause)
 	})
-
-	mode := untilOffered
-	if thorough {
-		mode = everyIdentity
-	}
 	rows(e.shelfOnly, func(g *Group) {
-		e.check(ctx, g, &spent, budget, pause, mode)
+		e.check(ctx, g, &spent, budget, pause, stuck)
 		g.ContinueOn = e.offer(g)
 	})
-
-	mode = cachedOnly
-	if thorough {
-		mode = everyIdentity
-	}
 	rows(func(g *Group) bool { return !e.shelfOnly(g) }, func(g *Group) {
-		e.check(ctx, g, &spent, budget, pause, mode)
+		e.check(ctx, g, &spent, budget, pause, wheel)
 	})
-
 	e.fillTwins(v)
 }
 
 // next fills the row's own next book from its provider's catalogue. A failed
-// lookup leaves the row unknown rather than wrongly finished.
+// lookup leaves the row pending rather than wrongly finished.
 func (e *Engine) next(ctx context.Context, g *Group, spent *int, budget int, pause time.Duration) {
-	if e.lookahead == nil || g.NextFromShelf || g.Decision == Dropped || g.Position == nil {
+	if e.lookahead == nil || g.NextFromShelf || g.Position == nil {
 		return
 	}
 	q := library.SeriesQuery{
 		Series:          library.Series{Name: g.Name, Position: g.Position, Slug: g.Slug, Source: g.Source},
 		IncludeNovellas: e.prefs.IncludeNovellas,
 	}
-	fresh := !e.lookahead.Cached(q)
-	if fresh && *spent >= budget {
-		// An answer is coming, from a later render or the warm pass.
-		g.NextPending = true
-		return
-	}
-	if fresh && pause > 0 {
-		select {
-		case <-ctx.Done():
-			g.NextPending = true
-			return
-		case <-time.After(pause):
-		}
-	}
-	if fresh {
-		// Charged whatever the answer; see check.
-		*spent++
-	}
-	entry, found, err := e.lookahead.Next(ctx, q)
+	entry, found, held, err := e.lookup(ctx, q, spent, budget, pause, true)
 	if err != nil {
 		log.Printf("series: looking up the next book in %q: %v", g.Name, err)
+	}
+	if !held || err != nil {
 		g.NextPending = true
 		return
 	}
@@ -485,13 +434,9 @@ func (e *Engine) next(ctx context.Context, g *Group, spent *int, budget int, pau
 	}
 }
 
-// fillTwins gives a twin alternative — the same series name tracked as its own
-// row on another provider — the answer that row already has, rather than
-// asking the same question twice under another key.
-//
-// Only a row that was actually answered may speak: a row on a provider with no
-// catalogue is "caught up" merely because nobody could ask it, and passing
-// that on would label a switch a dead end when it leads to a book.
+// fillTwins gives a twin — the same series name tracked as its own row on
+// another provider — that row's answer. A row with no catalogue is "caught
+// up" only because nobody could ask, so it speaks for nothing.
 func (e *Engine) fillTwins(v *View) {
 	for i := range v.Groups {
 		g := &v.Groups[i]
@@ -506,9 +451,12 @@ func (e *Engine) fillTwins(v *View) {
 					continue
 				}
 				answered := twin.NextFromShelf || library.ResolvesSeries(e.src, twin.Source)
-				if answered && (twin.CaughtUp || twin.NextTitle != "") {
+				switch {
+				case answered && (twin.CaughtUp || twin.NextTitle != ""):
 					alt.Checked = true
 					alt.NextTitle, alt.NextPosition = twin.NextTitle, twin.NextPosition
+				case twin.NextPending:
+					alt.Pending = true
 				}
 			}
 		}
@@ -516,13 +464,8 @@ func (e *Engine) fillTwins(v *View) {
 }
 
 // Warm walks every group and fills the lookup cache, paced so it cannot trip
-// the source's rate limit. Run at startup and daily.
-//
-// It is tempting to let the first pass run flat out, since nothing is cached
-// and a reader may be about to open the page. Measured against Hardcover's
-// live API, that trips its limit within seconds: the lookups fail, the rows
-// they were for lose their offers, and the retries land in the reader's page
-// loads. A slow fill the reader never sees beats a fast one that breaks.
+// the source's rate limit. Run at startup and daily. Even the first pass is
+// paced: run flat out against Hardcover it tripped the limit within seconds.
 func (e *Engine) Warm(ctx context.Context) {
 	// Generous rather than exact: the budget only has to outlast the rows.
 	if _, err := e.compute(ctx, 1<<20, warmPause, true); err != nil {
