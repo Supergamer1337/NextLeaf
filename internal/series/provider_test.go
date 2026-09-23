@@ -1386,3 +1386,19 @@ func TestAKeptRowFollowingAFoundSeriesIsFoundAgain(t *testing.T) {
 		t.Errorf("asked = %+v, want hardcover's own identifier, not the name alone", hc.asked)
 	}
 }
+
+func TestAKeptRowLooksForNoOtherOrderings(t *testing.T) {
+	// The reader has turned other orderings down: looking them up by ISBN
+	// would only spend the catalogue's patience on answers nobody is shown.
+	e, hc, _ := continuable(t)
+	ctx := context.Background()
+	if _, err := e.Decide(ctx, "keep", "Three-Body", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if hc.finds != 0 {
+		t.Errorf("a kept row was looked up by ISBN %d times", hc.finds)
+	}
+}
