@@ -112,6 +112,13 @@ func (g Group) NextLabel() string {
 	return nextLabel(g.CaughtUp || g.NextTitle != "", g.NextPending, g.NextTitle, g.NextPosition)
 }
 
+// NextBook names what this identity holds next: its title and, when known,
+// its slot.
+func (a Alternative) NextBook() string { return nextBook(a.NextTitle, a.NextPosition) }
+
+// Stopped reports whether the reader has turned down continuing the series.
+func (g Group) Stopped() bool { return g.Decision == Stopped }
+
 func nextLabel(checked, pending bool, title string, pos *float64) string {
 	switch {
 	case !checked && pending:
@@ -120,11 +127,16 @@ func nextLabel(checked, pending bool, title string, pos *float64) string {
 		return ""
 	case title == "":
 		return "Nothing left to read"
-	case pos != nil:
-		return "Next: " + title + ", book " + formatPos(*pos)
 	default:
-		return "Next: " + title
+		return "Next: " + nextBook(title, pos)
 	}
+}
+
+func nextBook(title string, pos *float64) string {
+	if pos == nil {
+		return title
+	}
+	return title + ", book " + formatPos(*pos)
 }
 
 // PositionLabel states where the reader stands in the series: a slot they have
@@ -539,18 +551,21 @@ func applyStatements(groups map[string]*Group, books []*book, statements []State
 				} else {
 					g.Decision = Parked
 				}
-			case KindDrop:
-				// Adding one of the series' books back undoes the drop.
+			case KindDrop, KindStop:
+				// Adding one of the series' books back undoes either.
 				undone := false
 				for _, b := range books {
 					if b.toRead && b.addedAt.After(st.MadeAt) && inGroup(b, g) {
 						undone = true
 					}
 				}
-				if undone {
+				switch {
+				case undone:
 					g.Decision = Active
-				} else {
+				case st.Kind == KindDrop:
 					g.Decision = Dropped
+				default:
+					g.Decision = Stopped
 				}
 			case KindPin:
 				g.Decision = Pinned

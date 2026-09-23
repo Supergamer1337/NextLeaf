@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"nextleaf/internal/library"
 	"nextleaf/internal/picker"
@@ -860,4 +861,105 @@ func TestAHeldFailureCostsNothing(t *testing.T) {
 	if g := groupNamed(t, v, "Series E"); g.NextTitle != "Book Two" {
 		t.Errorf("Series E: Next = %q, pending %v; the held failures spent its lookup", g.NextTitle, g.NextPending)
 	}
+}
+
+// continuable is a finished Grimmory trilogy that Hardcover carries on past.
+func continuable(t *testing.T) (*Engine, *catalogue, shelf) {
+	t.Helper()
+	hc := &catalogue{
+		byISBN: map[string][]library.Series{"9780765377104": {
+			{Name: "Remembrance of Earth's Past", Slug: "remembrance", Position: library.At(3), Source: "hardcover"},
+		}},
+		next: library.Entry{Book: library.Book{Title: "The Redemption of Time"}}, found: true,
+	}
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Death's End", "Three-Body", 3, "9780765377104")}}}
+	return twoProviders(t, hc, gm), hc, gm
+}
+
+func TestStoppingHereEndsTheOffer(t *testing.T) {
+	// The reader tracks the trilogy because the trilogy is what they meant to
+	// read. More books elsewhere are an offer they can turn down for good.
+	e, hc, _ := continuable(t)
+	ctx := context.Background()
+	v, err := e.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if groupNamed(t, v, "Three-Body").ContinueOn == nil {
+		t.Fatal("no offer to turn down")
+	}
+
+	if _, err := e.Decide(ctx, "stop", "Three-Body", ""); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	asked := len(hc.asked)
+	v, err = e.compute(ctx, 1<<20, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := groupNamed(t, v, "Three-Body")
+	if g.Decision != Stopped || g.ContinueOn != nil || !g.CaughtUp {
+		t.Errorf("Decision = %v, ContinueOn = %+v, CaughtUp = %v; want a finished row with no offer", g.Decision, g.ContinueOn, g.CaughtUp)
+	}
+	if g.Pending() {
+		t.Error("a row that has turned its continuations down is not waiting on them")
+	}
+	if len(hc.asked) != asked {
+		t.Errorf("asked %d more times about continuations the reader turned down", len(hc.asked)-asked)
+	}
+}
+
+func TestClearingAStopOffersAgain(t *testing.T) {
+	e, _, _ := continuable(t)
+	ctx := context.Background()
+	if _, err := e.View(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Decide(ctx, "stop", "Three-Body", ""); err != nil {
+		t.Fatal(err)
+	}
+	uncached, err := e.Decide(ctx, "clear", "Three-Body", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !uncached {
+		t.Error("clearing a stop revives lookups the engine has been skipping, so the re-render needs a budget")
+	}
+	v, err := e.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "Three-Body"); g.Decision != Active || g.ContinueOn == nil {
+		t.Errorf("Decision = %v, ContinueOn = %+v; want the offer back", g.Decision, g.ContinueOn)
+	}
+}
+
+func TestAStopIsSpentWhenTheSeriesIsWantedAgain(t *testing.T) {
+	// Adding one of its books to the list says the reader wants more after
+	// all, the same signal that undoes a drop.
+	later := tbr("The Redemption of Time", "Three-Body", 4, day2)
+	later.Book.Series.Source = "grimmory"
+	e, _, _ := continuable(t)
+	e.now = func() time.Time { return day1 }
+	if _, err := e.Decide(context.Background(), "stop", "Three-Body", ""); err != nil {
+		t.Fatal(err)
+	}
+	v := Compute(Input{
+		Reads:       []library.Entry{readOn("grimmory", "Death's End", "Three-Body", 3, "9780765377104")},
+		ToRead:      []library.Entry{later},
+		Statements:  mustStatements(t, e),
+		SourceOrder: e.SourceOrder,
+	})
+	if g := groupNamed(t, v, "Three-Body"); g.Decision == Stopped {
+		t.Error("a book of the series added after the stop should spend it")
+	}
+}
+
+func mustStatements(t *testing.T, e *Engine) []Statement {
+	t.Helper()
+	st, err := e.store.Statements(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
 }

@@ -288,7 +288,7 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 	spent := 0
 	for i := range v.Groups {
 		g := &v.Groups[i]
-		if g.Decision == Dropped {
+		if g.Decision == Dropped || g.Decision == Stopped {
 			continue
 		}
 		needed := e.unclaimed(g) || (e.shelfOnly(g) && !e.hasContinuation(g))
@@ -364,7 +364,8 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 
 // enrich fills in what only a catalogue can know: the next book beyond the
 // shelf, and whether the reader is caught up. A row is only ever looked up in
-// its own provider's catalogue, and a dropped one not at all.
+// its own provider's catalogue; a dropped one not at all, and a stopped one
+// not about continuing.
 //
 // The budget goes where the reader needs it first: every row's own next book,
 // so one row's wheel never costs another row its content; then where a row
@@ -392,10 +393,13 @@ func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Dur
 		e.next(ctx, g, &spent, budget, pause)
 	})
 	rows(e.shelfOnly, func(g *Group) {
+		if g.Decision == Stopped {
+			return
+		}
 		e.check(ctx, g, &spent, budget, pause, stuck)
 		g.ContinueOn = e.offer(g)
 	})
-	rows(func(g *Group) bool { return !e.shelfOnly(g) }, func(g *Group) {
+	rows(func(g *Group) bool { return !e.shelfOnly(g) && g.Decision != Stopped }, func(g *Group) {
 		e.check(ctx, g, &spent, budget, pause, wheel)
 	})
 	e.fillTwins(v)
@@ -628,9 +632,11 @@ func (e *Engine) Decide(ctx context.Context, action, name, to string) (uncached 
 		st.Kind = KindDrop
 	case "pin":
 		st.Kind, st.PinnedBook = KindPin, group.NextKey
+	case "stop":
+		st.Kind = KindStop
 	case "clear":
 		st.Kind = KindClear
-		uncached = group.Decision == Dropped
+		uncached = group.Decision == Dropped || group.Decision == Stopped
 	case "switch":
 		alt, ok := alternativeNamed(group, to)
 		if !ok {

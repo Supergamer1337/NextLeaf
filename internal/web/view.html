@@ -115,6 +115,7 @@
       {{template "drawerGroup" dict "Label" "Reading next — pinned" "Items" .Panel.Pinned "Undo" "Unpin" "Flat" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Open" true "CanPick" true "CanPark" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now" "CanPick" true "CanDrop" true}}
+      {{template "drawerGroup" dict "Label" "Continues elsewhere" "Items" .Panel.Continuable "CanStop" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Finished" "Items" .Panel.Finished "CanPick" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
 {{end}}
@@ -152,7 +153,7 @@
 {{define "drawerRows"}}
 <ul class="drawer-list">
   {{range .Items}}
-  {{$tracked := .Name}}
+  {{$tracked := .Name}}{{$checking := .NextPending}}
   <li>
     <div class="drawer-row">
       {{/* The next book when there is one, else the last book read. */}}
@@ -182,7 +183,8 @@
           {{/* The row's one number belongs to the book it is offering, named
                in the same breath; where the reader has been is the switcher's
                business. */}}
-          {{with .NextLabel}}<span class="drawer-next">{{.}}</span>{{end}}
+          {{with .ContinueOn}}<span class="drawer-next">Next on {{ucfirst .Source}}: {{.NextBook}}</span>
+          {{else}}{{with .NextLabel}}<span class="drawer-next{{if $checking}} is-checking{{end}}">{{.}}</span>{{end}}{{end}}
           {{/* "from" marks the decision as made in the drawer, where the row
                moving is the feedback; the page raises no banner for it. */}}
           {{$vals := hxvals "name" .Name "from" "drawer"}}
@@ -193,8 +195,16 @@
             {{if $.CanPark}}
             <button class="drawer-act" type="button" hx-post="/series/park" hx-vals="{{$vals}}" hx-disabled-elt="this">Park</button>
             {{end}}
+            {{if $.CanStop}}
+            {{/* Turns the offer down for good: the series tracked is the one
+                 the reader meant to read. */}}
+            <button class="drawer-act" type="button" hx-post="/series/stop" hx-vals="{{$vals}}" hx-disabled-elt="this">Stop here</button>
+            {{end}}
             {{if $.CanDrop}}
             <button class="drawer-act" type="button" hx-post="/series/drop" hx-vals="{{$vals}}" hx-disabled-elt="this">Drop</button>
+            {{end}}
+            {{if .Stopped}}
+            <button class="drawer-act" type="button" hx-post="/series/clear" hx-vals="{{$vals}}" hx-disabled-elt="this">Offer again</button>
             {{end}}
             {{if $.Undo}}
             <button class="drawer-act" type="button" hx-post="/series/clear" hx-vals="{{$vals}}" hx-disabled-elt="this">{{$.Undo}}</button>
@@ -210,9 +220,9 @@
              The ghosts live inside it, anchored to the card's own edges. */}}
         <div class="wheel-face">
           <img class="wheel-cover" alt="" hidden>
-          {{template "wheelItem" dict "To" "" "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Next" .NextLabel "Desc" "Currently tracked." "Cover" (or .NextCoverURL .CoverURL)}}
+          {{template "wheelItem" dict "To" "" "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Next" .NextLabel "Checking" .NextPending "Desc" "Currently tracked." "Cover" (or .NextCoverURL .CoverURL)}}
           {{range .Alternatives}}
-          {{template "wheelItem" dict "To" .Name "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Next" .NextLabel "Desc" .Description "Cover" .CoverURL}}
+          {{template "wheelItem" dict "To" .Name "Name" .Name "Source" .Source "PosLabel" .PositionLabel "Next" .NextLabel "Checking" .Pending "Desc" .Description "Cover" .CoverURL}}
           {{end}}
           <div class="wheel-controls">
             <button type="button" class="wheel-ok">Use this</button>
@@ -250,7 +260,7 @@
     {{if .PosLabel}}<span class="switch-pos">{{.PosLabel}}</span>{{end}}
   </span>
   {{/* What a switch would leave the reader with. */}}
-  <span class="switch-next">{{.Next}}</span>
+  <span class="switch-next{{if .Checking}} is-checking{{end}}">{{.Next}}</span>
   {{/* Always present, its lines reserved in CSS, so candidates with and
        without descriptions have the same height and cycling never resizes
        the card. */}}
