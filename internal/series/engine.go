@@ -48,8 +48,9 @@ type Engine struct {
 	finders []library.SeriesFinder
 	mu      sync.Mutex
 	found   map[string]foundClaims
-	// findFailed counts the failed lookups of each book key (see giveUpAfter).
-	findFailed map[string]int
+	// findFailed counts the failed lookups of each book key, and when the
+	// last was (see giveUpAfter).
+	findFailed map[string]findFailure
 
 	// gen counts answers landed; changed is closed when the next one does.
 	gen     uint64
@@ -68,6 +69,11 @@ type Engine struct {
 	pace, retryGap time.Duration
 }
 
+type findFailure struct {
+	n  int
+	at time.Time
+}
+
 type foundClaims struct {
 	claims []library.Series
 	at     time.Time
@@ -77,7 +83,7 @@ type foundClaims struct {
 // SeriesResolver capability, when present, powers new-release lookups.
 func NewEngine(store *Store, src library.Source, prefs picker.Prefs) *Engine {
 	e := &Engine{
-		src: src, store: store, prefs: prefs, now: time.Now, found: map[string]foundClaims{}, findFailed: map[string]int{},
+		src: src, store: store, prefs: prefs, now: time.Now, found: map[string]foundClaims{}, findFailed: map[string]findFailure{},
 		changed: make(chan struct{}), nudge: make(chan struct{}, 1),
 		pace: warmPause, retryGap: failureTTL,
 	}
@@ -479,7 +485,7 @@ func (e *Engine) findState(g *Group) (unasked, gaveUp bool) {
 			if _, ok := e.found[k]; ok {
 				found = true
 			}
-			failed = failed || e.findFailed[k] >= giveUpAfter
+			failed = failed || e.findFailed[k].n >= giveUpAfter
 		}
 		switch {
 		case found:
@@ -522,6 +528,10 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 				if f, ok := e.found[k]; ok && e.now().Sub(f.at) < lookaheadTTL {
 					fresh = true
 				}
+				// A failure is held a while, as the lookahead holds its own.
+				if f, ok := e.findFailed[k]; ok && e.now().Sub(f.at) < failureTTL {
+					fresh = true
+				}
 			}
 			if !fresh && len(b.isbns) > 0 {
 				isbns = append(isbns, b.isbns...)
@@ -540,6 +550,7 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 			}
 		}
 
+		asked := e.now()
 		answers := map[string][]library.Series{}
 		failed := false
 		for _, f := range e.finders {
@@ -561,7 +572,13 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 			e.mu.Lock()
 			for _, b := range asking {
 				for _, k := range b.plainKeys {
-					e.findFailed[k]++
+					// One recorded while this ask was out is the same hiccup.
+					f := e.findFailed[k]
+					if f.n == 0 || f.at.Before(asked) {
+						f.n++
+					}
+					f.at = e.now()
+					e.findFailed[k] = f
 				}
 			}
 			e.mu.Unlock()

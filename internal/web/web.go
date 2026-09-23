@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -316,6 +317,8 @@ type viewData struct {
 	// html/template does not know hx-get for a URL.
 	FollowUp string
 	CardKey  string
+	// StaleKey is the query-escaped staleKey the page was painted with.
+	StaleKey string
 }
 
 // panel is the series drawer: every tracked series, grouped by what applies
@@ -401,7 +404,7 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 		s.refreshDrawer(ctx, w, q.Get("since"), q.Has("waiting"))
 		return
 	case q.Has("after"):
-		s.followUp(ctx, w, q.Get("after"), q.Get("keep"), q.Has("stale"))
+		s.followUp(ctx, w, q.Get("after"), q.Get("keep"), q.Get("stale"))
 		return
 	}
 	reroll := q.Has("another")
@@ -423,12 +426,12 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 	renderView(w, data, http.StatusOK)
 }
 
-// followUp answers a page painted from an old library: once the refresh behind
-// it is done, the whole view again if the library changed since generation
-// seen or a source went down or came back since the page said, and 204 —
-// nothing to swap — if neither. The book keyed keep stays on the card unless
-// something should take its place.
-func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep string, stale bool) {
+// followUp answers a page painted from an old library. Once the refresh behind
+// it is done, it answers with the whole view again if the library changed
+// since generation seen, or if the sources down are no longer those in stale,
+// the page's own staleKey; and 204, nothing to swap, if neither. The book
+// keyed keep stays on the card unless something should take its place.
+func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep, stale string) {
 	after, err := strconv.ParseUint(seen, 10, 64)
 	if s.engine == nil || err != nil {
 		w.WriteHeader(http.StatusNoContent)
@@ -443,20 +446,24 @@ func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep
 			return
 		}
 	}
-	if _, gen := s.engine.Library(); gen <= after && s.anyStale() == stale {
+	if _, gen := s.engine.Library(); gen <= after && staleKey(library.HealthOf(s.src)) == stale {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	renderView(w, s.viewOf(ctx, false, false, keep), http.StatusOK)
 }
 
-func (s *server) anyStale() bool {
-	for _, h := range library.HealthOf(s.src) {
+// staleKey names the sources serving old data, for comparing what a page said
+// with what holds now.
+func staleKey(health []library.Health) string {
+	var down []string
+	for _, h := range health {
 		if h.Stale {
-			return true
+			down = append(down, h.Source)
 		}
 	}
-	return false
+	slices.Sort(down)
+	return strings.Join(down, ",")
 }
 
 // refreshDrawer renders the drawer alone, for an open page listening for
@@ -545,11 +552,13 @@ func (s *server) viewOf(ctx context.Context, reroll, catalogue bool, keep string
 			s.engine.Nudge()
 		}
 	}
-	for _, h := range library.HealthOf(s.src) {
+	health := library.HealthOf(s.src)
+	for _, h := range health {
 		if h.Stale {
 			data.Stale = append(data.Stale, h)
 		}
 	}
+	data.StaleKey = url.QueryEscape(staleKey(health))
 	return data
 }
 

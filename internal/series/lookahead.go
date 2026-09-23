@@ -149,8 +149,11 @@ func (l *Lookahead) Next(ctx context.Context, q library.SeriesQuery) (library.En
 		l.mu.Lock()
 		// Another ask may have answered while this one was out.
 		if cur := l.answers[k]; cur.at.IsZero() || cur.at.Before(asked) {
+			// One recorded while this ask was out is the same hiccup.
+			if cur.fails == 0 || cur.failedAt.Before(asked) {
+				cur.fails++
+			}
 			cur.err, cur.failedAt = err, now
-			cur.fails++
 			l.answers[k] = cur
 		}
 		l.mu.Unlock()

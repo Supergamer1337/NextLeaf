@@ -268,7 +268,12 @@
       content: "✓"; width: auto; height: auto; background: none; animation: none;
       font-weight: 700; line-height: 1;
     }
-    .drawer-status.is-partial::before { content: "!"; }
+    /* Some series could not be checked: said for as long as it holds, so it
+       stays rather than fading. */
+    .drawer-status.is-partial::before {
+      content: "!"; width: auto; height: auto; background: none; animation: none;
+      font-weight: 700; line-height: 1;
+    }
     @keyframes status-done { 0%, 70% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
     /* Idle dots keep their space, so one appearing never rewraps a name. */
     .pending-dot { display: inline-block; margin-left: 0.45rem; vertical-align: middle; }

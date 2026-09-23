@@ -286,3 +286,28 @@ func TestAFailureDoesNotUndoAnAnswerThatLandedMeanwhile(t *testing.T) {
 		t.Errorf("Next = %q, %v; want the answer, not the failure that lost the race", got.Book.Title, err)
 	}
 }
+
+func TestTwoAsksFailingAtOnceAreOneFailure(t *testing.T) {
+	// The background pass and a decision's render can ask the same question
+	// together. Both failing is one hiccup, not the retry failing too.
+	var calls atomic.Int32
+	both := make(chan struct{})
+	l := NewLookahead(resolverFunc(func(context.Context, library.SeriesQuery) (library.Entry, bool, error) {
+		if calls.Add(1) == 2 {
+			close(both)
+		}
+		<-both
+		return library.Entry{}, false, errors.New("rate limited")
+	}), 24*time.Hour)
+	l.now = func() time.Time { return day0 }
+
+	done := make(chan struct{})
+	for range 2 {
+		go func() { _, _, _ = l.Next(context.Background(), query("Mistborn", 3)); done <- struct{}{} }()
+	}
+	<-done
+	<-done
+	if l.Failed(query("Mistborn", 3)) {
+		t.Error("two asks failing together gave the question up")
+	}
+}
