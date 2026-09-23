@@ -963,3 +963,27 @@ func mustStatements(t *testing.T, e *Engine) []Statement {
 	}
 	return st
 }
+
+func TestAMergedRowIsNamedTheSameWhicheverBookWasReadLast(t *testing.T) {
+	// Both providers file these books under "The Saga", and a book they share
+	// sits at the same slot in both, so the rows are one. Which name it wears
+	// must not hang on which book the reader happened to finish last.
+	shared := read("Book One", "The Saga", 1, day0)
+	sharedGm := entry("Book One", "The Saga", 1, "grimmory")
+	sharedGm.Status, sharedGm.FinishedAt = library.StatusRead, day0
+	onlyGm := entry("Book Two", "The Saga", 2, "grimmory")
+	onlyGm.Status = library.StatusRead
+
+	names := map[string]bool{}
+	for _, last := range []time.Time{day1, day0.AddDate(0, 0, -1)} {
+		onlyGm.FinishedAt = last
+		v := Compute(Input{Reads: []library.Entry{shared, sharedGm, onlyGm}, SourceOrder: []string{"hardcover", "grimmory"}})
+		if len(v.Groups) != 1 {
+			t.Fatalf("groups = %v, want one row", groupNames(v))
+		}
+		names[v.Groups[0].Source+":"+v.Groups[0].Name] = true
+	}
+	if len(names) != 1 || !names["hardcover:The Saga"] {
+		t.Errorf("identities = %v, want one, from the source ranked first", names)
+	}
+}
