@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"nextleaf/internal/library"
 )
 
 func openStore(t *testing.T) *Store {
@@ -165,5 +168,55 @@ func TestTheOldestShippedSchemaStillMigrates(t *testing.T) {
 	defer func() { _ = st.Close() }()
 	if _, err := st.Statements(context.Background()); err != nil {
 		t.Errorf("Statements after full replay: %v", err)
+	}
+}
+
+func TestTheLookupCacheOutlivesTheProcessAndCanBePruned(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "nextleaf.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	next := library.Entry{Book: library.Book{Title: "The Redemption of Time", Series: &library.Series{Name: "Remembrance", Position: library.At(4)}}}
+	if err := st.SaveAnswer(ctx, "old", CachedAnswer{Found: false, At: now.AddDate(0, -2, 0), FreshUntil: now.AddDate(0, -2, 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveAnswer(ctx, "q", CachedAnswer{Entry: next, Found: true, At: now, FreshUntil: now.Add(24 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	claims := []library.Series{{Name: "Remembrance", Slug: "remembrance", Position: library.At(3), Source: "hardcover", Inferred: true}}
+	if err := st.SaveClaims(ctx, "death's end\x00cixin liu", claims, now); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+
+	st, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if err := st.PruneCache(ctx, now.AddDate(0, -1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	answers, err := st.Answers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := answers["old"]; ok {
+		t.Error("an answer untouched for two months survived the prune")
+	}
+	a, ok := answers["q"]
+	if !ok || !a.Found || a.Entry.Book.Title != "The Redemption of Time" || *a.Entry.Book.Series.Position != 4 || !a.FreshUntil.Equal(now.Add(24*time.Hour)) {
+		t.Errorf("answer = %+v, want it back as it was saved", a)
+	}
+	got, err := st.Claims(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := got["death's end\x00cixin liu"]
+	if len(c.Claims) != 1 || c.Claims[0].Slug != "remembrance" || !c.Claims[0].Inferred || !c.At.Equal(now) {
+		t.Errorf("claims = %+v, want them back as they were saved", c)
 	}
 }

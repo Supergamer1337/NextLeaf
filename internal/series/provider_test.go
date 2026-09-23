@@ -263,9 +263,10 @@ func TestWithoutASameNamedSeriesTheOfferFollowsTheCataloguesRanking(t *testing.T
 	}
 }
 
-func TestAFollowedSeriesIsFoundAgainAfterARestart(t *testing.T) {
-	// What was found by ISBN is not stored; the reader's switch is. A fresh
-	// process must find the claim again rather than fall back to the name.
+func TestAFollowedSeriesIsFoundAgainWhenTheCacheIsLost(t *testing.T) {
+	// The lookup cache is disposable; the reader's switch is not. With the
+	// cache gone, a fresh process must find the claim again rather than fall
+	// back to the name.
 	hcClaim := library.Series{Name: "Remembrance of Earth's Past", Slug: "remembrance", Position: library.At(3), Source: "hardcover"}
 	newCatalogue := func() *catalogue {
 		return &catalogue{
@@ -284,6 +285,9 @@ func TestAFollowedSeriesIsFoundAgainAfterARestart(t *testing.T) {
 	}
 	if _, err := first.Decide(ctx, "switch", "Three-Body", hcClaim.Name); err != nil {
 		t.Fatalf("switch: %v", err)
+	}
+	if err := store.PruneCache(ctx, time.Now().AddDate(100, 0, 0)); err != nil {
+		t.Fatal(err)
 	}
 
 	hc := newCatalogue()
@@ -1060,5 +1064,85 @@ func TestAMergedRowIsNamedTheSameWhicheverBookWasReadLast(t *testing.T) {
 	}
 	if len(names) != 1 || !names["hardcover:The Saga"] {
 		t.Errorf("identities = %v, want one, from the source ranked first", names)
+	}
+}
+
+func TestARestartAsksNothingItAlreadyKnows(t *testing.T) {
+	// Answers and ISBN matches outlive the process, so a restart shows the
+	// drawer as it was and asks the catalogue nothing it has an answer to.
+	store := openStore(t)
+	ctx := context.Background()
+	newCatalogue := func() *catalogue {
+		return &catalogue{
+			name: "hardcover",
+			byISBN: map[string][]library.Series{"9780765377104": {
+				{Name: "Remembrance of Earth's Past", Slug: "remembrance", Position: library.At(3), Source: "hardcover"},
+			}},
+			next: library.Entry{Book: library.Book{Title: "The Redemption of Time"}}, found: true,
+		}
+	}
+	gm := shelf{name: "grimmory", fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Death's End", "Three-Body", 3, "9780765377104")}}}
+
+	first := NewEngine(store, library.Combine(newCatalogue(), gm), picker.Prefs{IncludeNovellas: true})
+	first.SourceOrder = []string{"hardcover", "grimmory"}
+	if _, err := first.compute(ctx, 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+
+	hc := newCatalogue()
+	restarted := NewEngine(store, library.Combine(hc, gm), picker.Prefs{IncludeNovellas: true})
+	restarted.SourceOrder = first.SourceOrder
+	v, err := restarted.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hc.asked) != 0 || hc.finds != 0 {
+		t.Errorf("asked = %d, finds = %d after a restart; every answer was already known", len(hc.asked), hc.finds)
+	}
+	g := groupNamed(t, v, "Three-Body")
+	if g.ContinueOn == nil || g.ContinueOn.NextTitle != "The Redemption of Time" {
+		t.Errorf("ContinueOn = %+v, want the offer back without asking", g.ContinueOn)
+	}
+	if g.Pending() {
+		t.Error("a row whose answers were all kept says it is still checking")
+	}
+}
+
+func TestAnAnswerDueARecheckIsShownWhileItIsRechecked(t *testing.T) {
+	// A day-old answer is almost certainly still right. The reader sees it at
+	// once; the background pass re-checks it, and a request does not spend
+	// its lookups on something it can already show.
+	read := readOn("hardcover", "The Last Wish", "The Witcher", 1)
+	hc := &catalogue{fakeSource: fakeSource{reads: []library.Entry{read}}, next: library.Entry{Book: library.Book{Title: "Sword of Destiny"}}, found: true}
+	e := twoProviders(t, hc, shelf{})
+	ctx := context.Background()
+	now := day0
+	e.now, e.lookahead.now = func() time.Time { return now }, func() time.Time { return now }
+	if _, err := e.View(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	now = day0.AddDate(0, 0, 2)
+	asked := len(hc.asked)
+	v, err := e.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "The Witcher"); g.NextTitle != "Sword of Destiny" || g.NextPending {
+		t.Errorf("Next = %q, pending %v; want the last answer shown while it is due a re-check", g.NextTitle, g.NextPending)
+	}
+	if len(hc.asked) != asked {
+		t.Error("a request spent a lookup re-checking an answer it could already show")
+	}
+
+	hc.nextErr = errors.New("rate limited")
+	if v, err = e.compute(ctx, 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(hc.asked) != asked+1 {
+		t.Errorf("the background pass asked %d times, want the due answer re-checked once", len(hc.asked)-asked)
+	}
+	if g := groupNamed(t, v, "The Witcher"); g.NextTitle != "Sword of Destiny" || g.NextPending {
+		t.Errorf("Next = %q, pending %v; a failed re-check must leave the last answer standing", g.NextTitle, g.NextPending)
 	}
 }

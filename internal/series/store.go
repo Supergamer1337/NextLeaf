@@ -3,10 +3,13 @@ package series
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
+
+	"nextleaf/internal/library"
 
 	_ "modernc.org/sqlite" // pure-Go driver; keeps CGO_ENABLED=0 builds working
 )
@@ -113,6 +116,24 @@ var migrations = [][]string{
 	{
 		`DROP TABLE tracked_series`,
 		`DROP TABLE series_alternative`,
+	},
+	// The lookup cache: catalogue answers and ISBN matches, kept so a restart
+	// need not ask again. ADR 0003 stores nothing derived; this bends it only
+	// as far as a cache can. Dropping either table costs a re-fetch, never a
+	// reader's decision, and a backup need not include them.
+	{
+		`CREATE TABLE cached_answer (
+			key         TEXT PRIMARY KEY,
+			entry       TEXT NOT NULL,
+			found       INTEGER NOT NULL,
+			asked_at    INTEGER NOT NULL,
+			fresh_until INTEGER NOT NULL
+		)`,
+		`CREATE TABLE cached_claims (
+			book_key TEXT PRIMARY KEY,
+			claims   TEXT NOT NULL,
+			asked_at INTEGER NOT NULL
+		)`,
 	},
 }
 
@@ -269,4 +290,108 @@ func (s *Store) Statements(ctx context.Context) ([]Statement, error) {
 		}
 	}
 	return out, anchors.Err()
+}
+
+// CachedAnswer is a catalogue answer kept across restarts. FreshUntil is when
+// it is due a re-check; until it is replaced it is still the best one to show.
+type CachedAnswer struct {
+	Entry      library.Entry
+	Found      bool
+	At         time.Time
+	FreshUntil time.Time
+}
+
+// CachedClaims are the series a catalogue filed a book under, by ISBN.
+type CachedClaims struct {
+	Claims []library.Series
+	At     time.Time
+}
+
+// SaveAnswer keeps the answer to the question key, replacing any before it.
+func (s *Store) SaveAnswer(ctx context.Context, key string, a CachedAnswer) error {
+	entry, err := json.Marshal(a.Entry)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO cached_answer (key, entry, found, asked_at, fresh_until) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (key) DO UPDATE SET
+			entry = excluded.entry, found = excluded.found,
+			asked_at = excluded.asked_at, fresh_until = excluded.fresh_until`,
+		key, entry, a.Found, a.At.Unix(), a.FreshUntil.Unix())
+	return err
+}
+
+// Answers returns every kept answer, by question.
+func (s *Store) Answers(ctx context.Context) (map[string]CachedAnswer, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT key, entry, found, asked_at, fresh_until FROM cached_answer`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]CachedAnswer{}
+	for rows.Next() {
+		var key string
+		var entry []byte
+		var a CachedAnswer
+		var at, until int64
+		if err := rows.Scan(&key, &entry, &a.Found, &at, &until); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(entry, &a.Entry); err != nil {
+			continue // a cache: an unreadable answer is simply asked again
+		}
+		a.At, a.FreshUntil = time.Unix(at, 0), time.Unix(until, 0)
+		out[key] = a
+	}
+	return out, rows.Err()
+}
+
+// SaveClaims keeps the series a book was found under, replacing any before.
+func (s *Store) SaveClaims(ctx context.Context, bookKey string, claims []library.Series, at time.Time) error {
+	encoded, err := json.Marshal(claims)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO cached_claims (book_key, claims, asked_at) VALUES (?, ?, ?)
+		ON CONFLICT (book_key) DO UPDATE SET claims = excluded.claims, asked_at = excluded.asked_at`,
+		bookKey, encoded, at.Unix())
+	return err
+}
+
+// Claims returns every kept set of claims, by book key.
+func (s *Store) Claims(ctx context.Context) (map[string]CachedClaims, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT book_key, claims, asked_at FROM cached_claims`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]CachedClaims{}
+	for rows.Next() {
+		var key string
+		var encoded []byte
+		var at int64
+		if err := rows.Scan(&key, &encoded, &at); err != nil {
+			return nil, err
+		}
+		var c CachedClaims
+		if err := json.Unmarshal(encoded, &c.Claims); err != nil {
+			continue
+		}
+		c.At = time.Unix(at, 0)
+		out[key] = c
+	}
+	return out, rows.Err()
+}
+
+// PruneCache forgets what was last asked before cutoff. Positions are part of
+// a question, so every book read leaves an answer behind that nothing will
+// ask for again.
+func (s *Store) PruneCache(ctx context.Context, cutoff time.Time) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM cached_answer WHERE asked_at < ?`, cutoff.Unix()); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM cached_claims WHERE asked_at < ?`, cutoff.Unix())
+	return err
 }
