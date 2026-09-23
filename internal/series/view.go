@@ -60,6 +60,7 @@ type Group struct {
 	readingKeys map[string]bool
 	memberships []library.Series
 	claims      []library.Series // each book's primary claim, for naming the row
+	finding     bool             // an ISBN lookup that could find its series is still to come
 	books       []*book
 	pinnedBook  string
 	pinMadeAt   time.Time
@@ -95,9 +96,9 @@ func (a Alternative) NextLabel() string {
 }
 
 // Pending reports whether any of the row's answers is still to come: its own
-// next book, or what one of its other series holds.
+// next book, what one of its other series holds, or which series those are.
 func (g Group) Pending() bool {
-	if g.NextPending {
+	if g.NextPending || g.finding {
 		return true
 	}
 	for _, alt := range g.Alternatives {

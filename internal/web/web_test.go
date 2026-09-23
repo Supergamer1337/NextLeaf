@@ -60,6 +60,19 @@ func get(t *testing.T, src library.Source, target string) *httptest.ResponseReco
 	return rec
 }
 
+// getWarmed is get once the background pass has done its work, for what only
+// the catalogue can answer.
+func getWarmed(t *testing.T, src library.Source, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	rec := httptest.NewRecorder()
+	warmed(t, src, testStore(t)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s: status = %d, want %d", target, rec.Code, http.StatusOK)
+	}
+	return rec
+}
+
 // coverStub adds the optional CoverProvider capability to stubSource.
 type coverStub struct {
 	stubSource
@@ -195,7 +208,7 @@ func TestSelectorResolvesSeriesOffShelf(t *testing.T) {
 		next:       library.Entry{Book: library.Book{Title: "The Obelisk Gate", Series: &library.Series{Name: "The Broken Earth", Position: library.At(2)}}},
 		found:      true,
 	}
-	body := get(t, src, "/view").Body.String()
+	body := getWarmed(t, src, "/view").Body.String()
 	if !strings.Contains(body, "The Obelisk Gate") {
 		t.Errorf("off-shelf next book should be recommended:\n%s", body)
 	}
@@ -370,7 +383,7 @@ func TestSelectorResolverPickShowsSourceWithoutBadge(t *testing.T) {
 		},
 		found: true,
 	}
-	body := get(t, src, "/view").Body.String()
+	body := getWarmed(t, src, "/view").Body.String()
 
 	if !strings.Contains(body, `href="https://hardcover.app/books/two"`) || !strings.Contains(body, "Hardcover") {
 		t.Errorf("the resolving source should show as a linked chip:\n%s", body)

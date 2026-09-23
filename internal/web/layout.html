@@ -552,11 +552,14 @@
       // A drawer refresh landing under an open wheel would close it, so it is
       // held until the wheel closes, then fetched afresh.
       var heldRefresh = false;
-      function isDrawerRefresh(e) {
+      function requestPath(e) {
         var p = e.detail.pathInfo, c = e.detail.requestConfig;
-        var path = (p && p.requestPath) || (c && c.path) || "";
-        return path.indexOf("drawer=1") >= 0;
+        return (p && p.requestPath) || (c && c.path) || "";
       }
+      function isDrawerRefresh(e) { return requestPath(e).indexOf("drawer=1") >= 0; }
+      // A background request: a drawer refresh, or a page's follow-up. Neither
+      // is anything the reader asked for, so neither is shown as loading.
+      function isBackground(e) { return isDrawerRefresh(e) || requestPath(e).indexOf("after=") >= 0; }
       function refreshDrawer() {
         htmx.ajax("GET", "/view?drawer=1", { target: "#drawer-body", swap: "morph:innerHTML" });
       }
@@ -714,7 +717,7 @@
       // the notice slot. Anything that fails without saying where it belongs —
       // a proxy's 502 page, say — would otherwise be morphed over the card.
       document.body.addEventListener("htmx:beforeSwap", function (e) {
-        if (!isDrawerRefresh(e)) { return; }
+        if (!isBackground(e)) { return; }
         var xhr = e.detail.xhr;
         if ((xhr && xhr.status >= 400) || openRow) { e.detail.shouldSwap = false; }
         if (openRow) { heldRefresh = true; }
@@ -728,7 +731,7 @@
 
       document.body.addEventListener("htmx:beforeSwap", function (e) {
         var xhr = e.detail.xhr;
-        if (isDrawerRefresh(e)) { return; }
+        if (isBackground(e)) { return; }
         if (!xhr || xhr.status < 400 || xhr.getResponseHeader("HX-Retarget")) { return; }
         e.detail.shouldSwap = false;
         var slot = document.getElementById("flash");
@@ -796,9 +799,9 @@
         app.setAttribute("aria-busy", "false");
       });
       document.body.addEventListener("htmx:beforeRequest", function (e) {
-        // A drawer refresh waits on the server for its answer; the card is not
-        // what is loading, and must not read as busy all the while.
-        if (isDrawerRefresh(e)) { return; }
+        // A background request is not the reader's: the card must not read as
+        // busy while the drawer waits, or while a follow-up does.
+        if (isBackground(e)) { return; }
         app.classList.remove("failed");
         app.setAttribute("aria-busy", "true");
       });

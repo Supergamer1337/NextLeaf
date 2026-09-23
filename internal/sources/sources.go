@@ -13,9 +13,11 @@ import (
 	"nextleaf/internal/library"
 )
 
-// cacheTTL is how long a source's data is reused before a refetch — long enough
-// to keep page loads fast and stay well under provider rate limits.
-const cacheTTL = 10 * time.Minute
+// cacheTTL bounds how long a source's data is reused before a read refetches
+// it. It is a safety net: the series engine refreshes the library ahead of
+// need — on a schedule, and behind any page load that finds it more than a few
+// seconds old — so a read should never find it expired, and wait.
+const cacheTTL = time.Hour
 
 // FromEnv builds the reading source from the environment: every backend whose
 // credentials are present, each cached. It returns the merged Source (nil when

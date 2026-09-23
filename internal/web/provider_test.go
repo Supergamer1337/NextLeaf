@@ -2,9 +2,12 @@ package web
 
 import (
 	"context"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,7 +64,7 @@ func shelfAndCatalogue() library.Source {
 }
 
 func TestAFinishedShelfOffersTheCatalogue(t *testing.T) {
-	h := ready(t, shelfAndCatalogue(), testStore(t))
+	h := warmed(t, shelfAndCatalogue(), testStore(t))
 	body := getBody(t, h, "/view")
 
 	// Hardcover's book may be named on the row, but only as Hardcover's: never
@@ -99,7 +102,7 @@ func TestAFinishedShelfOffersTheCatalogue(t *testing.T) {
 func TestTheWheelNamesWhatEachIdentityHoldsNext(t *testing.T) {
 	// Choosing where to continue and choosing how to track are one gesture,
 	// so each candidate says what it would leave the reader with.
-	h := ready(t, shelfAndCatalogue(), testStore(t))
+	h := warmed(t, shelfAndCatalogue(), testStore(t))
 	body := getBody(t, h, "/view")
 
 	current := between(body, `class="wheel-item" data-to=""`, `</div>`)
@@ -189,7 +192,7 @@ func TestTheDrawerSaysWhenAnswersAreStillComing(t *testing.T) {
 		t.Error("with the drawer closed, nothing says answers are still coming")
 	}
 	// It asks to be told of the next change rather than polling on a timer.
-	if !strings.Contains(status, `hx-trigger="load"`) || !strings.Contains(status, "/view?drawer=1&since=") {
+	if !strings.Contains(status, `hx-trigger="load"`) || !strings.Contains(status, "/view?drawer=1&since=") || !strings.Contains(status, "waiting=1") {
 		t.Errorf("the drawer is not waiting on the next change:\n%s", status)
 	}
 	// Re-inserted on every refresh, a live region would be announced every
@@ -215,19 +218,21 @@ func TestTheDrawerSaysWhenAnswersAreStillComing(t *testing.T) {
 	}
 }
 
-func TestASettledDrawerSaysNothingAndStopsRefreshing(t *testing.T) {
+func TestASettledDrawerSaysNothingButKeepsListening(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
 	body := getBody(t, h, "/view")
 
 	if strings.Contains(body, "Checking") || strings.Contains(body, `class="pending-dot"`) {
 		t.Error("the drawer claims to be still checking when every answer is in")
 	}
-	if strings.Contains(body, "drawer=1") {
-		t.Error("the drawer keeps asking for changes after it has everything")
-	}
 	// Nothing had been outstanding, so there is nothing to announce as done.
 	if strings.Contains(body, "Up to date") {
 		t.Error("an ordinary render announces it is up to date")
+	}
+	// It still listens: the background pass may change what it shows.
+	status := between(body, `id="drawer-status"`, `</span>`)
+	if !strings.Contains(status, "/view?drawer=1&since=") || strings.Contains(status, "waiting=1") {
+		t.Errorf("a settled drawer should listen quietly for changes:\n%s", status)
 	}
 }
 
@@ -235,7 +240,9 @@ func TestTheRefreshAnswersTheMomentThereIsSomethingNew(t *testing.T) {
 	st := testStore(t)
 	engine := series.NewEngine(st, waitingLibrary(), picker.Prefs{IncludeNovellas: true})
 	h := NewHandler(Deps{Source: waitingLibrary(), Engine: engine, Wait: 300 * time.Millisecond})
-	getBody(t, h, "/view")
+	if _, err := engine.View(context.Background()); err != nil { // an answer lands
+		t.Fatal(err)
+	}
 	gen, _ := engine.Changes()
 
 	// Nothing new since this generation: it waits, then answers anyway.
@@ -254,23 +261,22 @@ func TestTheRefreshAnswersTheMomentThereIsSomethingNew(t *testing.T) {
 }
 
 func TestADrawerThatSettlesSaysSoAtOnce(t *testing.T) {
-	// Only a drawer that was waiting refreshes, so a settled refresh is the
-	// moment it finished: that is when it says so.
+	// A drawer that was waiting says so when its last answer lands; one that
+	// was merely listening has nothing to announce.
 	h := ready(t, midSeries(), testStore(t))
-	drawer := getBody(t, h, "/view?drawer=1")
-	status := between(drawer, `id="drawer-status"`, `</span>`)
+	status := between(getBody(t, h, "/view?drawer=1&waiting=1"), `id="drawer-status"`, `</span>`)
 	if !strings.Contains(status, "Up to date") {
 		t.Errorf("a drawer that has just settled does not say so:\n%s", status)
 	}
-	if strings.Contains(status, "hx-get") {
-		t.Error("a settled drawer keeps asking for changes")
+	if strings.Contains(between(getBody(t, h, "/view?drawer=1"), `id="drawer-status"`, `</span>`), "Up to date") {
+		t.Error("a drawer that was never waiting announces it is up to date")
 	}
 }
 
 func TestTheArrowOpensTheSwitcherRatherThanSwitching(t *testing.T) {
 	// The arrow suggests where to continue; the reader sees what that holds,
 	// and what else there is, before the row follows anything.
-	body := getBody(t, ready(t, shelfAndCatalogue(), testStore(t)), "/view")
+	body := getBody(t, warmed(t, shelfAndCatalogue(), testStore(t)), "/view")
 	arrow := between(body, `class="row-follow"`, `>`)
 	if strings.Contains(arrow, "hx-post") {
 		t.Errorf("the arrow switches without showing where it leads:\n%s", arrow)
@@ -329,7 +335,7 @@ func finishedAndUnchecked() library.Source {
 func TestEachUnsettledSeriesIsMarked(t *testing.T) {
 	// The row's own next book is known, so its line reads as settled. Only
 	// the marker says its other series are still being checked.
-	body := getBody(t, ready(t, twoClaimsOneAnswered(), testStore(t)), "/view")
+	body := getBody(t, warmed(t, twoClaimsOneAnswered(), testStore(t)), "/view")
 	row := between(body, `<span class="drawer-name">The Lord of the Rings</span>`, `class="row-tags"`)
 	if !strings.Contains(row, `class="pending-dot"`) {
 		t.Errorf("a row with series still being checked is not marked:\n%s", row)
@@ -341,7 +347,7 @@ func TestEachUnsettledSeriesIsMarked(t *testing.T) {
 
 func TestACollapsedSectionSaysItHoldsAnUnsettledSeries(t *testing.T) {
 	// Finished starts folded, so a marker on the row alone would be hidden.
-	body := getBody(t, ready(t, finishedAndUnchecked(), testStore(t)), "/view")
+	body := getBody(t, warmed(t, finishedAndUnchecked(), testStore(t)), "/view")
 	summary := between(body, `data-group="Finished"`, `</summary>`)
 	if !strings.Contains(summary, `class="pending-dot"`) {
 		t.Errorf("the folded Finished section does not say it holds a series still being checked:\n%s", summary)
@@ -352,7 +358,7 @@ func TestACollapsedSectionSaysItHoldsAnUnsettledSeries(t *testing.T) {
 }
 
 func TestAContinuableSeriesIsCountedApartAndCanBeKeptToItsOwnSeries(t *testing.T) {
-	h := ready(t, shelfAndCatalogue(), testStore(t))
+	h := warmed(t, shelfAndCatalogue(), testStore(t))
 	body := getBody(t, h, "/view")
 
 	sec := section(body, "Continues elsewhere")
@@ -386,5 +392,134 @@ func TestAContinuableSeriesIsCountedApartAndCanBeKeptToItsOwnSeries(t *testing.T
 	rec = post(t, h, "/series/clear", url.Values{"name": {"Three-Body"}, "from": {"drawer"}})
 	if !strings.Contains(section(rec.Body.String(), "Continues elsewhere"), "Three-Body") {
 		t.Error("clearing the keep does not bring the offer back")
+	}
+}
+
+// countingCat is a catalogue that counts every question put to it.
+type countingCat struct {
+	finderStub
+	asked *int32
+}
+
+func (c countingCat) NextInSeries(ctx context.Context, q library.SeriesQuery) (library.Entry, bool, error) {
+	atomic.AddInt32(c.asked, 1)
+	return c.finderStub.NextInSeries(ctx, q)
+}
+func (c countingCat) SeriesByISBN(ctx context.Context, isbns []string) (map[string][]library.Series, error) {
+	atomic.AddInt32(c.asked, 1)
+	return c.finderStub.SeriesByISBN(ctx, isbns)
+}
+
+func TestAPageLoadAsksTheCatalogueNothing(t *testing.T) {
+	// The background pass does the asking; a reader opening the page never
+	// waits on the catalogue. What is not known yet says so, and is fetched.
+	var asked int32
+	hc := countingCat{finderStub: finderStub{
+		namedStub: namedStub{name: "hardcover"},
+		claims: map[string][]library.Series{"9780765377104": {
+			{Name: "Remembrance of Earth's Past", Slug: "remembrance", Position: library.At(3), Source: "hardcover"},
+		}},
+		next: library.Entry{Book: library.Book{Title: "The Redemption of Time"}},
+	}, asked: &asked}
+	gm := namedStub{name: "grimmory", stubSource: stubSource{reads: []library.Entry{{
+		Book: library.Book{
+			Title: "Death's End", Authors: []string{"Cixin Liu"}, ISBNs: []string{"9780765377104"},
+			Series: &library.Series{Name: "Three-Body", Position: library.At(3), Source: "grimmory"},
+		},
+		Status: library.StatusRead, FinishedAt: time.Now().Add(-24 * time.Hour),
+	}}}}
+	lib := library.Combine(hc, gm)
+	engine := series.NewEngine(testStore(t), lib, picker.Prefs{IncludeNovellas: true})
+	h := NewHandler(Deps{Source: lib, Engine: engine})
+
+	getBody(t, h, "/view")
+	if n := atomic.LoadInt32(&asked); n != 0 {
+		t.Errorf("a page load asked the catalogue %d times", n)
+	}
+	select {
+	case <-engine.Nudged():
+	default:
+		t.Error("what the page could not show yet was not handed to the background pass")
+	}
+}
+
+// changingLibrary is a reader's library that can change between refreshes,
+// and hold a fetch until released.
+type changingLibrary struct {
+	mu     sync.Mutex
+	toRead []library.Entry
+	hold   chan struct{}
+}
+
+func (c *changingLibrary) Name() string { return "hardcover" }
+func (c *changingLibrary) CurrentlyReading(context.Context) ([]library.Entry, error) {
+	return nil, nil
+}
+func (c *changingLibrary) RecentReads(context.Context, int) ([]library.Entry, error) {
+	return nil, nil
+}
+func (c *changingLibrary) ToRead(context.Context) ([]library.Entry, error) {
+	c.mu.Lock()
+	hold := c.hold
+	c.mu.Unlock()
+	if hold != nil {
+		<-hold
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]library.Entry(nil), c.toRead...), nil
+}
+
+func TestABookAddedToTheListShowsUpWithoutWaitingForThePage(t *testing.T) {
+	// The page paints at once from what is held. The library is refreshed
+	// behind it, and when that brings something new — a book just added to the
+	// list — the page follows up with it straight away.
+	lib := &changingLibrary{}
+	src := library.NewCached(lib, time.Hour)
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
+	<-engine.RefreshLibrary() // what the background pass had fetched
+	h := NewHandler(Deps{Source: src, Engine: engine, LoadFresh: time.Nanosecond})
+
+	release := make(chan struct{})
+	lib.mu.Lock()
+	lib.toRead = []library.Entry{{Book: library.Book{Title: "Piranesi", Authors: []string{"Susanna Clarke"}}, Status: library.StatusWantToRead}}
+	lib.hold = release
+	lib.mu.Unlock()
+
+	body := getBody(t, h, "/view")
+	if strings.Contains(body, "Piranesi") {
+		t.Fatal("the page waited for the refresh instead of painting what was held")
+	}
+	follow := between(body, `class="card-follow"`, `>`)
+	if !strings.Contains(follow, "/view?after=") {
+		t.Fatalf("a page painted from an old library does not follow up:\n%s", follow)
+	}
+	path := follow[strings.Index(follow, "/view?after="):]
+	path = path[:strings.Index(path, `"`)]
+
+	close(release)
+	after := getBody(t, h, path)
+	if !strings.Contains(after, "Piranesi") {
+		t.Error("the follow-up does not bring in the book just added")
+	}
+
+	// With nothing new since, a follow-up leaves the page alone.
+	_, gen := engine.Library()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/view?after="+strconv.FormatUint(gen, 10), nil))
+	if rec.Code != 204 {
+		t.Errorf("a follow-up with nothing new answered %d, want 204", rec.Code)
+	}
+}
+
+func TestARerolledCardIsNeverFollowedUp(t *testing.T) {
+	// A follow-up redraws the card; after "Not now" that would undo the reroll.
+	lib := &changingLibrary{}
+	src := library.NewCached(lib, time.Hour)
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{})
+	<-engine.RefreshLibrary()
+	h := NewHandler(Deps{Source: src, Engine: engine, LoadFresh: time.Nanosecond})
+	if body := getBody(t, h, "/view?another=1"); strings.Contains(body, "card-follow") {
+		t.Error("a rerolled card is set to be redrawn")
 	}
 }

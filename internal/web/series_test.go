@@ -33,6 +33,18 @@ func ready(t *testing.T, src library.Source, st *series.Store) http.Handler {
 	return NewHandler(Deps{Source: src, Engine: engine})
 }
 
+// warmed is ready with the background pass's work already done. A page load
+// reads answers rather than fetching them, so a test about what the answers
+// show needs them in hand first.
+func warmed(t *testing.T, src library.Source, st *series.Store) http.Handler {
+	t.Helper()
+	engine := series.NewEngine(st, src, picker.Prefs{IncludeNovellas: true})
+	if _, err := engine.View(context.Background()); err != nil {
+		t.Fatalf("warming: %v", err)
+	}
+	return NewHandler(Deps{Source: src, Engine: engine})
+}
+
 func getBody(t *testing.T, h http.Handler, target string) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -233,7 +245,7 @@ func caughtUpSource() *resolverStub {
 }
 
 func TestDrawerFilesACaughtUpSeriesUnderFinished(t *testing.T) {
-	h := ready(t, caughtUpSource(), testStore(t))
+	h := warmed(t, caughtUpSource(), testStore(t))
 	body := getBody(t, h, "/view")
 
 	finished := section(body, "Finished")
@@ -246,7 +258,7 @@ func TestDrawerFilesACaughtUpSeriesUnderFinished(t *testing.T) {
 }
 
 func TestOnlyTheCurrentGroupStartsOpen(t *testing.T) {
-	h := ready(t, caughtUpSource(), testStore(t))
+	h := warmed(t, caughtUpSource(), testStore(t))
 	body := getBody(t, h, "/view")
 
 	block, ok := enclosingDetails(body, ">Finished")
@@ -282,7 +294,7 @@ func TestTheParkedGroupStartsCollapsed(t *testing.T) {
 }
 
 func TestFinishedSitsAboveDropped(t *testing.T) {
-	h := ready(t, caughtUpSource(), testStore(t))
+	h := warmed(t, caughtUpSource(), testStore(t))
 	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
 		t.Fatalf("POST /series/drop: status = %d, want 200", rec.Code)
 	}
@@ -732,7 +744,7 @@ func TestACaughtUpRowOffersNoNumber(t *testing.T) {
 	done.FinishedAt = time.Now().Add(-24 * time.Hour)
 	src := resolverStub{stubSource: stubSource{reads: []library.Entry{done}}}
 
-	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/view"))
+	row := drawerRow(t, getBody(t, warmed(t, src, testStore(t)), "/view"))
 	if !strings.Contains(row, "Nothing left to read") {
 		t.Errorf("a caught-up row does not say it is done: %.300s", row)
 	}
@@ -751,7 +763,7 @@ func TestANextBookWithoutASlotIsNamedWithoutANumber(t *testing.T) {
 		found:      true,
 	}
 
-	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/view"))
+	row := drawerRow(t, getBody(t, warmed(t, src, testStore(t)), "/view"))
 	if !strings.Contains(row, "Next: The Companion<") {
 		t.Errorf("an unnumbered offer is not named plainly: %.300s", row)
 	}
