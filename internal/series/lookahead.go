@@ -32,6 +32,7 @@ type answer struct {
 	freshUntil time.Time
 	err        error
 	failedAt   time.Time
+	fails      int // failures since the last answer
 }
 
 const (
@@ -42,6 +43,11 @@ const (
 	// settledTTL is how long "nothing left" holds for a series its provider
 	// calls complete: it will not grow, so asking daily is wasted.
 	settledTTL = 7 * 24 * time.Hour
+	// giveUpAfter is how many failures running a question takes to be given
+	// up until the scheduled pass. The first may be a hiccup, so it stays
+	// pending and is asked again once its hold ends; one that keeps failing
+	// would otherwise be asked every minute, all day.
+	giveUpAfter = 2
 )
 
 // NewLookahead wraps resolver with a ttl-long cache.
@@ -107,13 +113,14 @@ func (l *Lookahead) Last(q library.SeriesQuery) (library.Entry, bool, bool) {
 	return a.entry, a.found, true
 }
 
-// Failed reports whether q has never been answered and the last try failed:
-// no answer is coming until a later pass asks again.
+// Failed reports whether q has never been answered and has failed often
+// enough to be given up (see giveUpAfter): no answer is coming until the
+// scheduled pass asks again.
 func (l *Lookahead) Failed(q library.SeriesQuery) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	a, ok := l.answers[keyFor(q)]
-	return ok && a.at.IsZero() && a.err != nil
+	return ok && a.at.IsZero() && a.fails >= giveUpAfter
 }
 
 // Next returns the book following q's position, from cache when it is fresh.
@@ -143,6 +150,7 @@ func (l *Lookahead) Next(ctx context.Context, q library.SeriesQuery) (library.En
 		// Another ask may have answered while this one was out.
 		if cur := l.answers[k]; cur.at.IsZero() || cur.at.Before(asked) {
 			cur.err, cur.failedAt = err, now
+			cur.fails++
 			l.answers[k] = cur
 		}
 		l.mu.Unlock()

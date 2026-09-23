@@ -732,20 +732,25 @@ func TestADecisionOnATwinRowLandsOnThatRow(t *testing.T) {
 		}
 	}
 
-	rec := post(t, h, "/series/drop", url.Values{"name": {"The Witcher"}, "source": {"grimmory"}})
-	if rec.Code != 200 {
-		t.Fatalf("drop: status = %d", rec.Code)
-	}
-	if undo := between(html.UnescapeString(rec.Body.String()), `notice--done`, `</p>`); !strings.Contains(undo, `"source":"grimmory"`) {
-		t.Errorf("the undo would clear whichever twin comes first:\n%s", undo)
-	}
-	v, err := engine.View(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, g := range v.Groups {
-		if g.Name == "The Witcher" && (g.Decision == series.Dropped) != (g.Source == "grimmory") {
-			t.Errorf("the %s row: decision = %v, after dropping the grimmory row", g.Source, g.Decision)
+	for _, source := range []string{"grimmory", "hardcover"} {
+		rec := post(t, h, "/series/drop", url.Values{"name": {"The Witcher"}, "source": {source}})
+		if rec.Code != 200 {
+			t.Fatalf("drop: status = %d", rec.Code)
+		}
+		if undo := between(html.UnescapeString(rec.Body.String()), `notice--done`, `</p>`); !strings.Contains(undo, `"source":"`+source+`"`) {
+			t.Errorf("the undo would clear whichever twin comes first:\n%s", undo)
+		}
+		v, err := engine.View(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range v.Groups {
+			if g.Name == "The Witcher" && (g.Decision == series.Dropped) != (g.Source == source) {
+				t.Errorf("the %s row: decision = %v, after dropping the %s row", g.Source, g.Decision, source)
+			}
+		}
+		if rec := post(t, h, "/series/clear", url.Values{"name": {"The Witcher"}, "source": {source}}); rec.Code != 200 {
+			t.Fatalf("clear: status = %d", rec.Code)
 		}
 	}
 }

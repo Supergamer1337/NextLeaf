@@ -42,6 +42,9 @@ type Group struct {
 	// NextPending marks a row whose next book is still to be looked up, so it
 	// does not read as a row with nothing in it.
 	NextPending bool
+	// Unanswered marks a row with a question its catalogue keeps failing to
+	// answer; it waits for the scheduled pass, and is not up to date.
+	Unanswered bool
 	// ContinueOn is set by the engine on a row whose shelf has run out and
 	// whose provider has no catalogue to ask: the same series on a provider
 	// that has one, once that catalogue has confirmed it holds a book past

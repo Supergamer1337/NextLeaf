@@ -334,6 +334,9 @@ type panel struct {
 	// series waiting on one.
 	Pending  bool
 	Checking int
+	// Unanswered is true when a series' catalogue keeps failing it, so the
+	// drawer is not up to date even with nothing pending.
+	Unanswered bool
 }
 
 // Count is how many series the drawer holds, for the toggle's label.
@@ -368,6 +371,7 @@ func group(v series.View) panel {
 			p.Pending = true
 			p.Checking++
 		}
+		p.Unanswered = p.Unanswered || g.Unanswered
 	}
 	return p
 }
@@ -397,7 +401,7 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 		s.refreshDrawer(ctx, w, q.Get("since"), q.Has("waiting"))
 		return
 	case q.Has("after"):
-		s.followUp(ctx, w, q.Get("after"), q.Get("keep"))
+		s.followUp(ctx, w, q.Get("after"), q.Get("keep"), q.Has("stale"))
 		return
 	}
 	reroll := q.Has("another")
@@ -421,9 +425,10 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 
 // followUp answers a page painted from an old library: once the refresh behind
 // it is done, the whole view again if the library changed since generation
-// seen, and 204 — nothing to swap — if it did not. The book keyed keep stays
-// on the card unless something should take its place.
-func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep string) {
+// seen or a source went down or came back since the page said, and 204 —
+// nothing to swap — if neither. The book keyed keep stays on the card unless
+// something should take its place.
+func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep string, stale bool) {
 	after, err := strconv.ParseUint(seen, 10, 64)
 	if s.engine == nil || err != nil {
 		w.WriteHeader(http.StatusNoContent)
@@ -438,11 +443,20 @@ func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep
 			return
 		}
 	}
-	if _, gen := s.engine.Library(); gen <= after {
+	if _, gen := s.engine.Library(); gen <= after && s.anyStale() == stale {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	renderView(w, s.viewOf(ctx, false, false, keep), http.StatusOK)
+}
+
+func (s *server) anyStale() bool {
+	for _, h := range library.HealthOf(s.src) {
+		if h.Stale {
+			return true
+		}
+	}
+	return false
 }
 
 // refreshDrawer renders the drawer alone, for an open page listening for

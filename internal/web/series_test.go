@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -368,6 +369,46 @@ func TestStaleSourcesAreCalledOutOnThePage(t *testing.T) {
 	}
 }
 
+func TestASourceFoundDownBehindThePageIsCalledOutAtOnce(t *testing.T) {
+	// The page paints from what is held while the refresh behind it finds
+	// the source down. That changes no list, but the reader must still hear
+	// of it now, not on the next load.
+	flaky := &breakableSource{stubSource: midSeries()}
+	cached := library.NewCached(flaky, time.Hour)
+	engine := series.NewEngine(testStore(t), cached, picker.Prefs{IncludeNovellas: true})
+	h := NewHandler(Deps{Source: cached, Engine: engine, LoadFresh: time.Nanosecond})
+	<-engine.RefreshLibrary()
+
+	flaky.broken, flaky.hold = true, make(chan struct{})
+	body := getBody(t, h, "/view")
+	if strings.Contains(body, "couldn’t be reached") {
+		t.Fatal("the page knew the source was down before the refresh behind it did")
+	}
+	close(flaky.hold)
+	follow := between(body, `class="card-follow"`, `>`)
+	if !strings.Contains(follow, "/view?after=") {
+		t.Fatalf("the page does not follow up on the refresh behind it:\n%s", follow)
+	}
+	path := html.UnescapeString(follow[strings.Index(follow, "/view?after="):])
+	path = path[:strings.Index(path, `"`)]
+	if after := getBody(t, h, path); !strings.Contains(after, "couldn’t be reached") {
+		t.Error("the follow-up does not say the source is down")
+	}
+}
+
+func TestADrawerThatGaveUpOnASeriesIsNotUpToDate(t *testing.T) {
+	v := series.View{Groups: []series.Group{{Name: "The Witcher", Source: "hardcover", Unanswered: true}}}
+	rec := httptest.NewRecorder()
+	renderView(rec, viewData{Configured: true, Listening: true, Settled: true, Panel: group(v)}, http.StatusOK)
+	status := between(rec.Body.String(), `id="drawer-status"`, `</span>`)
+	if strings.Contains(status, "Up to date") {
+		t.Errorf("the drawer says it is up to date with a series it could not check:\n%s", status)
+	}
+	if !strings.Contains(status, "Couldn’t check") {
+		t.Errorf("the drawer does not say what it could not check:\n%s", status)
+	}
+}
+
 // switchSource files one read book under two orderings.
 func switchSource() stubSource {
 	book := library.Entry{Book: library.Book{
@@ -480,24 +521,33 @@ func TestAnUnplacedSeriesShowsNoPositionRatherThanZero(t *testing.T) {
 type breakableSource struct {
 	stubSource
 	broken bool
+	// hold, when set, keeps a broken source from answering until closed.
+	hold chan struct{}
+}
+
+func (s *breakableSource) down() error {
+	if s.hold != nil {
+		<-s.hold
+	}
+	return errTestDown
 }
 
 func (s *breakableSource) Name() string { return "grimmory" }
 func (s *breakableSource) CurrentlyReading(ctx context.Context) ([]library.Entry, error) {
 	if s.broken {
-		return nil, errTestDown
+		return nil, s.down()
 	}
 	return s.stubSource.CurrentlyReading(ctx)
 }
 func (s *breakableSource) RecentReads(ctx context.Context, limit int) ([]library.Entry, error) {
 	if s.broken {
-		return nil, errTestDown
+		return nil, s.down()
 	}
 	return s.stubSource.RecentReads(ctx, limit)
 }
 func (s *breakableSource) ToRead(ctx context.Context) ([]library.Entry, error) {
 	if s.broken {
-		return nil, errTestDown
+		return nil, s.down()
 	}
 	return s.stubSource.ToRead(ctx)
 }
