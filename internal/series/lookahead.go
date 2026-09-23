@@ -24,16 +24,12 @@ type Lookahead struct {
 type answer struct {
 	entry library.Entry
 	found bool
-	// err is a failed lookup, held only briefly (see failureTTL).
-	err error
-	at  time.Time
+	err   error // a failed lookup, held for failureTTL only
+	at    time.Time
 }
 
-// failureTTL is how long a failed lookup is held before it is tried again. A
-// throttled backend fails every row at once; retrying all of them on every
-// render puts the round trip back into every page load for as long as it
-// stays down. Long enough to stop that, short enough that a series is never
-// hidden for more than a moment.
+// failureTTL is how long a failure is held. Unheld, a throttled backend would
+// be asked again by every render, putting the round trip into every page load.
 const failureTTL = time.Minute
 
 // NewLookahead wraps resolver with a ttl-long cache.
@@ -63,22 +59,26 @@ func keyFor(q library.SeriesQuery) string {
 	return q.Series.Source + "\x00" + q.Series.Slug + "\x00" + key(q.Series.Name) + "\x00" + slot + "\x00" + novellas
 }
 
-// Cached reports whether a fresh answer for q is already held, so callers can
-// budget fresh queries separately from cache hits. A held failure is not an
-// answer: it stops the backend being asked again, but nothing may be said on
-// the strength of it.
+// Cached reports whether Next would answer q without a round trip, so callers
+// can budget fresh queries separately from cache hits. A held failure counts:
+// reading it back costs nothing.
 func (l *Lookahead) Cached(q library.SeriesQuery) bool {
 	k := keyFor(q)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	cached, ok := l.answers[k]
-	return ok && cached.err == nil && l.now().Sub(cached.at) < l.ttl
+	return ok && l.fresh(cached)
+}
+
+func (l *Lookahead) fresh(a answer) bool {
+	ttl := l.ttl
+	if a.err != nil {
+		ttl = failureTTL
+	}
+	return l.now().Sub(a.at) < ttl
 }
 
 // Next returns the book following q's position, from cache when it is fresh.
-// A failure is held too, but only for failureTTL: a throttled backend must not
-// hide a series for a whole day, and must not be asked again by every render
-// in the meantime either.
 func (l *Lookahead) Next(ctx context.Context, q library.SeriesQuery) (library.Entry, bool, error) {
 	// The position is part of the key, so finishing a book asks a new question
 	// rather than reading back the answer for the previous one.
@@ -87,21 +87,16 @@ func (l *Lookahead) Next(ctx context.Context, q library.SeriesQuery) (library.En
 	l.mu.Lock()
 	cached, ok := l.answers[k]
 	l.mu.Unlock()
-	if ok {
-		if age := l.now().Sub(cached.at); cached.err != nil && age < failureTTL {
-			return library.Entry{}, false, cached.err
-		} else if cached.err == nil && age < l.ttl {
-			return cached.entry, cached.found, nil
-		}
+	if ok && l.fresh(cached) {
+		return cached.entry, cached.found, cached.err
 	}
 
 	entry, found, err := l.resolver.NextInSeries(ctx, q)
-
+	if err != nil {
+		entry, found = library.Entry{}, false
+	}
 	l.mu.Lock()
 	l.answers[k] = answer{entry: entry, found: found, err: err, at: l.now()}
 	l.mu.Unlock()
-	if err != nil {
-		return library.Entry{}, false, err
-	}
-	return entry, found, nil
+	return entry, found, err
 }

@@ -114,10 +114,10 @@ func TestLookaheadHoldsAFailureBrieflyThenTriesAgain(t *testing.T) {
 		t.Errorf("resolver called %d times, want 2: the failure is retried once it is stale", r.calls)
 	}
 
-	// And a failure never satisfies a caller asking whether an answer is held.
-	now = day0
-	if l.Cached(query("Mistborn", 3)) {
-		t.Error("a held failure is not an answer")
+	// Reading a held failure back costs no round trip, so it is cached as far
+	// as a caller budgeting its round trips is concerned.
+	if !l.Cached(query("Mistborn", 3)) {
+		t.Error("a freshly held failure should not be budgeted as a round trip")
 	}
 }
 

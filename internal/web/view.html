@@ -98,20 +98,17 @@
   <div class="drawer-body" id="drawer-body" hx-swap-oob="innerHTML">{{template "drawerPanel" .}}</div>
 {{end}}
 
-{{/* The drawer's rows, rendered on their own so the refresh below can bring
-     them back without touching the card. */}}
+{{/* The drawer's rows, on their own so the refresh can fetch them without
+     touching the card. */}}
 {{define "drawerPanel"}}
       {{if .Panel.Pending}}
-      {{/* Answers arrive over the minute after a restart, and a row without
-           one reads exactly like a row with nothing in it. Saying so is half
-           the job; the other half is fetching the answers as they land, since
-           a reader who leaves the page open never asked for a stale one.
-
-           Only the drawer travels, and it brings its own indicator and its
-           own sync: inheriting the page's would dim the card and cancel
-           whatever the reader is doing. */}}
-      <p class="drawer-status" role="status"
-         hx-get="/view?drawer=1" hx-trigger="every 20s"
+      {{/* Refetches the drawer until every answer is in. It brings its own
+           indicator and sync, since the page's would dim the card and cancel
+           the reader's requests, and holds off while a wheel is open, since a
+           swap closes it. Not a live region: it is re-inserted on every
+           refresh, and would be announced every time. */}}
+      <p class="drawer-status"
+         hx-get="/view?drawer=1" hx-trigger="every 20s [!document.querySelector('.drawer-row.spinning')]"
          hx-target="#drawer-body" hx-swap="innerHTML"
          hx-indicator="this" hx-sync="this:drop">Still checking a few series…</p>
       {{end}}
@@ -180,8 +177,7 @@
           </span>
           {{/* The row's one number belongs to the book it is offering, named
                in the same breath; where the reader has been is the switcher's
-               business. The wheel says the same thing about the identities the
-               row could be switched to, in the same words. */}}
+               business. */}}
           {{with .NextLabel}}<span class="drawer-next">{{.}}</span>{{end}}
           {{/* "from" marks the decision as made in the drawer, where the row
                moving is the feedback; the page raises no banner for it. */}}
@@ -249,9 +245,7 @@
     {{if .Source}}<span class="switch-source">{{ucfirst .Source}}</span>{{end}}
     {{if .PosLabel}}<span class="switch-pos">{{.PosLabel}}</span>{{end}}
   </span>
-  {{/* What this identity would leave the reader with, so the choice is made
-       with both destinations in view. Silent until its provider has answered:
-       an unasked identity must not read as a dead end. */}}
+  {{/* What a switch would leave the reader with. */}}
   <span class="switch-next">{{.Next}}</span>
   {{/* Always present, its lines reserved in CSS, so candidates with and
        without descriptions have the same height and cycling never resizes

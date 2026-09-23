@@ -178,6 +178,15 @@ func TestTheDrawerSaysWhenAnswersAreStillComing(t *testing.T) {
 	if !strings.Contains(body, `hx-get="/view?drawer=1"`) {
 		t.Error("nothing refreshes the drawer while it is still filling in")
 	}
+	// But never under a reader spinning a wheel: a swap closes it.
+	if !strings.Contains(body, `every 20s [!document.querySelector('.drawer-row.spinning')]`) {
+		t.Error("the refresh fires even while a wheel is open, and would close it")
+	}
+	// Re-inserted every twenty seconds, a live region would be announced
+	// every twenty seconds.
+	if strings.Contains(between(body, `class="drawer-status"`, `>`), "role=") {
+		t.Error("the status line is a live region, re-announced on every refresh")
+	}
 
 	// The refresh only touches the drawer: re-rendering the card would deal
 	// the reader a different book every twenty seconds.
