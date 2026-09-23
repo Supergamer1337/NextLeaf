@@ -203,10 +203,71 @@ func TestASettledDrawerSaysNothingAndStopsRefreshing(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
 	body := getBody(t, h, "/view")
 
-	if strings.Contains(body, "Checking…") || strings.Contains(body, "drawer-status") {
+	if strings.Contains(body, "Checking…") || strings.Contains(body, "drawer-status") || strings.Contains(body, "pending-dot") {
 		t.Error("the drawer claims to be still checking when every answer is in")
 	}
 	if strings.Contains(body, "drawer=1") {
 		t.Error("the drawer keeps polling after it has everything")
+	}
+}
+
+// twoClaimsOneAnswered is a Hardcover row whose own next book is answered on
+// the first render, while its other series waits for the warm pass.
+func twoClaimsOneAnswered() library.Source {
+	read := library.Entry{
+		Book: library.Book{
+			Title: "The Fellowship of the Ring", Authors: []string{"J.R.R. Tolkien"},
+			Series:      &library.Series{Name: "The Lord of the Rings", Slug: "lotr", Position: library.At(1), Source: "hardcover"},
+			OtherSeries: []library.Series{{Name: "Middle Earth", Slug: "middle-earth", Position: library.At(2), Source: "hardcover"}},
+		},
+		Status: library.StatusRead, FinishedAt: time.Now().Add(-24 * time.Hour),
+	}
+	return finderStub{
+		namedStub: namedStub{name: "hardcover", stubSource: stubSource{reads: []library.Entry{read}}},
+		next:      library.Entry{Book: library.Book{Title: "The Two Towers"}},
+	}
+}
+
+// finishedAndUnchecked is a finished Grimmory row whose Hardcover counterpart
+// cannot be asked yet: it sits in the collapsed Finished section, unsettled.
+func finishedAndUnchecked() library.Source {
+	read := library.Entry{
+		Book: library.Book{
+			Title: "Death's End", Authors: []string{"Cixin Liu"}, ISBNs: []string{"9780765377104"},
+			Series: &library.Series{Name: "Three-Body", Position: library.At(3), Source: "grimmory"},
+		},
+		Status: library.StatusRead, FinishedAt: time.Now().Add(-24 * time.Hour),
+	}
+	hc := slowCat{
+		namedStub: namedStub{name: "hardcover"},
+		claims: map[string][]library.Series{"9780765377104": {
+			{Name: "Remembrance of Earth's Past", Slug: "remembrance", Position: library.At(3), Source: "hardcover"},
+		}},
+	}
+	return library.Combine(hc, namedStub{name: "grimmory", stubSource: stubSource{reads: []library.Entry{read}}})
+}
+
+func TestEachUnsettledSeriesIsMarked(t *testing.T) {
+	// The row's own next book is known, so its line reads as settled. Only
+	// the marker says its other series are still being checked.
+	body := getBody(t, ready(t, twoClaimsOneAnswered(), testStore(t)), "/view")
+	row := between(body, `<span class="drawer-name">The Lord of the Rings</span>`, `class="row-tags"`)
+	if !strings.Contains(row, "pending-dot") {
+		t.Errorf("a row with series still being checked is not marked:\n%s", row)
+	}
+	if !strings.Contains(body, "Next: The Two Towers") {
+		t.Error("the row's own answer should still show")
+	}
+}
+
+func TestACollapsedSectionSaysItHoldsAnUnsettledSeries(t *testing.T) {
+	// Finished starts folded, so a marker on the row alone would be hidden.
+	body := getBody(t, ready(t, finishedAndUnchecked(), testStore(t)), "/view")
+	summary := between(body, `data-group="Finished"`, `</summary>`)
+	if !strings.Contains(summary, "pending-dot") {
+		t.Errorf("the folded Finished section does not say it holds a series still being checked:\n%s", summary)
+	}
+	if strings.Contains(between(body, `data-group="Current"`, `</summary>`), "pending-dot") {
+		t.Error("a section with nothing unsettled is marked")
 	}
 }

@@ -81,6 +81,16 @@ var selectFuncs = template.FuncMap{
 	},
 	// mark renders the logo inline, so it inherits the page's theme colour.
 	"mark": func() template.HTML { return markSVG },
+	// anyPending reports whether a drawer section holds a series still being
+	// checked, so a folded section can say so.
+	"anyPending": func(groups []series.Group) bool {
+		for _, g := range groups {
+			if g.Pending() {
+				return true
+			}
+		}
+		return false
+	},
 }
 
 // shellHTML is the constant document every visit starts from: styles,
@@ -311,13 +321,8 @@ func group(v series.View) panel {
 		default:
 			p.Active = append(p.Active, g)
 		}
-		if g.NextPending {
+		if g.Pending() {
 			p.Pending = true
-		}
-		for _, alt := range g.Alternatives {
-			if alt.Pending {
-				p.Pending = true
-			}
 		}
 	}
 	return p
