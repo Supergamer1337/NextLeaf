@@ -519,6 +519,9 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 		if !needed && (!thorough || g.Kept) {
 			continue
 		}
+		// Taken before choosing what to ask and pausing: a failure recorded
+		// from here on is one this ask meets too.
+		asked := e.now()
 		var isbns []string
 		var asking []*book
 		e.mu.Lock()
@@ -550,7 +553,6 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 			}
 		}
 
-		asked := e.now()
 		answers := map[string][]library.Series{}
 		failed := false
 		for _, f := range e.finders {

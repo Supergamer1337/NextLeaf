@@ -129,6 +129,7 @@ func (l *Lookahead) Next(ctx context.Context, q library.SeriesQuery) (library.En
 	// rather than reading back the answer for the previous one.
 	k := keyFor(q)
 
+	asked := l.now()
 	l.mu.Lock()
 	a := l.answers[k]
 	l.mu.Unlock()
@@ -139,7 +140,6 @@ func (l *Lookahead) Next(ctx context.Context, q library.SeriesQuery) (library.En
 		return a.entry, a.found, nil
 	}
 
-	asked := l.now()
 	entry, found, err := l.resolver.NextInSeries(ctx, q)
 	now := l.now()
 	if err != nil && ctx.Err() != nil {

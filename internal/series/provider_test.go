@@ -1622,3 +1622,43 @@ func TestTwoISBNLookupsFailingAtOnceAreOneFailure(t *testing.T) {
 		t.Errorf("Unanswered = %v, Pending = %v; two lookups failing together gave the row up", g.Unanswered, g.Pending())
 	}
 }
+
+// downFinder fails every lookup by ISBN.
+type downFinder struct {
+	*catalogue
+	finds atomic.Int32
+}
+
+func (c *downFinder) SeriesByISBN(context.Context, []string) (map[string][]library.Series, error) {
+	c.finds.Add(1)
+	return nil, errors.New("rate limited")
+}
+
+func TestAFailureDuringAPausedLookupIsTheSameFailure(t *testing.T) {
+	// The paced pass picks a row and waits its turn. A request that fails on
+	// the same row meanwhile is the same outage as the pass failing after.
+	hc := &downFinder{catalogue: &catalogue{}}
+	hc.name = "hardcover"
+	gm := shelf{name: "grimmory", fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Death's End", "Three-Body", 3, "9780765377104")}}}
+	e := NewEngine(openStore(t), library.Combine(hc, gm), picker.Prefs{IncludeNovellas: true})
+	e.SourceOrder = []string{"hardcover", "grimmory"}
+	ctx := context.Background()
+
+	paced := make(chan struct{})
+	go func() { _, _ = e.compute(ctx, 1<<20, 100*time.Millisecond, true); close(paced) }()
+	time.Sleep(30 * time.Millisecond) // the pass is in its pause
+	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	<-paced
+	if hc.finds.Load() < 2 {
+		t.Fatalf("looked up %d times; the test needs both to ask", hc.finds.Load())
+	}
+	v, err := e.viewWithin(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "Three-Body"); g.Unanswered {
+		t.Error("one outage, met twice, gave the row up")
+	}
+}
