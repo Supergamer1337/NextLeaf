@@ -94,13 +94,19 @@ var selectFuncs = template.FuncMap{
 	},
 }
 
-// shellHTML is the constant document every visit starts from: styles,
-// masthead, and the mount the card and drawer are morphed into. It reads no
-// source, so it cannot be slow and it cannot fail.
+// shellTmpl is the whole page: styles, masthead, and the places the card and
+// drawer live.
+var shellTmpl = template.Must(template.New("layout.html").Funcs(selectFuncs).ParseFS(templateFS, "layout.html", "view.html"))
+
+// shellPage is what the page is rendered from: a view to carry, or none.
+type shellPage struct{ View *viewData }
+
+// shellHTML is the page with no view in it, for a cold start: a skeleton, and
+// a request for the card once the page is up. It reads nothing, so it cannot
+// be slow and it cannot fail.
 var shellHTML = func() []byte {
-	t := template.Must(template.New("layout.html").Funcs(selectFuncs).ParseFS(templateFS, "layout.html", "view.html"))
 	var buf bytes.Buffer
-	if err := t.Execute(&buf, nil); err != nil {
+	if err := shellTmpl.Execute(&buf, shellPage{}); err != nil {
 		panic(err) // embedded and data-free: a failure here is a broken build
 	}
 	return buf.Bytes()
@@ -148,7 +154,7 @@ func NewHandler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	// {$} matches "/" exactly, so unknown paths fall through to 404 instead of
 	// being swallowed by a catch-all root pattern.
-	mux.HandleFunc("GET /{$}", handleShell)
+	mux.HandleFunc("GET /{$}", s.handleShell)
 	mux.HandleFunc("GET /view", s.handleView)
 	mux.HandleFunc("POST /series/{action}", s.handleSeriesDecision)
 	mux.HandleFunc("GET /cover/{source}/{id}", s.handleCover)
@@ -359,11 +365,27 @@ func group(v series.View) panel {
 	return p
 }
 
-// handleShell serves the constant document. It never reads a source, so the
-// browser paints immediately and the card arrives on its own.
-func handleShell(w http.ResponseWriter, _ *http.Request) {
+// handleShell serves the page. With the library held it carries the card, so
+// the recommendation is in the first paint; rendering it reads only what is
+// held, and waits on no backend. A cold start, with nothing held yet, gets
+// the skeleton, and the card follows.
+func (s *server) handleShell(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(shellHTML)
+	if s.engine != nil {
+		if at, _ := s.engine.Library(); at.IsZero() {
+			_, _ = w.Write(shellHTML)
+			return
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	data := s.pageView(ctx, false)
+	var buf bytes.Buffer
+	if err := shellTmpl.Execute(&buf, shellPage{View: &data}); err != nil {
+		_, _ = w.Write(shellHTML) // the skeleton still fetches the card
+		return
+	}
+	_, _ = buf.WriteTo(w)
 }
 
 // handleView renders the card and drawer as one fragment. "another" flips
@@ -387,7 +409,12 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 		s.followUp(ctx, w, q.Get("after"))
 		return
 	}
-	reroll := q.Has("another")
+	renderView(w, s.pageView(ctx, q.Has("another")), http.StatusOK)
+}
+
+// pageView is the view a page load shows: painted from what is held, with an
+// old library refreshed behind it and a follow-up set for the result.
+func (s *server) pageView(ctx context.Context, reroll bool) viewData {
 	var followUp string
 	if s.engine != nil {
 		at, gen := s.engine.Library()
@@ -403,7 +430,7 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 	}
 	data := s.viewOf(ctx, reroll, false)
 	data.FollowUp = followUp
-	renderView(w, data, http.StatusOK)
+	return data
 }
 
 // followUp answers a page painted from an old library: once the refresh behind

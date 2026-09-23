@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"nextleaf/internal/library"
+	"nextleaf/internal/picker"
+	"nextleaf/internal/series"
 )
 
 // stubSource is a library.Source with canned results for handler tests.
@@ -442,42 +444,58 @@ func (c *countingSource) RecentReads(ctx context.Context, n int) ([]library.Entr
 	return c.stubSource.RecentReads(ctx, n)
 }
 
-// The shell is the same document for everyone. It reads no source, so it can
-// neither be slow nor fail, whatever state the library is in.
-func TestShellIsConstantAndReadsNoSource(t *testing.T) {
+// A cold start has nothing held to paint from. The shell then reads no source,
+// so a cold backend cannot make it slow, and the card is fetched after it.
+func TestAColdShellPaintsTheSkeletonAndReadsNoSource(t *testing.T) {
 	src := &countingSource{stubSource: midSeries()}
-	h := ready(t, src, testStore(t))
-
-	first, second := getBody(t, h, "/"), getBody(t, h, "/")
-	if first != second {
-		t.Error("the shell differs between requests, so it is not constant")
-	}
+	shell := getBody(t, ready(t, src, testStore(t)), "/")
 	if src.reads > 0 {
-		t.Errorf("the shell read the source %d times, want 0", src.reads)
+		t.Errorf("a cold shell read the source %d times, want 0", src.reads)
 	}
-	// The drawer shell is part of the page, but nothing that depends on the
-	// library may be: no card, and no series rows.
-	if strings.Contains(first, `class="rec-title"`) || strings.Contains(first, `class="drawer-row"`) {
-		t.Error("the shell carries card or series content, which belongs to /view")
+	if strings.Contains(shell, `class="rec-title"`) || strings.Contains(shell, `class="drawer-row"`) {
+		t.Error("a cold shell carries card or series content it had nothing to build from")
 	}
-	if !strings.Contains(first, `<div class="drawer-body" id="drawer-body"></div>`) {
-		t.Error("the shell has no empty drawer body for the fragment to fill")
-	}
-	if !strings.Contains(first, `hx-get="/view"`) {
-		t.Error("the shell never fetches the view, so the card would never arrive")
+	if !strings.Contains(shell, `class="waiting waiting--initial"`) || !strings.Contains(shell, `hx-get="/view"`) {
+		t.Error("a cold shell has no skeleton, or never fetches the card")
 	}
 }
 
-// The shell owns the only skeleton, shown before the first card. The fragment
-// must not carry one: after the first load the card stays on screen and is
-// morphed in place, never blanked while a request is in flight.
-func TestOnlyTheShellCarriesASkeleton(t *testing.T) {
-	h := ready(t, midSeries(), testStore(t))
-	if shell := getBody(t, h, "/"); !strings.Contains(shell, `class="waiting waiting--initial"`) {
-		t.Error("the shell has no skeleton to show before the first card arrives")
+// Once the library is held, the first page carries the recommendation itself:
+// no second round trip, and nothing waiting on script before the card shows.
+func TestTheFirstPageCarriesTheRecommendation(t *testing.T) {
+	st := testStore(t)
+	engine := series.NewEngine(st, midSeries(), picker.Prefs{IncludeNovellas: true})
+	<-engine.RefreshLibrary() // what the background pass had fetched
+	shell := getBody(t, NewHandler(Deps{Source: midSeries(), Engine: engine}), "/")
+
+	if !strings.Contains(shell, `class="rec-title"`) {
+		t.Fatal("the first page does not carry the recommendation")
 	}
-	if frag := getBody(t, h, "/view"); strings.Contains(frag, `class="waiting`) {
-		t.Error("the fragment carries a skeleton, so a swap would blank the card instead of morphing it")
+	app := between(shell, `<div id="app"`, `>`)
+	if strings.Contains(app, `hx-trigger="load"`) || !strings.Contains(app, `aria-busy="false"`) {
+		t.Errorf("the page fetches or waits for a card it already carries:\n%s", app)
+	}
+	if strings.Contains(shell, `class="waiting waiting--initial"`) {
+		t.Error("a page with its card still shows the skeleton")
+	}
+	// The drawer's pieces sit in their own places, once each.
+	for _, id := range []string{`id="drawer-toggle"`, `id="drawer-status"`, `id="drawer-body"`} {
+		if n := strings.Count(shell, id); n != 1 {
+			t.Errorf("%s appears %d times, want once", id, n)
+		}
+	}
+	if !strings.Contains(between(shell, `id="drawer-body"`, `</aside>`), `class="drawer-row"`) {
+		t.Error("the series rows are not in the drawer")
+	}
+}
+
+// The card's cover is the one image the reader is waiting for: it is fetched
+// first, not deferred with the rest.
+func TestTheCardCoverIsFetchedFirst(t *testing.T) {
+	src := stubSource{toRead: []library.Entry{{Book: library.Book{Title: "Piranesi", CoverURL: "https://example.com/p.jpg"}}}}
+	cover := between(getBody(t, ready(t, src, testStore(t)), "/view"), `<img class="cover"`, `>`)
+	if strings.Contains(cover, `loading="lazy"`) || !strings.Contains(cover, `fetchpriority="high"`) {
+		t.Errorf("the card's cover waits its turn with the rest:\n%s", cover)
 	}
 }
 

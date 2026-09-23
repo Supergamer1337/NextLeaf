@@ -209,6 +209,10 @@
     .drawer-close { color: var(--muted); text-decoration: none; font-size: 1.4rem; line-height: 1; }
     .drawer-close:hover { color: var(--moss); }
     .drawer-body { overflow-y: auto; padding: 1rem 1.4rem 2rem; }
+    /* Not rendered until the drawer is first opened, so its lazy covers are
+       not fetched alongside the card's. The drawer sits just off screen, well
+       inside the distance a lazy image is loaded from. */
+    .drawer:not(.visited) .drawer-body { content-visibility: hidden; }
 
     .drawer-group + .drawer-group { margin-top: 1.4rem; }
     .drawer-label {
@@ -503,6 +507,12 @@
       </button>
     </header>
 
+    {{/* With the library held, the page carries its card: nothing waits on a
+         second request, or on script, before the recommendation shows. Only
+         a cold start, with nothing to paint from yet, fetches it after. */}}
+    {{with .View}}
+    <div id="app" aria-live="polite" aria-busy="false">{{template "card" .}}</div>
+    {{else}}
     <div id="app" hx-get="/view" hx-trigger="load" aria-live="polite" aria-busy="true">
       <div class="deck" id="deck">
         <div class="waiting waiting--initial" aria-hidden="true">{{template "waitingCard"}}</div>
@@ -510,18 +520,19 @@
           <button class="btn btn--quiet" type="button" hx-get="/view" hx-disabled-elt="this">Try again</button></p>
       </div>
     </div>
+    {{end}}
   </main>
 
-  <a class="drawer-toggle" id="drawer-toggle" href="#series" hidden>Series <span class="drawer-count">0</span></a>
+  {{with .View}}{{template "drawerToggle" .}}{{else}}<a class="drawer-toggle" id="drawer-toggle" href="#series" hidden>Series <span class="drawer-count">0</span></a>{{end}}
   <div class="drawer-scrim" aria-hidden="true"></div>
   <aside class="drawer" id="series" aria-label="Series you're tracking">
     <div class="drawer-head">
       <h2 class="drawer-title">Series</h2>
-      <span class="drawer-status is-idle" id="drawer-status"></span>
+      {{with .View}}{{template "drawerStatus" .}}{{else}}<span class="drawer-status is-idle" id="drawer-status"></span>{{end}}
       <a class="drawer-close" href="#" aria-label="Close">&times;</a>
     </div>
     <div class="drawer-dim"></div>
-    <div class="drawer-body" id="drawer-body"></div>
+    <div class="drawer-body" id="drawer-body">{{with .View}}{{template "drawerPanel" .}}{{end}}</div>
   </aside>
 
   <script src="/static/htmx.min.js" defer></script>
@@ -542,7 +553,12 @@
       function syncDrawer() {
         var open = location.hash === "#series";
         var d = drawer();
-        if (d) { d.classList.toggle("open", open); }
+        if (d) {
+          d.classList.toggle("open", open);
+          // Until first opened, the drawer's covers are not the reader's
+          // business: they would only compete with the card's for the wire.
+          if (open) { d.classList.add("visited"); }
+        }
         var scrim = document.querySelector(".drawer-scrim");
         if (scrim) { scrim.classList.toggle("open", open); }
       }
@@ -700,8 +716,11 @@
         document.querySelectorAll("details.drawer-group").forEach(function (d) {
           folds[d.dataset.group] = d.open;
         });
+        // A drawer never opened has no scroll to keep, and reading one would
+        // lay out what it is holding back.
         var body = document.getElementById("drawer-body");
-        scrolled = body ? body.scrollTop : 0;
+        var d = drawer();
+        scrolled = body && d && d.classList.contains("visited") ? body.scrollTop : 0;
       });
       document.body.addEventListener("htmx:afterSwap", function () {
         if (!folds) { return; }
@@ -710,7 +729,8 @@
         });
         folds = null;
         var body = document.getElementById("drawer-body");
-        if (body) { body.scrollTop = scrolled; }
+        var d = drawer();
+        if (body && d && d.classList.contains("visited")) { body.scrollTop = scrolled; }
       });
 
       // Error responses are swapped by configuration, so a refusal can reach
@@ -759,7 +779,10 @@
       // snapped invisible and faded back in — a cached one immediately, an
       // uncached one when its pixels arrive — so arrival always reads the
       // same. A re-render of the same book keeps its cover still.
-      var shownCover = null;
+      // A card painted with the page is already where it belongs: only a cover
+      // that changes after that fades in.
+      var firstCover = document.querySelector("img.cover");
+      var shownCover = firstCover ? firstCover.getAttribute("src") : null;
       function settleCovers() {
         var img = document.querySelector("img.cover");
         if (!img) { shownCover = null; return; }
