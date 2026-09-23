@@ -904,8 +904,8 @@ func TestKeepingASeriesEndsTheOfferToContinueElsewhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := groupNamed(t, v, "Three-Body")
-	if g.Decision != Kept || g.ContinueOn != nil || !g.CaughtUp {
-		t.Errorf("Decision = %v, ContinueOn = %+v, CaughtUp = %v; want a finished row with no offer", g.Decision, g.ContinueOn, g.CaughtUp)
+	if !g.Kept || g.ContinueOn != nil || !g.CaughtUp {
+		t.Errorf("Kept = %v, ContinueOn = %+v, CaughtUp = %v; want a finished row with no offer", g.Kept, g.ContinueOn, g.CaughtUp)
 	}
 	if g.Pending() {
 		t.Error("a row that has turned its continuations down is not waiting on them")
@@ -915,7 +915,7 @@ func TestKeepingASeriesEndsTheOfferToContinueElsewhere(t *testing.T) {
 	}
 }
 
-func TestClearingAKeepOffersAgain(t *testing.T) {
+func TestEndingAKeepOffersAgain(t *testing.T) {
 	e, _, _ := continuable(t)
 	ctx := context.Background()
 	if _, err := e.View(ctx); err != nil {
@@ -924,19 +924,19 @@ func TestClearingAKeepOffersAgain(t *testing.T) {
 	if _, err := e.Decide(ctx, "keep", "Three-Body", ""); err != nil {
 		t.Fatal(err)
 	}
-	uncached, err := e.Decide(ctx, "clear", "Three-Body", "")
+	uncached, err := e.Decide(ctx, "unkeep", "Three-Body", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !uncached {
-		t.Error("clearing a keep revives lookups the engine has been skipping, so the re-render needs a budget")
+		t.Error("ending a keep revives lookups the engine has been skipping, so the re-render needs a budget")
 	}
 	v, err := e.View(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g := groupNamed(t, v, "Three-Body"); g.Decision != Active || g.ContinueOn == nil {
-		t.Errorf("Decision = %v, ContinueOn = %+v; want the offer back", g.Decision, g.ContinueOn)
+	if g := groupNamed(t, v, "Three-Body"); g.Kept || g.ContinueOn == nil {
+		t.Errorf("Kept = %v, ContinueOn = %+v; want the offer back", g.Kept, g.ContinueOn)
 	}
 }
 
@@ -957,8 +957,8 @@ func TestAKeptSeriesStillCarriesOnByItself(t *testing.T) {
 		SourceOrder: e.SourceOrder,
 	})
 	g := groupNamed(t, v, "Three-Body")
-	if g.Decision != Kept {
-		t.Errorf("Decision = %v: a book of the kept series is no reason to drop the keep", g.Decision)
+	if !g.Kept {
+		t.Error("a book of the kept series is no reason to drop the keep")
 	}
 	if g.NextTitle != "Three-Body 4" {
 		t.Errorf("Next = %q: the kept series should still carry on by itself", g.NextTitle)
@@ -1281,5 +1281,108 @@ func TestARowNotYetLookedUpByISBNSaysItIsStillChecking(t *testing.T) {
 	}
 	if g := groupNamed(t, v, "Three-Body"); g.Pending() {
 		t.Error("a row whose lookup found nothing still says it is checking")
+	}
+}
+
+func TestAKeepOutlivesEveryOtherDecisionAndItsUndo(t *testing.T) {
+	// Keeping to a series is its own standing fact. Dropping and undropping
+	// it, or a park that is spent, says nothing about which ordering the
+	// reader follows; only "Suggest others" ends a keep.
+	for _, then := range []string{"drop", "park", "pin"} {
+		t.Run(then, func(t *testing.T) {
+			e, _, _ := continuable(t)
+			ctx := context.Background()
+			if _, err := e.View(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for _, action := range []string{"keep", then, "clear"} {
+				if _, err := e.Decide(ctx, action, "Three-Body", ""); err != nil {
+					t.Fatalf("%s: %v", action, err)
+				}
+			}
+			v, err := e.View(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if g := groupNamed(t, v, "Three-Body"); !g.Kept || g.ContinueOn != nil {
+				t.Errorf("after keep, %s and its undo: Kept = %v, ContinueOn = %+v; the keep was lost", then, g.Kept, g.ContinueOn)
+			}
+
+			if _, err := e.Decide(ctx, "unkeep", "Three-Body", ""); err != nil {
+				t.Fatal(err)
+			}
+			if v, err = e.View(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if g := groupNamed(t, v, "Three-Body"); g.Kept || g.ContinueOn == nil {
+				t.Errorf("after Suggest others: Kept = %v, ContinueOn = %+v; want the offer back", g.Kept, g.ContinueOn)
+			}
+		})
+	}
+}
+
+func TestADecisionTellsWhoeverIsListening(t *testing.T) {
+	// Another tab's drawer, or this one's, must hear of a decision at once,
+	// not at its next timeout.
+	e, _, _ := continuable(t)
+	ctx := context.Background()
+	if _, err := e.View(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gen, changed := e.Changes()
+	if _, err := e.Decide(ctx, "park", "Three-Body", ""); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	default:
+		t.Error("a decision was recorded without telling anyone listening")
+	}
+	if now, _ := e.Changes(); now <= gen {
+		t.Errorf("generation = %d, want it past %d", now, gen)
+	}
+}
+
+func TestAKeptRowFollowingAFoundSeriesIsFoundAgain(t *testing.T) {
+	// Keeping turns down other orderings; it does not stop the row from
+	// following the one it switched to. With the ISBN match lost, that series
+	// must be found again rather than asked for by name alone.
+	hcClaim := library.Series{Name: "Remembrance of Earth's Past", Slug: "remembrance", Position: library.At(3), Source: "hardcover"}
+	newCatalogue := func() *catalogue {
+		return &catalogue{
+			name:   "hardcover",
+			byISBN: map[string][]library.Series{"9780765377104": {hcClaim}},
+			next:   library.Entry{Book: library.Book{Title: "The Redemption of Time"}}, found: true,
+		}
+	}
+	gm := shelf{name: "grimmory", fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Death's End", "Three-Body", 7, "9780765377104")}}}
+	store := openStore(t)
+	ctx := context.Background()
+	first := NewEngine(store, library.Combine(newCatalogue(), gm), picker.Prefs{})
+	if _, err := first.View(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range [][2]string{{"switch", hcClaim.Name}, {"keep", ""}} {
+		name := "Three-Body"
+		if d[0] == "keep" {
+			name = hcClaim.Name
+		}
+		if _, err := first.Decide(ctx, d[0], name, d[1]); err != nil {
+			t.Fatalf("%s: %v", d[0], err)
+		}
+	}
+	if err := store.PruneCache(ctx, time.Now().AddDate(100, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+
+	hc := newCatalogue()
+	if _, err := NewEngine(store, library.Combine(hc, gm), picker.Prefs{}).View(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if hc.finds == 0 {
+		t.Error("a kept row following a found series never looked it up again")
+	}
+	if len(hc.asked) == 0 || hc.asked[0].Series.Slug != "remembrance" {
+		t.Errorf("asked = %+v, want hardcover's own identifier, not the name alone", hc.asked)
 	}
 }

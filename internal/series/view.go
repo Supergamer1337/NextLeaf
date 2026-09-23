@@ -24,6 +24,9 @@ type Group struct {
 	Length   int
 	CoverURL string   // cover of the furthest book read
 	Decision Decision // standing decision after spent statements expire
+	// Kept marks a series the reader keeps to as tracked: other providers'
+	// orderings are not offered as a way to continue it.
+	Kept bool
 
 	// Next describes the next book: from the shelf when NextFromShelf, else
 	// filled by the engine from a catalogue lookup.
@@ -117,9 +120,6 @@ func (g Group) NextLabel() string {
 // NextBook names what this identity holds next: its title and, when known,
 // its slot.
 func (a Alternative) NextBook() string { return nextBook(a.NextTitle, a.NextPosition) }
-
-// Kept reports whether the reader keeps to this series as tracked.
-func (g Group) Kept() bool { return g.Decision == Kept }
 
 func nextLabel(checked, pending bool, title string, pos *float64) string {
 	switch {
@@ -611,7 +611,9 @@ func applyStatements(groups map[string]*Group, books []*book, statements []State
 					g.Decision = Dropped
 				}
 			case KindKeep:
-				g.Decision = Kept
+				g.Kept = true
+			case KindUnkeep:
+				g.Kept = false
 			case KindPin:
 				g.Decision = Pinned
 				g.pinnedBook, g.pinMadeAt = st.PinnedBook, st.MadeAt

@@ -26,10 +26,6 @@ const (
 	// Pinned makes the series the next thing to read; it clears once the
 	// pinned book is read or started.
 	Pinned
-	// Kept keeps to the series as tracked: other providers' orderings are no
-	// longer offered as a way to continue it. The series itself still carries
-	// on by its own books; only clearing ends a keep.
-	Kept
 )
 
 func (d Decision) String() string {
@@ -40,8 +36,6 @@ func (d Decision) String() string {
 		return "dropped"
 	case Pinned:
 		return "pinned"
-	case Kept:
-		return "kept"
 	default:
 		return "active"
 	}
@@ -49,13 +43,19 @@ func (d Decision) String() string {
 
 // Statement kinds: what the reader can say about a series. A statement is
 // appended, never edited; it stops applying when its predicate says so.
+//
+// KindKeep keeps to a series as tracked, turning other providers' orderings
+// down, and only KindUnkeep ends it. It is a standing fact beside the
+// decision, not one: parking or dropping a kept series, and undoing that,
+// leave the keep where it was.
 const (
 	KindPark   = "parked"
 	KindDrop   = "dropped"
 	KindPin    = "pinned"
-	KindKeep   = "kept"
 	KindClear  = "clear"
 	KindPrefer = "prefer"
+	KindKeep   = "kept"
+	KindUnkeep = "unkept"
 )
 
 // Key normalises a series name the way the view matches on it: case- and

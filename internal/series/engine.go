@@ -492,11 +492,13 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 	spent := 0
 	for i := range v.Groups {
 		g := &v.Groups[i]
-		if g.Decision == Dropped || g.Decision == Kept {
+		if g.Decision == Dropped {
 			continue
 		}
-		needed := e.unclaimed(g) || (e.shelfOnly(g) && !e.hasContinuation(g))
-		if !needed && !thorough {
+		// A kept row turns other orderings down, so it looks for none; but the
+		// one it follows must still be found again once its match is lost.
+		needed := e.unclaimed(g) || (!g.Kept && e.shelfOnly(g) && !e.hasContinuation(g))
+		if !needed && (!thorough || g.Kept) {
 			continue
 		}
 		var isbns []string
@@ -603,14 +605,14 @@ func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Dur
 		e.next(ctx, g, &spent, budget, pause, thorough)
 	})
 	rows(e.shelfOnly, func(g *Group) {
-		if g.Decision == Kept {
+		if g.Kept {
 			return
 		}
 		g.finding = !e.hasContinuation(g) && e.unasked(g)
 		e.check(ctx, g, &spent, budget, pause, stuck)
 		g.ContinueOn = e.offer(g)
 	})
-	rows(func(g *Group) bool { return !e.shelfOnly(g) && g.Decision != Kept }, func(g *Group) {
+	rows(func(g *Group) bool { return !e.shelfOnly(g) && !g.Kept }, func(g *Group) {
 		e.check(ctx, g, &spent, budget, pause, wheel)
 	})
 	e.fillTwins(v)
@@ -863,9 +865,11 @@ func (e *Engine) Decide(ctx context.Context, action, name, to string) (uncached 
 		st.Kind, st.PinnedBook = KindPin, group.NextKey
 	case "keep":
 		st.Kind = KindKeep
+	case "unkeep":
+		st.Kind, uncached = KindUnkeep, true
 	case "clear":
 		st.Kind = KindClear
-		uncached = group.Decision == Dropped || group.Decision == Kept
+		uncached = group.Decision == Dropped
 	case "switch":
 		alt, ok := alternativeNamed(group, to)
 		if !ok {
@@ -876,7 +880,13 @@ func (e *Engine) Decide(ctx context.Context, action, name, to string) (uncached 
 	default:
 		return false, fmt.Errorf("%w: %q", ErrUnknownAction, action)
 	}
-	return uncached, e.store.Append(ctx, st)
+	if err := e.store.Append(ctx, st); err != nil {
+		return false, err
+	}
+	// Whoever is listening — this tab's drawer, or another tab's — hears of
+	// it at once, and a render made just before it is superseded.
+	e.bump()
+	return uncached, nil
 }
 
 // Sentinel errors let the web layer map refusals to the right status codes.
