@@ -219,7 +219,8 @@ func TestLookaheadDoesNotHoldAnAskItsCallerCancelled(t *testing.T) {
 	// still to be answered.
 	r := &countingResolver{err: context.Canceled}
 	l := NewLookahead(r, 24*time.Hour)
-	l.now = func() time.Time { return day0 }
+	now := day0
+	l.now = func() time.Time { return now }
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, _, err := l.Next(ctx, query("Mistborn", 3)); err == nil {
@@ -229,13 +230,20 @@ func TestLookaheadDoesNotHoldAnAskItsCallerCancelled(t *testing.T) {
 		t.Error("a cancelled ask was held as the catalogue's failure")
 	}
 
-	// A catalogue that fails on its own is another matter.
+	// A catalogue that fails on its own is another matter: once may be a
+	// hiccup, twice running and the question is given up for now.
 	r.err = errors.New("unauthorized")
-	if _, _, err := l.Next(context.Background(), query("Mistborn", 3)); err == nil {
-		t.Fatal("Next should surface the resolver's error")
+	for i := range giveUpAfter {
+		if l.Failed(query("Mistborn", 3)) {
+			t.Fatalf("given up after %d failures, want %d", i, giveUpAfter)
+		}
+		if _, _, err := l.Next(context.Background(), query("Mistborn", 3)); err == nil {
+			t.Fatal("Next should surface the resolver's error")
+		}
+		now = now.Add(failureTTL + time.Second)
 	}
 	if !l.Failed(query("Mistborn", 3)) {
-		t.Error("a failed ask is not marked failed")
+		t.Error("a question failing every time is never given up")
 	}
 }
 

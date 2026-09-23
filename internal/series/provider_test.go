@@ -30,6 +30,8 @@ type catalogue struct {
 	byISBN  map[string][]library.Series
 	finds   int
 	findErr error
+	// onFind, when set, runs as a lookup by ISBN is made.
+	onFind func()
 	// answer overrides next/found per query, for a catalogue whose reply
 	// depends on which of its series is asked about.
 	answer  func(library.SeriesQuery) (library.Entry, bool)
@@ -55,6 +57,9 @@ func (c *catalogue) NextInSeries(_ context.Context, q library.SeriesQuery) (libr
 }
 func (c *catalogue) SeriesByISBN(_ context.Context, isbns []string) (map[string][]library.Series, error) {
 	c.finds++
+	if c.onFind != nil {
+		c.onFind()
+	}
 	if c.findErr != nil {
 		return nil, c.findErr
 	}
@@ -1407,7 +1412,8 @@ func TestAFailedLookupStopsSayingItIsChecking(t *testing.T) {
 	// A question that fails every time, such as an expired token, has no
 	// answer coming before the next scheduled pass. Saying "Checking…" until
 	// then leaves the drawer pulsing forever, and every render that sees it
-	// nudges another pass a minute later, all day.
+	// nudges another pass a minute later, all day. One failure may be a
+	// hiccup, though, so it is tried once more before the row goes quiet.
 	hc := &catalogue{fakeSource: fakeSource{reads: []library.Entry{readOn("hardcover", "The Last Wish", "The Witcher", 1)}},
 		nextErr: errors.New("unauthorized"), next: library.Entry{Book: library.Book{Title: "Sword of Destiny"}}, found: true}
 	e := twoProviders(t, hc, shelf{})
@@ -1418,13 +1424,24 @@ func TestAFailedLookupStopsSayingItIsChecking(t *testing.T) {
 	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(failureTTL + time.Second) // no longer held, but not yet retried
 	v, err := e.viewWithin(ctx, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g := groupNamed(t, v, "The Witcher"); g.Pending() || g.NextLabel() != "" {
-		t.Errorf("after a failed lookup: Pending = %v, label = %q; want it to say nothing", g.Pending(), g.NextLabel())
+	if g := groupNamed(t, v, "The Witcher"); !g.Pending() || g.Unanswered {
+		t.Errorf("after one failure: Pending = %v, Unanswered = %v; want it tried again soon", g.Pending(), g.Unanswered)
+	}
+
+	now = now.Add(failureTTL + time.Second)
+	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(failureTTL + time.Second) // no longer held, but not yet retried
+	if v, err = e.viewWithin(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "The Witcher"); g.Pending() || g.NextLabel() != "" || !g.Unanswered {
+		t.Errorf("after failing twice: Pending = %v, label = %q, Unanswered = %v; want it to say nothing, and be known unanswered", g.Pending(), g.NextLabel(), g.Unanswered)
 	}
 
 	// The next pass tries again, and an answer shows once there is one.
@@ -1435,8 +1452,8 @@ func TestAFailedLookupStopsSayingItIsChecking(t *testing.T) {
 	if v, err = e.viewWithin(ctx, 0); err != nil {
 		t.Fatal(err)
 	}
-	if g := groupNamed(t, v, "The Witcher"); g.NextTitle != "Sword of Destiny" {
-		t.Errorf("after the catalogue recovered: Next = %q, want the pass to have asked again", g.NextTitle)
+	if g := groupNamed(t, v, "The Witcher"); g.NextTitle != "Sword of Destiny" || g.Unanswered {
+		t.Errorf("after the catalogue recovered: Next = %q, Unanswered = %v; want the pass to have asked again", g.NextTitle, g.Unanswered)
 	}
 }
 
@@ -1445,13 +1462,22 @@ func TestAFailedIdentityLookupStopsSayingItIsChecking(t *testing.T) {
 	hc.nextErr = errors.New("unauthorized")
 	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Book Three", "Zzz Saga", 3, "9780000000001")}}}
 	e := twoProviders(t, hc, gm)
+	now := day0
+	e.now, e.lookahead.now = func() time.Time { return now }, func() time.Time { return now }
 	ctx := context.Background()
 
-	v, err := e.compute(ctx, 1<<20, 0, true)
-	if err != nil {
-		t.Fatal(err)
+	var v View
+	for range 2 {
+		var err error
+		if v, err = e.compute(ctx, 1<<20, 0, true); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(failureTTL + time.Second)
 	}
 	g := groupNamed(t, v, "Zzz Saga")
+	if !g.Unanswered {
+		t.Error("a row whose lookups all failed is not known unanswered")
+	}
 	if g.Pending() {
 		t.Error("the row still says it is checking after every lookup failed")
 	}
@@ -1472,17 +1498,45 @@ func TestAFailedISBNLookupStopsSayingItIsChecking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g := groupNamed(t, v, "Three-Body"); g.Pending() {
-		t.Error("a row whose ISBN lookup failed still says it is checking")
+	if g := groupNamed(t, v, "Three-Body"); !g.Pending() {
+		t.Error("after one failure the row should be tried again soon")
+	}
+	if v, err = e.compute(ctx, 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "Three-Body"); g.Pending() || !g.Unanswered {
+		t.Errorf("after failing twice: Pending = %v, Unanswered = %v; want it quiet and known unanswered", g.Pending(), g.Unanswered)
 	}
 
 	// A later pass asks again.
 	hc.findErr = nil
-	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
+	if v, err = e.compute(ctx, 1<<20, 0, true); err != nil {
 		t.Fatal(err)
 	}
-	if hc.finds != 2 {
+	if hc.finds != 3 || groupNamed(t, v, "Three-Body").Unanswered {
 		t.Errorf("looked up by ISBN %d times, want the failure retried by the next pass", hc.finds)
+	}
+}
+
+func TestACancelledISBNLookupIsStillToCome(t *testing.T) {
+	// A request cut short did not find the catalogue failing.
+	hc := &catalogue{findErr: context.Canceled}
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Death's End", "Three-Body", 3, "9780765377104")}}}
+	e := twoProviders(t, hc, gm)
+	for range giveUpAfter {
+		ctx, cancel := context.WithCancel(context.Background())
+		hc.onFind = cancel
+		_, _ = e.compute(ctx, 1<<20, 0, true)
+	}
+	if hc.finds != giveUpAfter {
+		t.Fatalf("looked up %d times, want %d cut short", hc.finds, giveUpAfter)
+	}
+	v, err := e.viewWithin(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "Three-Body"); !g.Pending() || g.Unanswered {
+		t.Errorf("Pending = %v, Unanswered = %v; a cancelled lookup is still to come", g.Pending(), g.Unanswered)
 	}
 }
 

@@ -48,9 +48,8 @@ type Engine struct {
 	finders []library.SeriesFinder
 	mu      sync.Mutex
 	found   map[string]foundClaims
-	// findFailed holds the book keys whose last lookup failed: no answer is
-	// coming for them until a later pass asks again.
-	findFailed map[string]bool
+	// findFailed counts the failed lookups of each book key (see giveUpAfter).
+	findFailed map[string]int
 
 	// gen counts answers landed; changed is closed when the next one does.
 	gen     uint64
@@ -78,7 +77,7 @@ type foundClaims struct {
 // SeriesResolver capability, when present, powers new-release lookups.
 func NewEngine(store *Store, src library.Source, prefs picker.Prefs) *Engine {
 	e := &Engine{
-		src: src, store: store, prefs: prefs, now: time.Now, found: map[string]foundClaims{}, findFailed: map[string]bool{},
+		src: src, store: store, prefs: prefs, now: time.Now, found: map[string]foundClaims{}, findFailed: map[string]int{},
 		changed: make(chan struct{}), nudge: make(chan struct{}, 1),
 		pace: warmPause, retryGap: failureTTL,
 	}
@@ -397,7 +396,11 @@ func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pa
 		ask := mode == everyIdentity || mode == untilOffered && !offered
 		entry, found, held := e.lookup(ctx, q, spent, budget, pause, ask, mode == everyIdentity)
 		if !held {
-			c.alt.Pending = !e.lookahead.Failed(q)
+			if e.lookahead.Failed(q) {
+				g.Unanswered = true
+			} else {
+				c.alt.Pending = true
+			}
 			continue
 		}
 		c.alt.Checked = true
@@ -458,12 +461,12 @@ func alternativeFor(g *Group, m library.Series) *Alternative {
 	return nil
 }
 
-// unasked reports whether any of the row's books could be looked up by ISBN
-// and never has been. A stale lookup does not count: its answer still shows.
-// Nor does a failed one: no answer is coming until a later pass.
-func (e *Engine) unasked(g *Group) bool {
+// findState reports whether any of the row's books could be looked up by ISBN
+// and is still to be, and whether any has failed often enough to be given up
+// until the scheduled pass. A stale lookup is neither: its answer still shows.
+func (e *Engine) findState(g *Group) (unasked, gaveUp bool) {
 	if len(e.finders) == 0 {
-		return false
+		return false, false
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -471,17 +474,22 @@ func (e *Engine) unasked(g *Group) bool {
 		if len(b.isbns) == 0 {
 			continue
 		}
-		asked := false
+		found, failed := false, false
 		for _, k := range b.plainKeys {
-			if _, ok := e.found[k]; ok || e.findFailed[k] {
-				asked = true
+			if _, ok := e.found[k]; ok {
+				found = true
 			}
+			failed = failed || e.findFailed[k] >= giveUpAfter
 		}
-		if !asked {
-			return true
+		switch {
+		case found:
+		case failed:
+			gaveUp = true
+		default:
+			unasked = true
 		}
 	}
-	return false
+	return unasked, gaveUp
 }
 
 // discover looks up, by ISBN, the series a catalogue files a row's books
@@ -546,11 +554,14 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 			}
 		}
 		spent++
+		if failed && ctx.Err() != nil {
+			return spent // cut short by the caller, not failed
+		}
 		if failed {
 			e.mu.Lock()
 			for _, b := range asking {
 				for _, k := range b.plainKeys {
-					e.findFailed[k] = true
+					e.findFailed[k]++
 				}
 			}
 			e.mu.Unlock()
@@ -619,7 +630,11 @@ func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Dur
 		if g.Kept {
 			return
 		}
-		g.finding = !e.hasContinuation(g) && e.unasked(g)
+		if !e.hasContinuation(g) {
+			unasked, gaveUp := e.findState(g)
+			g.finding = unasked
+			g.Unanswered = g.Unanswered || gaveUp
+		}
 		e.check(ctx, g, &spent, budget, pause, stuck)
 		g.ContinueOn = e.offer(g)
 	})
@@ -644,7 +659,11 @@ func (e *Engine) next(ctx context.Context, g *Group, spent *int, budget int, pau
 	}
 	entry, found, held := e.lookup(ctx, q, spent, budget, pause, true, refresh)
 	if !held {
-		g.NextPending = !e.lookahead.Failed(q)
+		if e.lookahead.Failed(q) {
+			g.Unanswered = true
+		} else {
+			g.NextPending = true
+		}
 		return
 	}
 	if !found {
