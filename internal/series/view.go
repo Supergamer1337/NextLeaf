@@ -93,6 +93,20 @@ func (a Alternative) NextLabel() string {
 	return nextLabel(a.Checked, a.Pending, a.NextTitle, a.NextPosition)
 }
 
+// Pending reports whether any of the row's answers is still to come: its own
+// next book, or what one of its other series holds.
+func (g Group) Pending() bool {
+	if g.NextPending {
+		return true
+	}
+	for _, alt := range g.Alternatives {
+		if alt.Pending {
+			return true
+		}
+	}
+	return false
+}
+
 // NextLabel says what the row offers next, in the wheel's words.
 func (g Group) NextLabel() string {
 	return nextLabel(g.CaughtUp || g.NextTitle != "", g.NextPending, g.NextTitle, g.NextPosition)

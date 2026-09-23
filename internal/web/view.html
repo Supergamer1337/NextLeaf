@@ -119,6 +119,10 @@
       {{template "drawerGroup" dict "Label" "Dropped" "Items" .Panel.Dropped "Undo" "Undrop"}}
 {{end}}
 
+{{/* Marks a series, or a folded section holding one, whose answers are still
+     coming. The drawer's status line wears the same dot, as its legend. */}}
+{{define "pendingDot"}}<span class="pending-dot" role="img" aria-label="Still checking" title="Still checking"></span>{{end}}
+
 {{define "cover"}}
   {{- if .Book.CoverURL -}}
     <img class="cover" src="{{.Book.CoverURL}}" alt="Cover of {{.Book.Title}}" loading="lazy">
@@ -138,7 +142,7 @@
 </div>
 {{else}}
 <details class="drawer-group" data-group="{{.Label}}"{{if .Open}} open{{end}}>
-  <summary class="drawer-label drawer-summary">{{.Label}} <span class="drawer-tally">{{len .Items}}</span></summary>
+  <summary class="drawer-label drawer-summary">{{.Label}} <span class="drawer-tally">{{len .Items}}</span>{{if anyPending .Items}}{{template "pendingDot"}}{{end}}</summary>
   {{template "drawerRows" .}}
 </details>
 {{end}}
@@ -160,7 +164,7 @@
       <div class="drawer-cell">
         <div class="row-body">
           <span class="row-head">
-            <span class="drawer-name">{{.Name}}</span>
+            <span class="drawer-name">{{.Name}}</span>{{if .Pending}}{{template "pendingDot"}}{{end}}
           </span>
           <span class="row-tags">
             {{if .Source}}<span class="row-badge switch-source">{{ucfirst .Source}}</span>{{end}}
