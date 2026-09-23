@@ -210,3 +210,40 @@ func TestARefreshSaysWhetherAnythingChanged(t *testing.T) {
 		t.Errorf("second refresh: changed = %v, %v; want false, the source said the same", changed, err)
 	}
 }
+
+// overlapSource records the most of its fetches ever in flight at once.
+type overlapSource struct {
+	name        string
+	active, max *int32
+}
+
+func (o overlapSource) fetch() ([]Entry, error) {
+	n := atomic.AddInt32(o.active, 1)
+	for {
+		m := atomic.LoadInt32(o.max)
+		if n <= m || atomic.CompareAndSwapInt32(o.max, m, n) {
+			break
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	atomic.AddInt32(o.active, -1)
+	return []Entry{{Book: Book{Title: o.name}}}, nil
+}
+func (o overlapSource) Name() string                                      { return o.name }
+func (o overlapSource) CurrentlyReading(context.Context) ([]Entry, error) { return o.fetch() }
+func (o overlapSource) RecentReads(context.Context, int) ([]Entry, error) { return o.fetch() }
+func (o overlapSource) ToRead(context.Context) ([]Entry, error)           { return o.fetch() }
+
+func TestARefreshFetchesEveryListAtOnce(t *testing.T) {
+	// Each list is its own round trip. One after another they add up to over
+	// a second, and a book just added to a list waits on all of them.
+	var active, most int32
+	a := NewCached(overlapSource{name: "a", active: &active, max: &most}, time.Hour)
+	b := NewCached(overlapSource{name: "b", active: &active, max: &most}, time.Hour)
+	if _, err := Refresh(context.Background(), Combine(a, b)); err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(&most); got != 6 {
+		t.Errorf("at most %d fetches were in flight at once, want all six lists of both sources", got)
+	}
+}
