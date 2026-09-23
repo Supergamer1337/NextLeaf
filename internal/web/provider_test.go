@@ -191,9 +191,10 @@ func TestTheDrawerSaysWhenAnswersAreStillComing(t *testing.T) {
 	if !strings.Contains(between(body, `id="drawer-toggle"`, `</a>`), `class="pending-dot"`) {
 		t.Error("with the drawer closed, nothing says answers are still coming")
 	}
-	// It asks to be told of the next change rather than polling on a timer.
-	if !strings.Contains(status, `hx-trigger="load"`) || !strings.Contains(status, "/view?drawer=1&since=") || !strings.Contains(status, "waiting=1") {
-		t.Errorf("the drawer is not waiting on the next change:\n%s", status)
+	// It says which generation it shows, and that it is waiting, for the
+	// page's one listener to ask from.
+	if !strings.Contains(status, `data-gen="`) || !strings.Contains(status, "data-waiting") {
+		t.Errorf("the status does not say what the listener should ask from:\n%s", status)
 	}
 	// Re-inserted on every refresh, a live region would be announced every
 	// time.
@@ -229,9 +230,9 @@ func TestASettledDrawerSaysNothingButKeepsListening(t *testing.T) {
 	if strings.Contains(body, "Up to date") {
 		t.Error("an ordinary render announces it is up to date")
 	}
-	// It still listens: the background pass may change what it shows.
+	// It still listens, quietly: the background pass may change what it shows.
 	status := between(body, `id="drawer-status"`, `</span>`)
-	if !strings.Contains(status, "/view?drawer=1&since=") || strings.Contains(status, "waiting=1") {
+	if !strings.Contains(status, `data-gen="`) || strings.Contains(status, "data-waiting") {
 		t.Errorf("a settled drawer should listen quietly for changes:\n%s", status)
 	}
 }
@@ -521,5 +522,49 @@ func TestARerolledCardIsNeverFollowedUp(t *testing.T) {
 	h := NewHandler(Deps{Source: src, Engine: engine, LoadFresh: time.Nanosecond})
 	if body := getBody(t, h, "/view?another=1"); strings.Contains(body, "card-follow") {
 		t.Error("a rerolled card is set to be redrawn")
+	}
+}
+
+func TestAPageHasOneDrawerListenerHoweverOftenItIsRedrawn(t *testing.T) {
+	// A listener living on something a redraw replaces is left running by
+	// every redraw: five rerolls held six requests open, a browser's whole
+	// allowance for one site. The page's one listener sits where no swap
+	// reaches, and replaces its own request rather than adding another.
+	h := ready(t, midSeries(), testStore(t))
+	shell := getBody(t, h, "/")
+	listener := between(shell, `id="drawer-listen"`, `>`)
+	if listener == "" || strings.Count(shell, `id="drawer-listen"`) != 1 {
+		t.Fatalf("the page has no single drawer listener:\n%s", listener)
+	}
+	if !strings.Contains(listener, `hx-sync="this:replace"`) {
+		t.Errorf("the listener can hold two requests open at once:\n%s", listener)
+	}
+	if strings.Contains(between(shell, `id="drawer-body"`, `</div>`), "drawer-listen") {
+		t.Error("the listener sits inside the drawer body, which every refresh replaces")
+	}
+	for _, path := range []string{"/view", "/view?drawer=1"} {
+		body := getBody(t, h, path)
+		if strings.Contains(body, "drawer-listen") || strings.Contains(between(body, `id="drawer-status"`, `>`), "hx-get") {
+			t.Errorf("%s brings a request of its own with it, which would run beside the page's", path)
+		}
+	}
+}
+
+func TestAFollowUpNeverCancelsTheReadersOwnRequest(t *testing.T) {
+	// A follow-up is the page catching up on its own. If the reader has a
+	// request in flight — a reroll, a decision — the follow-up gives way:
+	// that request's answer is drawn from the refreshed library anyway. And
+	// it can be asked for again, for when it landed under an open wheel.
+	lib := &changingLibrary{}
+	src := library.NewCached(lib, time.Hour)
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{})
+	<-engine.RefreshLibrary()
+	h := NewHandler(Deps{Source: src, Engine: engine, LoadFresh: time.Nanosecond})
+	follow := between(getBody(t, h, "/view"), `class="card-follow"`, `>`)
+	if !strings.Contains(follow, `hx-sync="#app:drop"`) {
+		t.Errorf("a follow-up can cancel the reader's own request:\n%s", follow)
+	}
+	if !strings.Contains(follow, `hx-trigger="load, follow"`) {
+		t.Errorf("a follow-up held under an open wheel cannot be asked for again:\n%s", follow)
 	}
 }

@@ -2,7 +2,10 @@
   {{with .FollowUp}}
   {{/* Painted from a library a refresh is updating behind it: this asks once
        for the result, and gets the whole view only if the library changed. */}}
-  <span class="card-follow" hx-get="/view?after={{.}}" hx-trigger="load" hx-indicator="this" hidden></span>
+  {{/* It gives way to a request of the reader's in flight, whose answer is
+       drawn from the refreshed library anyway; and it can be asked for again,
+       for when it lands under an open wheel. */}}
+  <span class="card-follow" hx-get="/view?after={{.}}" hx-trigger="load, follow" hx-sync="#app:drop" hx-indicator="this" hidden></span>
   {{end}}
   {{/* No role="status" here: #app is already a polite live region, and a
        nested one would announce every notice twice. */}}
@@ -115,17 +118,13 @@
 {{end}}
 
 {{/* The drawer's status, in its header so coming and going never moves the
-     rows. It always asks for the next change and re-renders the moment one
-     lands — an answer, or the background pass finding a finished book — and
-     each change brings a fresh copy of this element, whose load asks again.
-     It only shows itself while answers are outstanding, and as they finish.
-     Not a live region: re-inserted on every change, it would be announced
-     every time. */}}
+     rows. It shows itself only while answers are outstanding, and as they
+     finish. It makes no request: it tells the page's one listener which
+     generation the drawer shows, and whether it is waiting. Not a live
+     region: replaced on every change, it would be announced every time. */}}
 {{define "drawerStatus"}}
   <span class="drawer-status{{if .Panel.Pending}}{{else if .Settled}} is-done{{else}} is-idle{{end}}" id="drawer-status" hx-swap-oob="true"
-        hx-get="/view?drawer=1&since={{.Gen}}{{if .Panel.Pending}}&waiting=1{{end}}" hx-trigger="load"
-        hx-target="#drawer-body" hx-swap="morph:innerHTML"
-        hx-indicator="this" hx-sync="this:drop">{{if .Panel.Pending}}Checking {{.Panel.Checking}} series…{{else if .Settled}}Up to date{{end}}</span>
+        data-gen="{{.Gen}}"{{if .Panel.Pending}} data-waiting{{end}}>{{if .Panel.Pending}}Checking {{.Panel.Checking}} series…{{else if .Settled}}Up to date{{end}}</span>
 {{end}}
 
 {{/* The drawer's rows, on their own so the refresh can fetch them without
