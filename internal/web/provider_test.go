@@ -568,3 +568,48 @@ func TestAFollowUpNeverCancelsTheReadersOwnRequest(t *testing.T) {
 		t.Errorf("a follow-up held under an open wheel cannot be asked for again:\n%s", follow)
 	}
 }
+
+func TestAWaitingRefreshEndsWhenItsRequestDoes(t *testing.T) {
+	// Shutdown ends every request's context. A refresh still waiting then must
+	// not hold the server open for the rest of its wait.
+	engine := series.NewEngine(testStore(t), midSeries(), picker.Prefs{})
+	h := NewHandler(Deps{Source: midSeries(), Engine: engine, Wait: time.Minute})
+	gen, _ := engine.Changes()
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest("GET", "/view?drawer=1&since="+strconv.FormatUint(gen, 10), nil).WithContext(ctx)
+	done := make(chan struct{})
+	go func() { h.ServeHTTP(httptest.NewRecorder(), req); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("a waiting refresh outlived its request")
+	}
+}
+
+func TestAWaitingRefreshAnswersAsSoonAsTheServerDrains(t *testing.T) {
+	// Shutdown lets requests finish, but a refresh waits up to twenty seconds
+	// for a change: every restart with a tab open overran its grace period
+	// and failed. Draining ends the wait, and the answer goes out at once.
+	engine := series.NewEngine(testStore(t), midSeries(), picker.Prefs{})
+	draining := make(chan struct{})
+	h := NewHandler(Deps{Source: midSeries(), Engine: engine, Wait: time.Minute, Draining: draining})
+	gen, _ := engine.Changes()
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/view?drawer=1&since="+strconv.FormatUint(gen, 10), nil))
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(draining)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("a waiting refresh held a draining server open")
+	}
+	if rec.Code != 200 {
+		t.Errorf("status = %d, want the drawer answered as it stands", rec.Code)
+	}
+}

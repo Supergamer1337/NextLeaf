@@ -51,9 +51,12 @@ func main() {
 		addr = ":8080"
 	}
 
+	// Closed as shutdown begins, so a drawer waiting on a change answers at
+	// once instead of outlasting the grace period below.
+	draining := make(chan struct{})
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           web.NewHandler(web.Deps{Source: source, Engine: engine}),
+		Handler:           web.NewHandler(web.Deps{Source: source, Engine: engine, Draining: draining}),
 		ReadHeaderTimeout: 10 * time.Second,
 		// ReadTimeout bounds the body read too, so a slow client cannot hold
 		// a connection open through a decision POST.
@@ -63,6 +66,8 @@ func main() {
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  2 * time.Minute,
 	}
+
+	srv.RegisterOnShutdown(func() { close(draining) })
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
