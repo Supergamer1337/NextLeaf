@@ -132,15 +132,19 @@ func (l *Lookahead) Next(ctx context.Context, q library.SeriesQuery) (library.En
 		return a.entry, a.found, nil
 	}
 
+	asked := l.now()
 	entry, found, err := l.resolver.NextInSeries(ctx, q)
 	now := l.now()
 	if err != nil && ctx.Err() != nil {
 		return library.Entry{}, false, err // cut short by the caller, not failed
 	}
 	if err != nil {
-		a.err, a.failedAt = err, now
 		l.mu.Lock()
-		l.answers[k] = a
+		// Another ask may have answered while this one was out.
+		if cur := l.answers[k]; cur.at.IsZero() || cur.at.Before(asked) {
+			cur.err, cur.failedAt = err, now
+			l.answers[k] = cur
+		}
 		l.mu.Unlock()
 		return library.Entry{}, false, err
 	}

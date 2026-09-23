@@ -171,7 +171,7 @@ func TestAShelfOnlyRowFindsItsSeriesOnTheCatalogueByISBN(t *testing.T) {
 	}
 
 	// Taking the offer is an ordinary switch, and the row now follows hardcover.
-	if _, err := e.Decide(ctx, "switch", "Three-Body", g.ContinueOn.Name); err != nil {
+	if _, err := e.Decide(ctx, "switch", "Three-Body", "", g.ContinueOn.Name); err != nil {
 		t.Fatalf("switch: %v", err)
 	}
 	v, err = e.View(ctx)
@@ -284,7 +284,7 @@ func TestAFollowedSeriesIsFoundAgainWhenTheCacheIsLost(t *testing.T) {
 	if _, err := first.View(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := first.Decide(ctx, "switch", "Three-Body", hcClaim.Name); err != nil {
+	if _, err := first.Decide(ctx, "switch", "Three-Body", "", hcClaim.Name); err != nil {
 		t.Fatalf("switch: %v", err)
 	}
 	if err := store.PruneCache(ctx, time.Now().AddDate(100, 0, 0)); err != nil {
@@ -578,7 +578,7 @@ func TestADroppedSeriesIsLookedUpByNobody(t *testing.T) {
 	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Book Three", "Zzz Saga", 3, "9780000000001")}}}
 	e := twoProviders(t, hc, gm)
 	ctx := context.Background()
-	if _, err := e.Decide(ctx, "drop", "Zzz Saga", ""); err != nil {
+	if _, err := e.Decide(ctx, "drop", "Zzz Saga", "", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -895,7 +895,7 @@ func TestKeepingASeriesEndsTheOfferToContinueElsewhere(t *testing.T) {
 		t.Fatal("no offer to turn down")
 	}
 
-	if _, err := e.Decide(ctx, "keep", "Three-Body", ""); err != nil {
+	if _, err := e.Decide(ctx, "keep", "Three-Body", "", ""); err != nil {
 		t.Fatalf("keep: %v", err)
 	}
 	asked := len(hc.asked)
@@ -921,10 +921,10 @@ func TestEndingAKeepOffersAgain(t *testing.T) {
 	if _, err := e.View(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Decide(ctx, "keep", "Three-Body", ""); err != nil {
+	if _, err := e.Decide(ctx, "keep", "Three-Body", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	uncached, err := e.Decide(ctx, "unkeep", "Three-Body", "")
+	uncached, err := e.Decide(ctx, "unkeep", "Three-Body", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -947,7 +947,7 @@ func TestAKeptSeriesStillCarriesOnByItself(t *testing.T) {
 	later.Book.Series.Source = "grimmory"
 	e, _, _ := continuable(t)
 	e.now = func() time.Time { return day1 }
-	if _, err := e.Decide(context.Background(), "keep", "Three-Body", ""); err != nil {
+	if _, err := e.Decide(context.Background(), "keep", "Three-Body", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	v := Compute(Input{
@@ -1296,7 +1296,7 @@ func TestAKeepOutlivesEveryOtherDecisionAndItsUndo(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, action := range []string{"keep", then, "clear"} {
-				if _, err := e.Decide(ctx, action, "Three-Body", ""); err != nil {
+				if _, err := e.Decide(ctx, action, "Three-Body", "", ""); err != nil {
 					t.Fatalf("%s: %v", action, err)
 				}
 			}
@@ -1308,7 +1308,7 @@ func TestAKeepOutlivesEveryOtherDecisionAndItsUndo(t *testing.T) {
 				t.Errorf("after keep, %s and its undo: Kept = %v, ContinueOn = %+v; the keep was lost", then, g.Kept, g.ContinueOn)
 			}
 
-			if _, err := e.Decide(ctx, "unkeep", "Three-Body", ""); err != nil {
+			if _, err := e.Decide(ctx, "unkeep", "Three-Body", "", ""); err != nil {
 				t.Fatal(err)
 			}
 			if v, err = e.View(ctx); err != nil {
@@ -1330,7 +1330,7 @@ func TestADecisionTellsWhoeverIsListening(t *testing.T) {
 		t.Fatal(err)
 	}
 	gen, changed := e.Changes()
-	if _, err := e.Decide(ctx, "park", "Three-Body", ""); err != nil {
+	if _, err := e.Decide(ctx, "park", "Three-Body", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -1367,7 +1367,7 @@ func TestAKeptRowFollowingAFoundSeriesIsFoundAgain(t *testing.T) {
 		if d[0] == "keep" {
 			name = hcClaim.Name
 		}
-		if _, err := first.Decide(ctx, d[0], name, d[1]); err != nil {
+		if _, err := first.Decide(ctx, d[0], name, "", d[1]); err != nil {
 			t.Fatalf("%s: %v", d[0], err)
 		}
 	}
@@ -1392,7 +1392,7 @@ func TestAKeptRowLooksForNoOtherOrderings(t *testing.T) {
 	// would only spend the catalogue's patience on answers nobody is shown.
 	e, hc, _ := continuable(t)
 	ctx := context.Background()
-	if _, err := e.Decide(ctx, "keep", "Three-Body", ""); err != nil {
+	if _, err := e.Decide(ctx, "keep", "Three-Body", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
@@ -1483,5 +1483,40 @@ func TestAFailedISBNLookupStopsSayingItIsChecking(t *testing.T) {
 	}
 	if hc.finds != 2 {
 		t.Errorf("looked up by ISBN %d times, want the failure retried by the next pass", hc.finds)
+	}
+}
+
+func TestADecisionLandsOnTheTwinItNames(t *testing.T) {
+	// The same series read on two providers can be two rows of one name. A
+	// decision on the second must not land on whichever sorts first.
+	hc := &catalogue{fakeSource: fakeSource{reads: []library.Entry{readOn("hardcover", "The Last Wish", "The Witcher", 1)}}}
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Sword of Destiny", "The Witcher", 2)}}}
+	e := twoProviders(t, hc, gm)
+	ctx := context.Background()
+
+	for _, source := range []string{"grimmory", "hardcover"} {
+		t.Run(source, func(t *testing.T) {
+			if _, err := e.Decide(ctx, "drop", "The Witcher", source, ""); err != nil {
+				t.Fatal(err)
+			}
+			v, err := e.View(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, g := range v.Groups {
+				if g.Name != "The Witcher" {
+					continue
+				}
+				if dropped := g.Decision == Dropped; dropped != (g.Source == source) {
+					t.Errorf("the %s row: dropped = %v, after dropping the %s row", g.Source, dropped, source)
+				}
+			}
+			if _, err := e.Decide(ctx, "clear", "The Witcher", source, ""); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if _, err := e.Decide(ctx, "drop", "The Witcher", "goodreads", ""); !errors.Is(err, ErrUnknownSeries) {
+		t.Errorf("a decision on a row no provider has: err = %v, want ErrUnknownSeries", err)
 	}
 }

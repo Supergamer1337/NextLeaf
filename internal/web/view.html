@@ -11,7 +11,7 @@
        nested one would announce every notice twice. */}}
   <div id="flash">
     {{- with .Done -}}
-    <p class="notice notice--done">{{.Msg}}{{if .UndoLabel}} <button class="drawer-act" type="button" hx-post="/series/{{.UndoAction}}" hx-vals="{{hxvals "name" .UndoName "to" .UndoTo}}" hx-disabled-elt="this">{{.UndoLabel}}</button>{{end}}</p>
+    <p class="notice notice--done">{{.Msg}}{{if .UndoLabel}} <button class="drawer-act" type="button" hx-post="/series/{{.UndoAction}}" hx-vals="{{hxvals "name" .UndoName "source" .UndoSource "to" .UndoTo}}" hx-disabled-elt="this">{{.UndoLabel}}</button>{{end}}</p>
     {{- end -}}
   </div>
   <div class="deck" id="deck">
@@ -89,7 +89,7 @@
         {{/* No pin here: pinning re-renders this same card, so the button
              would look inert. It lives in the drawer, where the filing
              visibly changes. */}}
-        {{$vals := hxvals "name" $.Decide}}
+        {{$vals := hxvals "name" $.Decide "source" $.DecideSource}}
         <button class="btn btn--quiet" type="button" hx-post="/series/park" hx-vals="{{$vals}}" hx-disabled-elt="this">Park for one book</button>
         <button class="btn btn--quiet" type="button" hx-post="/series/drop" hx-vals="{{$vals}}" hx-disabled-elt="this">Drop this series</button>
         {{end}}
@@ -207,7 +207,7 @@
           {{else}}{{with .NextLabel}}<span class="drawer-next{{if $checking}} is-checking{{end}}">{{.}}</span>{{end}}{{end}}
           {{/* "from" marks the decision as made in the drawer, where the row
                moving is the feedback; the page raises no banner for it. */}}
-          {{$vals := hxvals "name" .Name "from" "drawer"}}
+          {{$vals := hxvals "name" .Name "source" .Source "from" "drawer"}}
           <div class="drawer-acts">
             {{if and .NextTitle $.CanPick}}
             <button class="drawer-act drawer-act--go" type="button" hx-post="/series/pin" hx-vals="{{$vals}}" hx-disabled-elt="this">Pick this</button>
@@ -259,6 +259,7 @@
            one row is ever spun at a time. */}}
       <form hx-post="/series/switch" hx-disabled-elt=".wheel-ok" class="wheel-form" hidden>
         <input type="hidden" name="name" value="{{$tracked}}">
+        <input type="hidden" name="source" value="{{.Source}}">
         <input type="hidden" name="to" value="">
         <input type="hidden" name="from" value="drawer">
       </form>

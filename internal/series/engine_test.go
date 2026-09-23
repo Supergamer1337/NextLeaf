@@ -75,7 +75,7 @@ func TestParkingSkipsOneTurn(t *testing.T) {
 	}
 	e := testEngine(t, src)
 	ctx := context.Background()
-	if _, err := e.Decide(ctx, "park", "Mistborn", ""); err != nil {
+	if _, err := e.Decide(ctx, "park", "Mistborn", "", ""); err != nil {
 		t.Fatalf("Decide park: %v", err)
 	}
 	rec, _, err := e.Recommend(ctx, false)
@@ -99,7 +99,7 @@ func TestDroppingWithholdsTheBooksFromVarietyToo(t *testing.T) {
 	}
 	e := testEngine(t, src)
 	ctx := context.Background()
-	if _, err := e.Decide(ctx, "drop", "Mistborn", ""); err != nil {
+	if _, err := e.Decide(ctx, "drop", "Mistborn", "", ""); err != nil {
 		t.Fatalf("Decide drop: %v", err)
 	}
 	rec, _, err := e.Recommend(ctx, true)
@@ -184,7 +184,7 @@ func TestSwitchRecordsAPreferenceAndTheViewFollows(t *testing.T) {
 	e := testEngine(t, src)
 	ctx := context.Background()
 
-	if _, err := e.Decide(ctx, "switch", "Chrono", "Published"); err != nil {
+	if _, err := e.Decide(ctx, "switch", "Chrono", "", "Published"); err != nil {
 		t.Fatalf("Decide switch: %v", err)
 	}
 	v, err := e.View(ctx)
@@ -196,7 +196,7 @@ func TestSwitchRecordsAPreferenceAndTheViewFollows(t *testing.T) {
 	}
 
 	// And back again: preferences are fully reversible.
-	if _, err := e.Decide(ctx, "switch", "Published", "Chrono"); err != nil {
+	if _, err := e.Decide(ctx, "switch", "Published", "", "Chrono"); err != nil {
 		t.Fatalf("switch back: %v", err)
 	}
 	v, err = e.View(ctx)
@@ -210,14 +210,14 @@ func TestSwitchRecordsAPreferenceAndTheViewFollows(t *testing.T) {
 
 func TestSwitchToAStrangerIsRefused(t *testing.T) {
 	src := fakeSource{reads: []library.Entry{read("Book 3", "Mistborn", 3, day0)}}
-	_, err := testEngine(t, src).Decide(context.Background(), "switch", "Mistborn", "Some Other Saga")
+	_, err := testEngine(t, src).Decide(context.Background(), "switch", "Mistborn", "", "Some Other Saga")
 	if !errors.Is(err, ErrNotAnAlternative) {
 		t.Errorf("err = %v, want ErrNotAnAlternative", err)
 	}
 }
 
 func TestDecidingOnAnUnknownSeriesIsRefused(t *testing.T) {
-	_, err := testEngine(t, fakeSource{}).Decide(context.Background(), "park", "Nothing", "")
+	_, err := testEngine(t, fakeSource{}).Decide(context.Background(), "park", "Nothing", "", "")
 	if !errors.Is(err, ErrUnknownSeries) {
 		t.Errorf("err = %v, want ErrUnknownSeries", err)
 	}
@@ -265,7 +265,7 @@ func TestDecideReportsWhichDecisionsLeaveTheGroupUncached(t *testing.T) {
 		{"clear", "Published", "", true}, // undropping: nothing was ever cached
 	}
 	for _, s := range steps {
-		uncached, err := e.Decide(ctx, s.action, s.name, s.to)
+		uncached, err := e.Decide(ctx, s.action, s.name, "", s.to)
 		if err != nil {
 			t.Fatalf("Decide %s %q: %v", s.action, s.name, err)
 		}

@@ -14,9 +14,9 @@ import (
 )
 
 // cacheTTL bounds how long a source's data is reused before a read refetches
-// it. It is a safety net: the series engine refreshes the library ahead of
-// need — on a schedule, and behind any page load that finds it more than a few
-// seconds old — so a read should never find it expired, and wait.
+// it, until something refreshes it ahead of need. The series engine does — on
+// a schedule, and behind any page load that finds it more than a few seconds
+// old — and from then on a read never waits on the source.
 const cacheTTL = time.Hour
 
 // FromEnv builds the reading source from the environment: every backend whose

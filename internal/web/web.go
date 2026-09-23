@@ -195,7 +195,8 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	action := r.PathValue("action")
-	uncached, err := s.engine.Decide(ctx, action, name, strings.TrimSpace(r.FormValue("to")))
+	source := strings.TrimSpace(r.FormValue("source"))
+	uncached, err := s.engine.Decide(ctx, action, name, source, strings.TrimSpace(r.FormValue("to")))
 	switch {
 	case errors.Is(err, series.ErrUnknownAction):
 		flash(w, "that is not something you can do to a series", http.StatusNotFound)
@@ -216,7 +217,7 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 	// standing — the row moves, undo alongside — so only card decisions get
 	// the confirmation banner.
 	if r.FormValue("from") != "drawer" {
-		data.Done = doneFor(action, name, strings.TrimSpace(r.FormValue("to")))
+		data.Done = doneFor(action, name, source, strings.TrimSpace(r.FormValue("to")))
 	}
 	renderView(w, data, http.StatusOK)
 }
@@ -257,19 +258,20 @@ type done struct {
 	UndoLabel  string
 	UndoAction string // the /series/{action} that reverses the decision
 	UndoName   string
+	UndoSource string
 	UndoTo     string // only a reverse switch names a destination
 }
 
 // doneFor phrases the confirmation for a decision. A clear is itself an undo,
 // so its confirmation ends the chain rather than offering another one.
-func doneFor(action, name, to string) *done {
+func doneFor(action, name, source, to string) *done {
 	switch action {
 	case "park":
-		return &done{Msg: "Parked “" + name + "” for one book.", UndoLabel: "Resume now", UndoAction: "clear", UndoName: name}
+		return &done{Msg: "Parked “" + name + "” for one book.", UndoLabel: "Resume now", UndoAction: "clear", UndoName: name, UndoSource: source}
 	case "drop":
-		return &done{Msg: "Dropped “" + name + "”.", UndoLabel: "Undrop", UndoAction: "clear", UndoName: name}
+		return &done{Msg: "Dropped “" + name + "”.", UndoLabel: "Undrop", UndoAction: "clear", UndoName: name, UndoSource: source}
 	case "pin":
-		return &done{Msg: "Pinned “" + name + "” to read next.", UndoLabel: "Unpin", UndoAction: "clear", UndoName: name}
+		return &done{Msg: "Pinned “" + name + "” to read next.", UndoLabel: "Unpin", UndoAction: "clear", UndoName: name, UndoSource: source}
 	case "switch":
 		return &done{Msg: "Now tracking “" + to + "”.", UndoLabel: "Switch back", UndoAction: "switch", UndoName: to, UndoTo: name}
 	case "clear":
@@ -293,8 +295,9 @@ type viewData struct {
 	// reader has actually read into, which is what makes park/drop/pin
 	// meaningful for it. Decide names that series, which is not always the one
 	// the book itself is labelled with.
-	Decidable bool
-	Decide    string
+	Decidable    bool
+	Decide       string
+	DecideSource string
 	// Continuation is true when the card holds the next book in a series
 	// rather than a variety pick. Such a card offers no reroll: stepping past
 	// a series is a park, so the decision is recorded rather than given away.
@@ -521,7 +524,7 @@ func (s *server) viewOf(ctx context.Context, reroll, catalogue bool, keep string
 		if rec.OK {
 			data.CardKey = url.QueryEscape(library.BookKey(rec.Rec.Entry))
 		}
-		data.Decidable, data.Decide = rec.Decidable, rec.Group
+		data.Decidable, data.Decide, data.DecideSource = rec.Decidable, rec.Group, rec.Source
 		data.Continuation = rec.Continuation
 		data.Panel = group(view)
 		if data.Panel.Pending {
