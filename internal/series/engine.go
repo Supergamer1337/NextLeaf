@@ -355,7 +355,7 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 	spent := 0
 	for i := range v.Groups {
 		g := &v.Groups[i]
-		if g.Decision == Dropped || g.Decision == Stopped {
+		if g.Decision == Dropped || g.Decision == Kept {
 			continue
 		}
 		needed := e.unclaimed(g) || (e.shelfOnly(g) && !e.hasContinuation(g))
@@ -432,8 +432,8 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 
 // enrich fills in what only a catalogue can know: the next book beyond the
 // shelf, and whether the reader is caught up. A row is only ever looked up in
-// its own provider's catalogue; a dropped one not at all, and a stopped one
-// not about continuing.
+// its own provider's catalogue; a dropped one not at all, and a kept one not
+// about continuing elsewhere.
 //
 // The budget goes where the reader needs it first: every row's own next book,
 // so one row's wheel never costs another row its content; then where a row
@@ -461,13 +461,13 @@ func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Dur
 		e.next(ctx, g, &spent, budget, pause)
 	})
 	rows(e.shelfOnly, func(g *Group) {
-		if g.Decision == Stopped {
+		if g.Decision == Kept {
 			return
 		}
 		e.check(ctx, g, &spent, budget, pause, stuck)
 		g.ContinueOn = e.offer(g)
 	})
-	rows(func(g *Group) bool { return !e.shelfOnly(g) && g.Decision != Stopped }, func(g *Group) {
+	rows(func(g *Group) bool { return !e.shelfOnly(g) && g.Decision != Kept }, func(g *Group) {
 		e.check(ctx, g, &spent, budget, pause, wheel)
 	})
 	e.fillTwins(v)
@@ -710,11 +710,11 @@ func (e *Engine) Decide(ctx context.Context, action, name, to string) (uncached 
 		st.Kind = KindDrop
 	case "pin":
 		st.Kind, st.PinnedBook = KindPin, group.NextKey
-	case "stop":
-		st.Kind = KindStop
+	case "keep":
+		st.Kind = KindKeep
 	case "clear":
 		st.Kind = KindClear
-		uncached = group.Decision == Dropped || group.Decision == Stopped
+		uncached = group.Decision == Dropped || group.Decision == Kept
 	case "switch":
 		alt, ok := alternativeNamed(group, to)
 		if !ok {
