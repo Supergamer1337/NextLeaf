@@ -2,6 +2,7 @@ package grimmory
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -142,8 +143,10 @@ func (c *Client) mapBook(b book) library.Book {
 	out.Subtitle = m.Subtitle
 	out.Description = m.Description
 	out.Authors = cleanAuthors(m.Authors)
-	out.Genres = m.Categories
-	out.Moods = m.Moods
+	// Grimmory returns tags in no fixed order; sorted, the same book maps the
+	// same way on every fetch.
+	out.Genres = sorted(m.Categories)
+	out.Moods = sorted(m.Moods)
 	out.ReleaseYear = parseYear(m.PublishedDate)
 	out.ReleaseDate = parseDay(m.PublishedDate)
 	out.PageCount = m.PageCount
@@ -236,4 +239,12 @@ func parseYear(s string) int {
 		return 0
 	}
 	return year
+}
+
+// sorted returns a sorted copy of tags, leaving the response's slice alone.
+func sorted(tags []string) []string {
+	if tags == nil {
+		return nil
+	}
+	return slices.Sorted(slices.Values(tags))
 }

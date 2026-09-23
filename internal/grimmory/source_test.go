@@ -2,6 +2,7 @@ package grimmory
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -320,5 +321,22 @@ func TestSeriesNamelessDropped(t *testing.T) {
 	e := c.mapEntry(book{Metadata: &metadata{Title: "Solo", SeriesNumber: ptr(3)}})
 	if e.Book.Series != nil {
 		t.Errorf("Series = %+v, want nil when the name is empty", e.Book.Series)
+	}
+}
+
+func TestTagsComeOutInTheSameOrderEveryTime(t *testing.T) {
+	// Grimmory hands a book's categories back in no fixed order: two identical
+	// requests can swap neighbours. Unordered, the same book would look changed
+	// on every fetch, and wear different tags on every load.
+	c := New("http://gm.local:6060", "u", "p")
+	mapped := func(categories, moods []string) library.Book {
+		return c.mapEntry(book{ID: 1, Title: "Goblet of Fire", Metadata: &metadata{
+			Title: "Goblet of Fire", Categories: categories, Moods: moods,
+		}}).Book
+	}
+	a := mapped([]string{"Low Fantasy", "Fantasy for Children", "Magic"}, []string{"hopeful", "dark"})
+	b := mapped([]string{"Fantasy for Children", "Magic", "Low Fantasy"}, []string{"dark", "hopeful"})
+	if !reflect.DeepEqual(a.Genres, b.Genres) || !reflect.DeepEqual(a.Moods, b.Moods) {
+		t.Errorf("the same tags in another order map differently:\n%v %v\n%v %v", a.Genres, a.Moods, b.Genres, b.Moods)
 	}
 }
