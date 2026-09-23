@@ -16,21 +16,33 @@ type Lookahead struct {
 	resolver library.SeriesResolver
 	ttl      time.Duration
 	now      func() time.Time // overridable in tests
+	// save, when set, keeps each answer beyond the process.
+	save func(key string, a CachedAnswer)
 
 	mu      sync.Mutex
 	answers map[string]answer
 }
 
+// answer is the last answer to a question, and the last failure to re-check
+// it: a failure is held briefly without displacing the answer before it.
 type answer struct {
-	entry library.Entry
-	found bool
-	err   error // a failed lookup, held for failureTTL only
-	at    time.Time
+	entry      library.Entry
+	found      bool
+	at         time.Time // zero until a question has been answered
+	freshUntil time.Time
+	err        error
+	failedAt   time.Time
 }
 
-// failureTTL is how long a failure is held. Unheld, a throttled backend would
-// be asked again by every render, putting the round trip into every page load.
-const failureTTL = time.Minute
+const (
+	// failureTTL is how long a failure is held. Unheld, a throttled backend
+	// would be asked again by every render, putting the round trip into every
+	// page load.
+	failureTTL = time.Minute
+	// settledTTL is how long "nothing left" holds for a series its provider
+	// calls complete: it will not grow, so asking daily is wasted.
+	settledTTL = 7 * 24 * time.Hour
+)
 
 // NewLookahead wraps resolver with a ttl-long cache.
 func NewLookahead(resolver library.SeriesResolver, ttl time.Duration) *Lookahead {
@@ -39,6 +51,15 @@ func NewLookahead(resolver library.SeriesResolver, ttl time.Duration) *Lookahead
 		ttl:      ttl,
 		now:      time.Now,
 		answers:  make(map[string]answer),
+	}
+}
+
+// Load seeds the cache with answers kept from an earlier process.
+func (l *Lookahead) Load(kept map[string]CachedAnswer) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for k, a := range kept {
+		l.answers[k] = answer{entry: a.Entry, found: a.Found, at: a.At, freshUntil: a.FreshUntil}
 	}
 }
 
@@ -60,22 +81,30 @@ func keyFor(q library.SeriesQuery) string {
 }
 
 // Cached reports whether Next would answer q without a round trip, so callers
-// can budget fresh queries separately from cache hits. A held failure counts:
-// reading it back costs nothing.
+// can budget fresh queries separately from cache hits: a fresh answer, or a
+// failure still held.
 func (l *Lookahead) Cached(q library.SeriesQuery) bool {
-	k := keyFor(q)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	cached, ok := l.answers[k]
-	return ok && l.fresh(cached)
+	a, ok := l.answers[keyFor(q)]
+	return ok && (l.held(a) || l.fresh(a))
 }
 
-func (l *Lookahead) fresh(a answer) bool {
-	ttl := l.ttl
-	if a.err != nil {
-		ttl = failureTTL
+func (l *Lookahead) fresh(a answer) bool { return !a.at.IsZero() && l.now().Before(a.freshUntil) }
+
+func (l *Lookahead) held(a answer) bool {
+	return a.err != nil && l.now().Sub(a.failedAt) < failureTTL
+}
+
+// Last is the last answer to q however old, for showing while it is re-checked.
+func (l *Lookahead) Last(q library.SeriesQuery) (library.Entry, bool, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	a, ok := l.answers[keyFor(q)]
+	if !ok || a.at.IsZero() {
+		return library.Entry{}, false, false
 	}
-	return l.now().Sub(a.at) < ttl
+	return a.entry, a.found, true
 }
 
 // Next returns the book following q's position, from cache when it is fresh.
@@ -85,18 +114,34 @@ func (l *Lookahead) Next(ctx context.Context, q library.SeriesQuery) (library.En
 	k := keyFor(q)
 
 	l.mu.Lock()
-	cached, ok := l.answers[k]
+	a := l.answers[k]
 	l.mu.Unlock()
-	if ok && l.fresh(cached) {
-		return cached.entry, cached.found, cached.err
+	switch {
+	case l.held(a):
+		return library.Entry{}, false, a.err
+	case l.fresh(a):
+		return a.entry, a.found, nil
 	}
 
 	entry, found, err := l.resolver.NextInSeries(ctx, q)
+	now := l.now()
 	if err != nil {
-		entry, found = library.Entry{}, false
+		a.err, a.failedAt = err, now
+		l.mu.Lock()
+		l.answers[k] = a
+		l.mu.Unlock()
+		return library.Entry{}, false, err
 	}
+	ttl := l.ttl
+	if !found && q.Series.Completed {
+		ttl = settledTTL
+	}
+	a = answer{entry: entry, found: found, at: now, freshUntil: now.Add(ttl)}
 	l.mu.Lock()
-	l.answers[k] = answer{entry: entry, found: found, err: err, at: l.now()}
+	l.answers[k] = a
 	l.mu.Unlock()
-	return entry, found, err
+	if l.save != nil {
+		l.save(k, CachedAnswer{Entry: entry, Found: found, At: now, FreshUntil: a.freshUntil})
+	}
+	return entry, found, nil
 }

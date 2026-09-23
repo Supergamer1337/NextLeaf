@@ -24,6 +24,9 @@ const (
 	warmPause = 1500 * time.Millisecond
 	// anchorCap bounds how many book keys a statement records.
 	anchorCap = 8
+	// cacheKeep is how long a kept answer outlives the last time it was asked
+	// for; past that, the question is one nothing will ask again.
+	cacheKeep = 30 * 24 * time.Hour
 )
 
 // Engine computes the series view from the sources and the statement log, and
@@ -72,7 +75,39 @@ func NewEngine(store *Store, src library.Source, prefs picker.Prefs) *Engine {
 	if resolver, ok := library.AsSeriesResolver(src); ok {
 		e.lookahead = NewLookahead(resolver, lookaheadTTL)
 	}
+	e.restore()
 	return e
+}
+
+// restore picks up what an earlier process looked up, and keeps what this one
+// does, so a restart shows the drawer as it was and asks nothing it knows.
+func (e *Engine) restore() {
+	if e.store == nil {
+		return
+	}
+	ctx := context.Background()
+	if err := e.store.PruneCache(ctx, e.now().Add(-cacheKeep)); err != nil {
+		log.Printf("series: pruning the lookup cache: %v", err)
+	}
+	if e.lookahead != nil {
+		kept, err := e.store.Answers(ctx)
+		if err != nil {
+			log.Printf("series: loading kept answers: %v", err)
+		}
+		e.lookahead.Load(kept)
+		e.lookahead.save = func(k string, a CachedAnswer) {
+			if err := e.store.SaveAnswer(context.Background(), k, a); err != nil {
+				log.Printf("series: keeping an answer: %v", err)
+			}
+		}
+	}
+	kept, err := e.store.Claims(ctx)
+	if err != nil {
+		log.Printf("series: loading kept ISBN matches: %v", err)
+	}
+	for k, c := range kept {
+		e.found[k] = foundClaims{claims: c.Claims, at: c.At}
+	}
 }
 
 // View computes the current series view and enriches it with cached catalogue
@@ -289,15 +324,15 @@ func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pa
 			continue
 		}
 		q := library.SeriesQuery{
-			Series:          library.Series{Name: c.claim.Name, Position: pos, Slug: c.claim.Slug, Source: c.claim.Source},
+			Series: library.Series{
+				Name: c.claim.Name, Position: pos, Slug: c.claim.Slug,
+				Source: c.claim.Source, Completed: c.claim.Completed,
+			},
 			IncludeNovellas: e.prefs.IncludeNovellas,
 		}
 		ask := mode == everyIdentity || mode == untilOffered && !offered
-		entry, found, held, err := e.lookup(ctx, q, spent, budget, pause, ask)
-		if err != nil {
-			log.Printf("series: checking what %q offers beyond %q: %v", c.claim.Source, g.Name, err)
-		}
-		if !held || err != nil {
+		entry, found, held := e.lookup(ctx, q, spent, budget, pause, ask, mode == everyIdentity)
+		if !held {
 			c.alt.Pending = true
 			continue
 		}
@@ -312,26 +347,42 @@ func (e *Engine) check(ctx context.Context, g *Group, spent *int, budget int, pa
 	}
 }
 
-// lookup answers q from the cache, or asks the catalogue if ask allows and the
-// budget lasts. held is false when q went unasked; its answer is still to come.
-func (e *Engine) lookup(ctx context.Context, q library.SeriesQuery, spent *int, budget int, pause time.Duration, ask bool) (entry library.Entry, found, held bool, err error) {
-	if !e.lookahead.Cached(q) {
-		if !ask || *spent >= budget {
-			return library.Entry{}, false, false, nil
-		}
+// lookup answers q from what is known, asking the catalogue if ask allows and
+// the budget lasts. A known answer is shown even when it is due a re-check,
+// and only a refresh — the background pass — spends a lookup re-checking one;
+// a failed re-check leaves it standing. held is false only when nothing is
+// known yet: an answer is still to come.
+func (e *Engine) lookup(ctx context.Context, q library.SeriesQuery, spent *int, budget int, pause time.Duration, ask, refresh bool) (entry library.Entry, found, held bool) {
+	last, lastFound, known := e.lookahead.Last(q)
+	asked := false
+	switch {
+	case e.lookahead.Cached(q):
+		// Fresh, or a failure still held: no round trip either way.
+	case known && !refresh:
+		return last, lastFound, true
+	case !ask || *spent >= budget:
+		return last, lastFound, known
+	default:
 		if pause > 0 {
 			select {
 			case <-ctx.Done():
-				return library.Entry{}, false, false, nil
+				return last, lastFound, known
 			case <-time.After(pause):
 			}
 		}
 		// Charged even if it fails: a failure costs a round trip too.
 		*spent++
+		asked = true
 		defer e.bump()
 	}
-	entry, found, err = e.lookahead.Next(ctx, q)
-	return entry, found, true, err
+	entry, found, err := e.lookahead.Next(ctx, q)
+	if err != nil {
+		if asked {
+			log.Printf("series: asking %s about %q: %v", q.Series.Source, q.Series.Name, err)
+		}
+		return last, lastFound, known
+	}
+	return entry, found, true
 }
 
 func alternativeFor(g *Group, m library.Series) *Alternative {
@@ -422,6 +473,11 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 			}
 			for _, k := range b.plainKeys {
 				e.found[k] = foundClaims{claims: inferred, at: e.now()}
+				if e.store != nil {
+					if err := e.store.SaveClaims(ctx, k, inferred, e.now()); err != nil {
+						log.Printf("series: keeping ISBN matches: %v", err)
+					}
+				}
 			}
 		}
 		e.mu.Unlock()
@@ -458,7 +514,7 @@ func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Dur
 			g.CaughtUp = true
 			return
 		}
-		e.next(ctx, g, &spent, budget, pause)
+		e.next(ctx, g, &spent, budget, pause, thorough)
 	})
 	rows(e.shelfOnly, func(g *Group) {
 		if g.Decision == Kept {
@@ -473,21 +529,21 @@ func (e *Engine) enrich(ctx context.Context, v *View, budget int, pause time.Dur
 	e.fillTwins(v)
 }
 
-// next fills the row's own next book from its provider's catalogue. A failed
-// lookup leaves the row pending rather than wrongly finished.
-func (e *Engine) next(ctx context.Context, g *Group, spent *int, budget int, pause time.Duration) {
+// next fills the row's own next book from its provider's catalogue. With
+// nothing known yet, the row is pending rather than wrongly finished.
+func (e *Engine) next(ctx context.Context, g *Group, spent *int, budget int, pause time.Duration, refresh bool) {
 	if e.lookahead == nil || g.NextFromShelf || g.Position == nil {
 		return
 	}
 	q := library.SeriesQuery{
-		Series:          library.Series{Name: g.Name, Position: g.Position, Slug: g.Slug, Source: g.Source},
+		Series: library.Series{
+			Name: g.Name, Position: g.Position, Slug: g.Slug,
+			Source: g.Source, Completed: g.Completed,
+		},
 		IncludeNovellas: e.prefs.IncludeNovellas,
 	}
-	entry, found, held, err := e.lookup(ctx, q, spent, budget, pause, true)
-	if err != nil {
-		log.Printf("series: looking up the next book in %q: %v", g.Name, err)
-	}
-	if !held || err != nil {
+	entry, found, held := e.lookup(ctx, q, spent, budget, pause, true, refresh)
+	if !held {
 		g.NextPending = true
 		return
 	}

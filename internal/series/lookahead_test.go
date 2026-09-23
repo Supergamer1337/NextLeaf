@@ -154,3 +154,60 @@ func TestTheNovellaPreferenceIsPartOfTheCacheKey(t *testing.T) {
 		t.Error("a novella-excluding query hits the novella-inclusive cache entry")
 	}
 }
+
+func TestAFinishedSeriesIsRecheckedWeekly(t *testing.T) {
+	// A series its provider calls complete, read to its end, will not grow;
+	// asking about it daily only spends the backend's patience.
+	ctx := context.Background()
+	r := &countingResolver{found: false}
+	l := NewLookahead(r, 24*time.Hour)
+	now := day0
+	l.now = func() time.Time { return now }
+	done := query("Mistborn", 3)
+	done.Series.Completed = true
+	ongoing := query("Stormlight", 5)
+
+	for _, q := range []library.SeriesQuery{done, ongoing} {
+		if _, _, err := l.Next(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now = day0.AddDate(0, 0, 2)
+	if !l.Cached(done) {
+		t.Error("a finished series was due a re-check after two days")
+	}
+	if l.Cached(ongoing) {
+		t.Error("an ongoing series was not re-checked after two days")
+	}
+	now = day0.AddDate(0, 0, 8)
+	if l.Cached(done) {
+		t.Error("a finished series was not re-checked after a week")
+	}
+}
+
+func TestTheLastAnswerOutlastsItsFreshness(t *testing.T) {
+	// Past its freshness an answer is due a re-check, but it is still the
+	// best thing to show until the re-check lands, and still is if the
+	// re-check fails.
+	ctx := context.Background()
+	r := &countingResolver{entry: mistborn4(), found: true}
+	l := NewLookahead(r, 24*time.Hour)
+	now := day0
+	l.now = func() time.Time { return now }
+	if _, _, err := l.Next(ctx, query("Mistborn", 3)); err != nil {
+		t.Fatal(err)
+	}
+
+	now = day0.AddDate(0, 0, 2)
+	r.err = errors.New("rate limited")
+	if l.Cached(query("Mistborn", 3)) {
+		t.Fatal("a two-day-old answer is still fresh")
+	}
+	if _, _, err := l.Next(ctx, query("Mistborn", 3)); err == nil {
+		t.Fatal("the failed re-check should surface")
+	}
+	entry, found, ok := l.Last(query("Mistborn", 3))
+	if !ok || !found || entry.Book.Title != mistborn4().Book.Title {
+		t.Errorf("Last = (%q, %v, %v), want the answer the failed re-check could not replace", entry.Book.Title, found, ok)
+	}
+}
