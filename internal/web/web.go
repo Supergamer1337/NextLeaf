@@ -124,6 +124,9 @@ type Deps struct {
 	// LoadFresh is how old the library may be before a page load refreshes
 	// it behind the page; zero means the default.
 	LoadFresh time.Duration
+	// Draining, when closed, ends every wait for a change: a server shutting
+	// down answers what is waiting rather than holding it open.
+	Draining <-chan struct{}
 }
 
 // server holds the handler's dependencies.
@@ -132,12 +135,13 @@ type server struct {
 	engine    *series.Engine
 	wait      time.Duration
 	loadFresh time.Duration
+	draining  <-chan struct{}
 }
 
 // NewHandler returns the application's HTTP handler. d.Source may be nil, in
 // which case the selector explains that no source is configured.
 func NewHandler(d Deps) http.Handler {
-	s := &server{src: d.Source, engine: d.Engine, wait: d.Wait, loadFresh: d.LoadFresh}
+	s := &server{src: d.Source, engine: d.Engine, wait: d.Wait, loadFresh: d.LoadFresh, draining: d.Draining}
 	if s.wait == 0 {
 		s.wait = 20 * time.Second
 	}
@@ -419,6 +423,7 @@ func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen strin
 		select {
 		case <-done:
 		case <-time.After(s.wait):
+		case <-s.draining:
 		case <-ctx.Done():
 			return
 		}
@@ -449,6 +454,7 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since
 			select {
 			case <-changed:
 			case <-time.After(s.wait):
+			case <-s.draining:
 			case <-ctx.Done():
 				return
 			}
