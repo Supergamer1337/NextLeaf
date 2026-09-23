@@ -1,6 +1,7 @@
 package web
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"io"
@@ -496,6 +497,39 @@ func TestTheCardCoverIsFetchedFirst(t *testing.T) {
 	cover := between(getBody(t, ready(t, src, testStore(t)), "/view"), `<img class="cover"`, `>`)
 	if strings.Contains(cover, `loading="lazy"`) || !strings.Contains(cover, `fetchpriority="high"`) {
 		t.Errorf("the card's cover waits its turn with the rest:\n%s", cover)
+	}
+}
+
+// Text is sent compressed to browsers that take it: the page is mostly the
+// drawer's markup, which gzip shrinks many times over on a slow connection.
+func TestTextIsSentCompressed(t *testing.T) {
+	h := ready(t, midSeries(), testStore(t))
+	req := httptest.NewRequest(http.MethodGet, "/view", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", rec.Header().Get("Content-Encoding"))
+	}
+	zr, err := gzip.NewReader(rec.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := getBody(t, h, "/view"); len(plain) < len(want)/2 || !strings.Contains(string(plain), "Mistborn") {
+		t.Error("the compressed body does not decompress to the page")
+	}
+	if !strings.Contains(rec.Header().Get("Vary"), "Accept-Encoding") {
+		t.Error("a cache between could serve the compressed page to a client that cannot read it")
+	}
+	// A client that did not ask gets it plain.
+	plainRec := httptest.NewRecorder()
+	h.ServeHTTP(plainRec, httptest.NewRequest(http.MethodGet, "/view", nil))
+	if plainRec.Header().Get("Content-Encoding") != "" {
+		t.Error("a client that did not ask for gzip got it anyway")
 	}
 }
 
