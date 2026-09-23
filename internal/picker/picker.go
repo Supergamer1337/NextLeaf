@@ -86,6 +86,23 @@ func Pick(rng *rand.Rand, prefs Prefs, candidates, recent, reading []library.Ent
 	return Recommendation{Entry: candidates[chosen], Pros: pros, Cons: cons}, true
 }
 
+// Keep re-scores the candidate with the given book key, for a card already on
+// screen. ok is false when it is no longer a candidate: read since, or behind
+// an earlier volume of its series.
+func Keep(prefs Prefs, candidates, recent, reading []library.Entry, key string) (Recommendation, bool) {
+	if key == "" {
+		return Recommendation{}, false
+	}
+	candidates = collapseSeries(candidates, prefs)
+	for _, c := range candidates {
+		if library.BookKey(c) == key {
+			_, pros, cons := score(c, buildProfile(candidates, recent, reading))
+			return Recommendation{Entry: c, Pros: pros, Cons: cons}, true
+		}
+	}
+	return Recommendation{}, false
+}
+
 // collapseSeries reduces each positioned series to its earliest unread volume,
 // so a series competes as one candidate — five unread volumes are one thing to
 // read next, not five lottery tickets. Entries without a series, or with an

@@ -107,6 +107,15 @@ func (l *Lookahead) Last(q library.SeriesQuery) (library.Entry, bool, bool) {
 	return a.entry, a.found, true
 }
 
+// Failed reports whether q has never been answered and the last try failed:
+// no answer is coming until a later pass asks again.
+func (l *Lookahead) Failed(q library.SeriesQuery) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	a, ok := l.answers[keyFor(q)]
+	return ok && a.at.IsZero() && a.err != nil
+}
+
 // Next returns the book following q's position, from cache when it is fresh.
 func (l *Lookahead) Next(ctx context.Context, q library.SeriesQuery) (library.Entry, bool, error) {
 	// The position is part of the key, so finishing a book asks a new question
@@ -125,6 +134,9 @@ func (l *Lookahead) Next(ctx context.Context, q library.SeriesQuery) (library.En
 
 	entry, found, err := l.resolver.NextInSeries(ctx, q)
 	now := l.now()
+	if err != nil && ctx.Err() != nil {
+		return library.Entry{}, false, err // cut short by the caller, not failed
+	}
 	if err != nil {
 		a.err, a.failedAt = err, now
 		l.mu.Lock()

@@ -819,10 +819,10 @@ func TestATwinStillBeingCheckedSaysSo(t *testing.T) {
 	// at it is waiting on the same answer.
 	hcRead := readOn("hardcover", "The Last Wish", "The Witcher", 1)
 	gmRead := readOn("grimmory", "Sword of Destiny", "The Witcher", 2)
-	hc := &catalogue{fakeSource: fakeSource{reads: []library.Entry{hcRead}}, nextErr: errors.New("rate limited")}
+	hc := &catalogue{fakeSource: fakeSource{reads: []library.Entry{hcRead}}}
 	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{gmRead}}}
 
-	v, err := twoProviders(t, hc, gm).View(context.Background())
+	v, err := twoProviders(t, hc, gm).viewWithin(context.Background(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1400,5 +1400,88 @@ func TestAKeptRowLooksForNoOtherOrderings(t *testing.T) {
 	}
 	if hc.finds != 0 {
 		t.Errorf("a kept row was looked up by ISBN %d times", hc.finds)
+	}
+}
+
+func TestAFailedLookupStopsSayingItIsChecking(t *testing.T) {
+	// A question that fails every time, such as an expired token, has no
+	// answer coming before the next scheduled pass. Saying "Checking…" until
+	// then leaves the drawer pulsing forever, and every render that sees it
+	// nudges another pass a minute later, all day.
+	hc := &catalogue{fakeSource: fakeSource{reads: []library.Entry{readOn("hardcover", "The Last Wish", "The Witcher", 1)}},
+		nextErr: errors.New("unauthorized"), next: library.Entry{Book: library.Book{Title: "Sword of Destiny"}}, found: true}
+	e := twoProviders(t, hc, shelf{})
+	now := day0
+	e.now, e.lookahead.now = func() time.Time { return now }, func() time.Time { return now }
+	ctx := context.Background()
+
+	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(failureTTL + time.Second) // no longer held, but not yet retried
+	v, err := e.viewWithin(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "The Witcher"); g.Pending() || g.NextLabel() != "" {
+		t.Errorf("after a failed lookup: Pending = %v, label = %q; want it to say nothing", g.Pending(), g.NextLabel())
+	}
+
+	// The next pass tries again, and an answer shows once there is one.
+	hc.nextErr = nil
+	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if v, err = e.viewWithin(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "The Witcher"); g.NextTitle != "Sword of Destiny" {
+		t.Errorf("after the catalogue recovered: Next = %q, want the pass to have asked again", g.NextTitle)
+	}
+}
+
+func TestAFailedIdentityLookupStopsSayingItIsChecking(t *testing.T) {
+	hc := manyClaims("Zzz Saga", "Alpha", "Beta")
+	hc.nextErr = errors.New("unauthorized")
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Book Three", "Zzz Saga", 3, "9780000000001")}}}
+	e := twoProviders(t, hc, gm)
+	ctx := context.Background()
+
+	v, err := e.compute(ctx, 1<<20, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := groupNamed(t, v, "Zzz Saga")
+	if g.Pending() {
+		t.Error("the row still says it is checking after every lookup failed")
+	}
+	for _, alt := range g.Alternatives {
+		if alt.Pending {
+			t.Errorf("%q says it is still being checked after its lookup failed", alt.Name)
+		}
+	}
+}
+
+func TestAFailedISBNLookupStopsSayingItIsChecking(t *testing.T) {
+	hc := &catalogue{findErr: errors.New("unauthorized")}
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Death's End", "Three-Body", 3, "9780765377104")}}}
+	e := twoProviders(t, hc, gm)
+	ctx := context.Background()
+
+	v, err := e.compute(ctx, 1<<20, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := groupNamed(t, v, "Three-Body"); g.Pending() {
+		t.Error("a row whose ISBN lookup failed still says it is checking")
+	}
+
+	// A later pass asks again.
+	hc.findErr = nil
+	if _, err := e.compute(ctx, 1<<20, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if hc.finds != 2 {
+		t.Errorf("looked up by ISBN %d times, want the failure retried by the next pass", hc.finds)
 	}
 }

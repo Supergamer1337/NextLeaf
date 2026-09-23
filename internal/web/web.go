@@ -11,6 +11,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -210,7 +211,7 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 	// be stretched by a slow one — except when Decide says the decision left
 	// the group with no cached answer, which is the one case the re-render must
 	// be allowed to ask, or the row comes back with nothing next.
-	data := s.viewOf(ctx, false, uncached)
+	data := s.viewOf(ctx, false, uncached, "")
 	// A decision made in the drawer shows its effect where the reader is
 	// standing — the row moves, undo alongside — so only card decisions get
 	// the confirmation banner.
@@ -307,8 +308,11 @@ type viewData struct {
 	// Settled marks the render in which a waiting drawer got its last answer.
 	Settled bool
 	// FollowUp is the library generation a page was painted from, when a
-	// refresh behind it may bring something newer.
+	// refresh behind it may bring something newer. CardKey names the book on
+	// the card, so the follow-up can leave it there; it is query-escaped, as
+	// html/template does not know hx-get for a URL.
 	FollowUp string
+	CardKey  string
 }
 
 // panel is the series drawer: every tracked series, grouped by what applies
@@ -390,7 +394,7 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 		s.refreshDrawer(ctx, w, q.Get("since"), q.Has("waiting"))
 		return
 	case q.Has("after"):
-		s.followUp(ctx, w, q.Get("after"))
+		s.followUp(ctx, w, q.Get("after"), q.Get("keep"))
 		return
 	}
 	reroll := q.Has("another")
@@ -407,15 +411,16 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	data := s.viewOf(ctx, reroll, false)
+	data := s.viewOf(ctx, reroll, false, "")
 	data.FollowUp = followUp
 	renderView(w, data, http.StatusOK)
 }
 
 // followUp answers a page painted from an old library: once the refresh behind
 // it is done, the whole view again if the library changed since generation
-// seen, and 204 — nothing to swap — if it did not.
-func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen string) {
+// seen, and 204 — nothing to swap — if it did not. The book keyed keep stays
+// on the card unless something should take its place.
+func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep string) {
 	after, err := strconv.ParseUint(seen, 10, 64)
 	if s.engine == nil || err != nil {
 		w.WriteHeader(http.StatusNoContent)
@@ -434,7 +439,7 @@ func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen strin
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	renderView(w, s.viewOf(ctx, false, false), http.StatusOK)
+	renderView(w, s.viewOf(ctx, false, false, keep), http.StatusOK)
 }
 
 // refreshDrawer renders the drawer alone, for an open page listening for
@@ -488,7 +493,7 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since
 // viewOf builds the fragment's model. catalogue says whether this render may
 // spend fresh next-in-series lookups: only a decision that left its row with
 // nothing known does, so the result of the reader's click shows in one step.
-func (s *server) viewOf(ctx context.Context, reroll, catalogue bool) viewData {
+func (s *server) viewOf(ctx context.Context, reroll, catalogue bool, keep string) viewData {
 	data := viewData{Configured: s.src != nil}
 	if s.src == nil || s.engine == nil {
 		return data
@@ -501,15 +506,21 @@ func (s *server) viewOf(ctx context.Context, reroll, catalogue bool) viewData {
 	)
 	data.Gen, _ = s.engine.Changes()
 	data.Listening = true
-	if catalogue {
+	switch {
+	case catalogue:
 		rec, view, err = s.engine.Recommend(ctx, reroll)
-	} else {
+	case keep != "":
+		rec, view, err = s.engine.RecommendKeeping(ctx, keep, 0)
+	default:
 		rec, view, err = s.engine.RecommendWithin(ctx, reroll, 0)
 	}
 	if err != nil {
 		data.Error = err.Error()
 	} else {
 		data.Rec, data.HasRec = rec.Rec, rec.OK
+		if rec.OK {
+			data.CardKey = url.QueryEscape(library.BookKey(rec.Rec.Entry))
+		}
 		data.Decidable, data.Decide = rec.Decidable, rec.Group
 		data.Continuation = rec.Continuation
 		data.Panel = group(view)

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"html"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
@@ -145,7 +146,8 @@ type slowCat struct {
 }
 
 func (s slowCat) NextInSeries(ctx context.Context, _ library.SeriesQuery) (library.Entry, bool, error) {
-	return library.Entry{}, false, context.DeadlineExceeded
+	<-ctx.Done()
+	return library.Entry{}, false, ctx.Err()
 }
 func (s slowCat) SeriesByISBN(_ context.Context, isbns []string) (map[string][]library.Series, error) {
 	out := map[string][]library.Series{}
@@ -241,7 +243,9 @@ func TestTheRefreshAnswersTheMomentThereIsSomethingNew(t *testing.T) {
 	st := testStore(t)
 	engine := series.NewEngine(st, waitingLibrary(), picker.Prefs{IncludeNovellas: true})
 	h := NewHandler(Deps{Source: waitingLibrary(), Engine: engine, Wait: 300 * time.Millisecond})
-	if _, err := engine.View(context.Background()); err != nil { // an answer lands
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := engine.View(ctx); err != nil { // an ask ends
 		t.Fatal(err)
 	}
 	gen, _ := engine.Changes()
@@ -348,7 +352,16 @@ func TestEachUnsettledSeriesIsMarked(t *testing.T) {
 
 func TestACollapsedSectionSaysItHoldsAnUnsettledSeries(t *testing.T) {
 	// Finished starts folded, so a marker on the row alone would be hidden.
-	body := getBody(t, warmed(t, finishedAndUnchecked(), testStore(t)), "/view")
+	// Warmed until its catalogue is found, but not answered: the lookup is
+	// still out when the pass is cut short.
+	src := finishedAndUnchecked()
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := engine.View(ctx); err != nil {
+		t.Fatal(err)
+	}
+	body := getBody(t, NewHandler(Deps{Source: src, Engine: engine}), "/view")
 	summary := between(body, `data-group="Finished"`, `</summary>`)
 	if !strings.Contains(summary, `class="pending-dot"`) {
 		t.Errorf("the folded Finished section does not say it holds a series still being checked:\n%s", summary)
@@ -510,6 +523,38 @@ func TestABookAddedToTheListShowsUpWithoutWaitingForThePage(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/view?after="+strconv.FormatUint(gen, 10), nil))
 	if rec.Code != 204 {
 		t.Errorf("a follow-up with nothing new answered %d, want 204", rec.Code)
+	}
+}
+
+func TestAFollowUpLeavesTheCardOnScreen(t *testing.T) {
+	// The follow-up redraws the page with what the refresh brought. The card
+	// the reader is already looking at stays, rather than being dealt afresh.
+	lib := &changingLibrary{}
+	for _, title := range []string{"A", "B", "C", "D", "E", "F", "G", "H"} {
+		lib.toRead = append(lib.toRead, library.Entry{Book: library.Book{Title: title}, Status: library.StatusWantToRead})
+	}
+	src := library.NewCached(lib, time.Hour)
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{})
+	<-engine.RefreshLibrary()
+	h := NewHandler(Deps{Source: src, Engine: engine, LoadFresh: time.Nanosecond})
+
+	release := make(chan struct{})
+	lib.mu.Lock()
+	lib.toRead = append(lib.toRead, library.Entry{Book: library.Book{Title: "Piranesi"}, Status: library.StatusWantToRead})
+	lib.hold = release
+	lib.mu.Unlock()
+	body := getBody(t, h, "/view")
+	shown := between(body, `class="rec-title">`, `<`)
+	follow := between(body, `class="card-follow"`, `>`)
+	path := html.UnescapeString(follow[strings.Index(follow, "/view?after="):])
+	path = path[:strings.Index(path, `"`)]
+	close(release)
+
+	for i := 0; i < 10; i++ {
+		after := getBody(t, h, path)
+		if got := between(after, `class="rec-title">`, `<`); got != shown {
+			t.Fatalf("the follow-up dealt %q over %q", got, shown)
+		}
 	}
 }
 

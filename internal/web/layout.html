@@ -552,6 +552,9 @@
         if (d) { d.classList.toggle("open", open); }
         var scrim = document.querySelector(".drawer-scrim");
         if (scrim) { scrim.classList.toggle("open", open); }
+        // However the drawer closed (scrim, Back, a link), a wheel left open
+        // would keep holding the page's updates.
+        if (!open) { closeWheel(); }
       }
 
       function closeDrawer() { location.hash = ""; }
