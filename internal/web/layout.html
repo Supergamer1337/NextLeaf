@@ -522,6 +522,13 @@
     </div>
     <div class="drawer-dim"></div>
     <div class="drawer-body" id="drawer-body"></div>
+    {{/* The page's one drawer listener: here, where no swap reaches, so a
+         redraw can never leave a second one running. It asks for the next
+         change since the generation the status shows (see the script), and
+         replaces its own request rather than adding another. */}}
+    <span id="drawer-listen" hidden hx-get="/view?drawer=1" hx-trigger="listen"
+          hx-target="#drawer-body" hx-swap="morph:innerHTML"
+          hx-sync="this:replace" hx-indicator="this"></span>
   </aside>
 
   <script src="/static/htmx.min.js" defer></script>
@@ -549,9 +556,9 @@
 
       function closeDrawer() { location.hash = ""; }
 
-      // A drawer refresh landing under an open wheel would close it, so it is
-      // held until the wheel closes, then fetched afresh.
-      var heldRefresh = false;
+      // Background answers that land under an open wheel would close it, so
+      // they are held, and asked for again when it closes.
+      var held = { drawer: false, card: false };
       function requestPath(e) {
         var p = e.detail.pathInfo, c = e.detail.requestConfig;
         return (p && p.requestPath) || (c && c.path) || "";
@@ -560,8 +567,12 @@
       // A background request: a drawer refresh, or a page's follow-up. Neither
       // is anything the reader asked for, so neither is shown as loading.
       function isBackground(e) { return isDrawerRefresh(e) || requestPath(e).indexOf("after=") >= 0; }
-      function refreshDrawer() {
-        htmx.ajax("GET", "/view?drawer=1", { target: "#drawer-body", swap: "morph:innerHTML" });
+      // The drawer's one listener asks for the next change since the
+      // generation the drawer shows, and is asked again after each answer.
+      var listener = document.getElementById("drawer-listen");
+      function listen() {
+        var st = document.getElementById("drawer-status");
+        if (listener && st && st.dataset.gen) { htmx.trigger(listener, "listen"); }
       }
 
       function closeWheel() {
@@ -570,9 +581,14 @@
         var d = drawer();
         if (d) { d.classList.remove("dimmed"); }
         openRow = null;
-        if (heldRefresh) {
-          heldRefresh = false;
-          refreshDrawer();
+        if (held.card) {
+          held.card = false;
+          var follow = document.querySelector(".card-follow");
+          if (follow) { htmx.trigger(follow, "follow"); }
+        }
+        if (held.drawer) {
+          held.drawer = false;
+          listen();
         }
       }
 
@@ -716,17 +732,35 @@
       // Error responses are swapped by configuration, so a refusal can reach
       // the notice slot. Anything that fails without saying where it belongs —
       // a proxy's 502 page, say — would otherwise be morphed over the card.
+      document.body.addEventListener("htmx:configRequest", function (e) {
+        if (e.detail.elt !== listener) { return; }
+        var st = document.getElementById("drawer-status");
+        e.detail.parameters.since = st.dataset.gen;
+        if ("waiting" in st.dataset) { e.detail.parameters.waiting = "1"; }
+      });
       document.body.addEventListener("htmx:beforeSwap", function (e) {
         if (!isBackground(e)) { return; }
         var xhr = e.detail.xhr;
-        if ((xhr && xhr.status >= 400) || openRow) { e.detail.shouldSwap = false; }
-        if (openRow) { heldRefresh = true; }
+        if (xhr && xhr.status >= 400) { e.detail.shouldSwap = false; return; }
+        if (!openRow) { return; }
+        e.detail.shouldSwap = false;
+        if (isDrawerRefresh(e)) { held.drawer = true; } else { held.card = true; }
       });
-      // A refresh that failed — a restart, a proxy's timeout — must not leave
-      // the drawer waiting for good, and is nothing the reader needs told.
       document.body.addEventListener("htmx:afterRequest", function (e) {
-        if (!isDrawerRefresh(e)) { return; }
-        if (!e.detail.successful || e.detail.xhr.status === 204) { setTimeout(refreshDrawer, 5000); }
+        if (e.detail.elt === listener) {
+          if (held.drawer) { return; } // it resumes when the wheel closes
+          if (e.detail.successful && e.detail.xhr.status !== 204) { listen(); return; }
+          // Dropped by a restart or a proxy's timeout, or replaced: ask again
+          // shortly, unless a request is already out. Nothing to tell the
+          // reader.
+          setTimeout(function () {
+            if (!listener.classList.contains("htmx-request")) { listen(); }
+          }, 5000);
+          return;
+        }
+        // Anything redrawn into #app brings a newer drawer: listen from it,
+        // replacing whatever was waiting on the old one.
+        if (e.detail.successful && e.detail.target === app && !held.card) { listen(); }
       });
 
       document.body.addEventListener("htmx:beforeSwap", function (e) {
@@ -785,16 +819,20 @@
 
       // A morph rebuilds the drawer from server HTML, which carries none of the
       // state these classes hold, so re-derive it every time.
-      document.body.addEventListener("htmx:afterSettle", function () {
-        settleCovers();
-        // The overlay outlives the swap, so the wheel's transient state is
-        // cleared rather than replaced along with the rows.
+      // The overlay outlives the swap, so the wheel's transient state is
+      // cleared rather than replaced along with the rows — as the swap lands,
+      // not when it settles a moment later, or a wheel opened in between
+      // would be closed by a swap that happened before it.
+      document.body.addEventListener("htmx:afterSwap", function () {
         closeWheel();
         var d = drawer();
         if (d) { d.classList.remove("dimmed"); }
         document.querySelectorAll(".drawer-row.spinning").forEach(function (r) {
           r.classList.remove("spinning");
         });
+      });
+      document.body.addEventListener("htmx:afterSettle", function () {
+        settleCovers();
         syncDrawer();
         app.setAttribute("aria-busy", "false");
       });
