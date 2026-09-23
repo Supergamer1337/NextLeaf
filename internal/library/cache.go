@@ -210,11 +210,17 @@ func Refresh(ctx context.Context, s Source) (changed bool, err error) {
 	case Refresher:
 		return v.Refresh(ctx)
 	case *Multi:
-		var errs []error
-		for _, sub := range v.sources {
-			c, err := Refresh(ctx, sub)
+		// Every source at once: each is its own round trip, and the slowest
+		// alone should set how long a refresh takes.
+		changes := make([]bool, len(v.sources))
+		errs := make([]error, len(v.sources))
+		var wg sync.WaitGroup
+		for i, sub := range v.sources {
+			wg.Go(func() { changes[i], errs[i] = Refresh(ctx, sub) })
+		}
+		wg.Wait()
+		for _, c := range changes {
 			changed = changed || c
-			errs = append(errs, err)
 		}
 		return changed, errors.Join(errs...)
 	case unwrapper:
@@ -229,20 +235,28 @@ func Refresh(ctx context.Context, s Source) (changed bool, err error) {
 // readers would have to wait for it either way. A failed fetch keeps what is
 // held, marked stale, as a failed read does.
 func (c *Cached) Refresh(ctx context.Context) (bool, error) {
+	// The three lists at once: each is its own round trip.
 	var changed [3]bool
-	err := errors.Join(
-		c.swapIn(ctx, "reading", &c.readingMu, &c.readingOK, &changed[0], c.src.CurrentlyReading,
+	var errs [3]error
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		errs[0] = c.swapIn(ctx, "reading", &c.readingMu, &c.readingOK, &changed[0], c.src.CurrentlyReading,
 			func() []Entry { return c.reading },
-			func(e []Entry) { c.reading, c.readingAt = e, c.now() }),
-		c.swapIn(ctx, "reads", &c.readsMu, &c.readsOK, &changed[1],
+			func(e []Entry) { c.reading, c.readingAt = e, c.now() })
+	})
+	wg.Go(func() {
+		errs[1] = c.swapIn(ctx, "reads", &c.readsMu, &c.readsOK, &changed[1],
 			func(ctx context.Context) ([]Entry, error) { return c.src.RecentReads(ctx, 0) },
 			func() []Entry { return c.reads },
-			func(e []Entry) { c.reads, c.readsLimit, c.readsAt = e, 0, c.now() }),
-		c.swapIn(ctx, "toRead", &c.toReadMu, &c.toReadOK, &changed[2], c.src.ToRead,
+			func(e []Entry) { c.reads, c.readsLimit, c.readsAt = e, 0, c.now() })
+	})
+	wg.Go(func() {
+		errs[2] = c.swapIn(ctx, "toRead", &c.toReadMu, &c.toReadOK, &changed[2], c.src.ToRead,
 			func() []Entry { return c.toRead },
-			func(e []Entry) { c.toRead, c.toReadAt = e, c.now() }),
-	)
-	return changed[0] || changed[1] || changed[2], err
+			func(e []Entry) { c.toRead, c.toReadAt = e, c.now() })
+	})
+	wg.Wait()
+	return changed[0] || changed[1] || changed[2], errors.Join(errs[:]...)
 }
 
 func (c *Cached) swapIn(ctx context.Context, query string, mu *sync.Mutex, ok, changed *bool,
