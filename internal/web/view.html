@@ -225,7 +225,7 @@
             <button class="drawer-act" type="button" hx-post="/series/drop" hx-vals="{{$vals}}" hx-disabled-elt="this">Drop</button>
             {{end}}
             {{if .Kept}}
-            <button class="drawer-act" type="button" hx-post="/series/clear" hx-vals="{{$vals}}" hx-disabled-elt="this">Suggest others</button>
+            <button class="drawer-act" type="button" hx-post="/series/unkeep" hx-vals="{{$vals}}" hx-disabled-elt="this">Suggest others</button>
             {{end}}
             {{if $.Undo}}
             <button class="drawer-act" type="button" hx-post="/series/clear" hx-vals="{{$vals}}" hx-disabled-elt="this">{{$.Undo}}</button>

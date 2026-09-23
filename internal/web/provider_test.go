@@ -386,10 +386,10 @@ func TestAContinuableSeriesIsCountedApartAndCanBeKeptToItsOwnSeries(t *testing.T
 	}
 	// And it can be taken back.
 	fin := section(after, "Finished")
-	if !strings.Contains(fin, `hx-post="/series/clear"`) || !strings.Contains(fin, "Suggest others") {
+	if !strings.Contains(fin, `hx-post="/series/unkeep"`) || !strings.Contains(fin, "Suggest others") {
 		t.Error("a kept series has no way to have the others suggested again")
 	}
-	rec = post(t, h, "/series/clear", url.Values{"name": {"Three-Body"}, "from": {"drawer"}})
+	rec = post(t, h, "/series/unkeep", url.Values{"name": {"Three-Body"}, "from": {"drawer"}})
 	if !strings.Contains(section(rec.Body.String(), "Continues elsewhere"), "Three-Body") {
 		t.Error("clearing the keep does not bring the offer back")
 	}
