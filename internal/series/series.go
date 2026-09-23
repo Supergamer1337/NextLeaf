@@ -25,6 +25,10 @@ const (
 	// Pinned makes the series the next thing to read; it clears once the
 	// pinned book is read or started.
 	Pinned
+	// Stopped turns down continuing a finished series on another provider:
+	// what the reader tracked is what they meant to read. Like a drop, it
+	// clears when one of its books is added to the TBR after the stop.
+	Stopped
 )
 
 func (d Decision) String() string {
@@ -35,6 +39,8 @@ func (d Decision) String() string {
 		return "dropped"
 	case Pinned:
 		return "pinned"
+	case Stopped:
+		return "stopped"
 	default:
 		return "active"
 	}
@@ -46,6 +52,7 @@ const (
 	KindPark   = "parked"
 	KindDrop   = "dropped"
 	KindPin    = "pinned"
+	KindStop   = "stopped"
 	KindClear  = "clear"
 	KindPrefer = "prefer"
 )

@@ -290,6 +290,9 @@ type panel struct {
 	Parked   []series.Group
 	Dropped  []series.Group
 	Finished []series.Group
+	// Continuable holds series finished on their own provider that another
+	// carries on past, counted apart from the ones that are done.
+	Continuable []series.Group
 	// Pending is true while any answer is still to come. The drawer says so
 	// once, since the row it applies to may sit in a collapsed section.
 	Pending bool
@@ -297,7 +300,7 @@ type panel struct {
 
 // Count is how many series the drawer holds, for the toggle's label.
 func (p panel) Count() int {
-	return len(p.Pinned) + len(p.Active) + len(p.Parked) + len(p.Dropped) + len(p.Finished)
+	return len(p.Pinned) + len(p.Active) + len(p.Parked) + len(p.Dropped) + len(p.Finished) + len(p.Continuable)
 }
 
 // Any reports whether there is anything worth opening the drawer for.
@@ -316,6 +319,8 @@ func group(v series.View) panel {
 			p.Parked = append(p.Parked, g)
 		case g.Decision == series.Dropped:
 			p.Dropped = append(p.Dropped, g)
+		case g.ContinueOn != nil:
+			p.Continuable = append(p.Continuable, g)
 		case g.CaughtUp:
 			p.Finished = append(p.Finished, g)
 		default:

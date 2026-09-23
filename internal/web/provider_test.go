@@ -61,18 +61,20 @@ func TestAFinishedShelfOffersTheCatalogue(t *testing.T) {
 	h := ready(t, shelfAndCatalogue(), testStore(t))
 	body := getBody(t, h, "/view")
 
-	// The row itself is answered by its own provider only. Hardcover's book
-	// may be named in the wheel, as the thing a switch would lead to, but
-	// never on the row as though Grimmory had offered it.
+	// Hardcover's book may be named on the row, but only as Hardcover's: never
+	// as though Grimmory had offered it.
 	for _, line := range nextLines(body) {
-		if strings.Contains(line, "The Redemption of Time") {
-			t.Errorf("a Grimmory row was answered from Hardcover's catalogue without being asked to: %q", line)
+		if strings.Contains(line, "The Redemption of Time") && !strings.Contains(line, "on Hardcover") {
+			t.Errorf("a Grimmory row presents Hardcover's book as its own: %q", line)
 		}
 	}
-	// The row reads like any other the reader is caught up with; the icon is
-	// the only difference.
-	if !strings.Contains(section(body, "Finished"), "Three-Body") {
-		t.Error("a row with nothing left on its provider belongs under Finished")
+	// Finished on its own provider, but not finished: it has a section of its
+	// own, so what could still go on is counted apart from what is done.
+	if strings.Contains(section(body, "Finished"), "Three-Body") {
+		t.Error("a row another provider carries on past is filed with the finished ones")
+	}
+	if !strings.Contains(section(body, "Continues elsewhere"), "Three-Body") {
+		t.Error("a row another provider carries on past has no section of its own")
 	}
 	// An icon in the badge row, not a sentence: its label says where it leads.
 	if !strings.Contains(body, `aria-label="Continue on Hardcover as “Remembrance of Earth&#39;s Past”"`) {
@@ -269,5 +271,42 @@ func TestACollapsedSectionSaysItHoldsAnUnsettledSeries(t *testing.T) {
 	}
 	if strings.Contains(between(body, `data-group="Current"`, `</summary>`), "pending-dot") {
 		t.Error("a section with nothing unsettled is marked")
+	}
+}
+
+func TestAContinuableSeriesIsCountedApartAndCanBeTurnedDown(t *testing.T) {
+	h := ready(t, shelfAndCatalogue(), testStore(t))
+	body := getBody(t, h, "/view")
+
+	sec := section(body, "Continues elsewhere")
+	if !strings.Contains(sec, `<span class="drawer-tally">1</span>`) {
+		t.Errorf("the section does not count what could still go on:\n%s", sec)
+	}
+	if !strings.Contains(body, "Next on Hardcover: The Redemption of Time") {
+		t.Error("the row does not say what it would continue with, or where")
+	}
+	if !strings.Contains(body, `hx-post="/series/stop"`) {
+		t.Fatal("there is no way to say no to continuing it")
+	}
+
+	// Turning it down files it with the finished ones, for good.
+	rec := post(t, h, "/series/stop", url.Values{"name": {"Three-Body"}, "from": {"drawer"}})
+	if rec.Code != 200 {
+		t.Fatalf("stop: status = %d, body = %s", rec.Code, rec.Body)
+	}
+	after := rec.Body.String()
+	if !strings.Contains(section(after, "Finished"), "Three-Body") {
+		t.Error("a stopped series is not filed with the finished ones")
+	}
+	if strings.Contains(after, "Continues elsewhere") || strings.Contains(after, "row-follow") {
+		t.Error("a stopped series is still offered for continuing")
+	}
+	// And it can be taken back.
+	if !strings.Contains(section(after, "Finished"), `hx-post="/series/clear"`) {
+		t.Error("a stopped series has no way to be offered again")
+	}
+	rec = post(t, h, "/series/clear", url.Values{"name": {"Three-Body"}, "from": {"drawer"}})
+	if !strings.Contains(section(rec.Body.String(), "Continues elsewhere"), "Three-Body") {
+		t.Error("clearing the stop does not bring the offer back")
 	}
 }

@@ -244,16 +244,26 @@
     }
     .drawer-group--flat > .drawer-label { display: block; padding: 0.15rem 0; }
     .drawer-next, .drawer-pos { display: block; color: var(--muted); font-size: 0.75rem; margin-top: 0.1rem; }
-    /* Housekeeping, not a warning: quiet, and still. */
+    /* Answers still coming in. It pulses so the drawer reads as working
+       rather than stuck; reduced motion keeps it still (see below). */
     .drawer-status {
-      margin: 0 0 0.6rem; font-size: 0.75rem; color: var(--muted);
-      display: flex; align-items: center; gap: 0.4rem;
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      margin: 0 0 0.7rem; padding: 0.3rem 0.75rem 0.3rem 0.6rem;
+      font-size: 0.75rem; color: var(--moss); background: var(--tint); border-radius: 999px;
     }
     .drawer-status::before, .pending-dot {
-      content: ""; width: 0.4rem; height: 0.4rem; border-radius: 50%;
-      background: var(--muted); opacity: 0.6; flex: none;
+      content: ""; width: 0.45rem; height: 0.45rem; border-radius: 50%;
+      background: var(--moss); flex: none;
+      animation: pending-pulse 1.4s ease-in-out infinite;
     }
-    .pending-dot { display: inline-block; margin-left: 0.4rem; vertical-align: middle; }
+    .pending-dot { display: inline-block; margin-left: 0.45rem; vertical-align: middle; }
+    .is-checking { animation: pending-fade 1.4s ease-in-out infinite; }
+    @keyframes pending-pulse {
+      0%   { transform: scale(0.8); opacity: 0.55; box-shadow: 0 0 0 0 var(--moss); }
+      50%  { transform: scale(1.1); opacity: 1; }
+      100% { transform: scale(0.8); opacity: 0.55; box-shadow: 0 0 0 0.4rem transparent; }
+    }
+    @keyframes pending-fade { 50% { opacity: 0.45; } }
     .drawer-acts { display: flex; gap: 0.7rem; margin-top: 0.4rem; flex-wrap: wrap; }
     .drawer-act {
       font: inherit; font-size: 0.75rem; color: var(--muted);
@@ -438,7 +448,8 @@
       .btn, .theme-toggle, img.cover, .drawer-scrim { transition: none; }
       .btn:hover { transform: none; }
       .spinning .wheel-prev, .spinning .wheel-next, .spinning .wheel-face,
-      .wheel-item.roll-up, .wheel-item.roll-down { animation: none; }
+      .wheel-item.roll-up, .wheel-item.roll-down,
+      .drawer-status::before, .pending-dot, .is-checking { animation: none; }
     }
     /* The waiting card holds the real card's footprint, so nothing jumps
        when the recommendation lands. Only the shell carries it: once a card
