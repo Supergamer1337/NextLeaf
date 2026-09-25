@@ -80,3 +80,29 @@ func TestMastheadMarkIsTheIconFile(t *testing.T) {
 		}
 	}
 }
+
+func TestAnExpiredAssetIsRevalidatedNotRefetched(t *testing.T) {
+	// The assets are kept a day. Embedded files have no modification time,
+	// so without a validator every day brought the whole of htmx down again.
+	h := NewHandler(Deps{})
+	first := httptest.NewRecorder()
+	h.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/static/htmx.min.js", nil))
+	etag := first.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("the asset has no ETag to revalidate against")
+	}
+	again := httptest.NewRequest(http.MethodGet, "/static/htmx.min.js", nil)
+	again.Header.Set("If-None-Match", etag)
+	again.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, again)
+	if rec.Code != http.StatusNotModified || rec.Body.Len() != 0 {
+		t.Errorf("revalidating: status %d with %d bytes, want 304 and nothing", rec.Code, rec.Body.Len())
+	}
+
+	other := httptest.NewRecorder()
+	h.ServeHTTP(other, httptest.NewRequest(http.MethodGet, "/static/idiomorph-ext.min.js", nil))
+	if other.Header().Get("ETag") == etag {
+		t.Error("two different assets share an ETag")
+	}
+}

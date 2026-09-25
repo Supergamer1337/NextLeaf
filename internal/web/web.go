@@ -4,11 +4,14 @@ package web
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"html/template"
 	"io"
+	"io/fs"
 	"mime"
 	"net/http"
 	"net/url"
@@ -96,6 +99,29 @@ var selectFuncs = template.FuncMap{
 	},
 }
 
+// staticETags names each embedded asset by its content. Embedded files have
+// no modification time, so the file server has nothing else to validate
+// against. The tags are weak: compressed and plain copies share them.
+var staticETags = func() map[string]string {
+	tags := map[string]string{}
+	err := fs.WalkDir(staticFS, "static", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := staticFS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(b)
+		tags[path] = `W/"` + hex.EncodeToString(sum[:8]) + `"`
+		return nil
+	})
+	if err != nil {
+		panic(err) // embedded: unreadable means a broken build
+	}
+	return tags
+}()
+
 // shellHTML is the constant document every visit starts from: styles,
 // masthead, and the mount the card and drawer are morphed into. It reads no
 // source, so it cannot be slow and it cannot fail.
@@ -161,10 +187,14 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("GET /healthcheck", handleHealthcheck)
 	// Paths line up with the embed, so no prefix stripping is needed. The
 	// assets are vendored and change only with a deploy, so a day-long cache
-	// costs at worst one stale day after one.
+	// costs at worst one stale day after one. Past that day the ETag lets the
+	// browser revalidate what it holds instead of fetching it again.
 	static := http.FileServerFS(staticFS)
 	mux.Handle("GET /static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
+		if tag, ok := staticETags[strings.TrimPrefix(r.URL.Path, "/")]; ok {
+			w.Header().Set("ETag", tag)
+		}
 		static.ServeHTTP(w, r)
 	}))
 	return compressed(mux)
@@ -248,7 +278,12 @@ func (s *server) handleCover(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(contentType, "image/") {
 		w.Header().Set("Content-Type", contentType)
 	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	// A versioned URL names one cover for good: a new cover is a new URL.
+	if r.URL.Query().Get("v") != "" {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+	}
 	_, _ = io.Copy(w, body)
 }
 
