@@ -534,7 +534,9 @@
       <a class="drawer-close" href="#" aria-label="Close">&times;</a>
     </div>
     <div class="drawer-dim"></div>
-    <div class="drawer-body" id="drawer-body">{{with .View}}{{template "drawerPanel" .}}{{end}}</div>
+    {{/* Empty until the drawer is first opened: its rows, and their covers,
+         are fetched then rather than with every page. */}}
+    <div class="drawer-body" id="drawer-body"></div>
     {{/* The page's one drawer listener: here, where no swap reaches, so a
          redraw can never leave a second one running. It asks for the next
          change since the generation the status shows (see the script), and
@@ -562,7 +564,15 @@
       function syncDrawer() {
         var open = location.hash === "#series";
         var d = drawer();
-        if (d) { d.classList.toggle("open", open); }
+        if (d) {
+          d.classList.toggle("open", open);
+          if (open && !d.classList.contains("opened")) {
+            // First opened: from now on the rows travel, starting at once.
+            d.classList.add("opened");
+            drawNow = true;
+            listen();
+          }
+        }
         var scrim = document.querySelector(".drawer-scrim");
         if (scrim) { scrim.classList.toggle("open", open); }
         // However the drawer closed (scrim, Back, a link), a wheel left open
@@ -585,13 +595,18 @@
       function isBackground(e) { return isDrawerRefresh(e) || requestPath(e).indexOf("after=") >= 0; }
       // The drawer's one listener asks for the next change since the
       // generation the drawer shows, and is asked again after each answer.
+      // Until the drawer is opened it hears only the toggle and status.
       var listener = document.getElementById("drawer-listen");
+      var drawNow = false;
+      function opened() { var d = drawer(); return !!d && d.classList.contains("opened"); }
       // One retry at most: asking again cancels any that is pending, or a
       // drawer answering "nothing" at once would gain a retry per redraw.
       var retry = null;
       function listen() {
         clearTimeout(retry);
         retry = null;
+        // Opened from the address before htmx is up: the page's load listens.
+        if (!window.htmx) { return; }
         var st = document.getElementById("drawer-status");
         if (listener && st && st.dataset.gen) { htmx.trigger(listener, "listen"); }
       }
@@ -754,7 +769,10 @@
       // the notice slot. Anything that fails without saying where it belongs —
       // a proxy's 502 page, say — would otherwise be morphed over the card.
       document.body.addEventListener("htmx:configRequest", function (e) {
+        if (opened()) { e.detail.parameters.panel = "1"; }
         if (e.detail.elt !== listener) { return; }
+        // A drawer just opened is drawn at once, not at the next change.
+        if (drawNow) { drawNow = false; return; }
         var st = document.getElementById("drawer-status");
         e.detail.parameters.since = st.dataset.gen;
         if ("waiting" in st.dataset) { e.detail.parameters.waiting = "1"; }

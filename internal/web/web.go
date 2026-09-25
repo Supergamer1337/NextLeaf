@@ -251,6 +251,7 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 	// the group with no cached answer, which is the one case the re-render must
 	// be allowed to ask, or the row comes back with nothing next.
 	data := s.viewOf(ctx, false, uncached, "")
+	data.WithPanel = r.FormValue("panel") != ""
 	// A decision made in the drawer shows its effect where the reader is
 	// standing — the row moves, undo alongside — so only card decisions get
 	// the confirmation banner.
@@ -361,6 +362,9 @@ type viewData struct {
 	CardKey  string
 	// StaleKey is the query-escaped staleKey the page was painted with.
 	StaleKey string
+	// WithPanel is set once the page has opened its drawer: only then do the
+	// drawer's rows, and their covers, travel with the rest.
+	WithPanel bool
 }
 
 // panel is the series drawer: every tracked series, grouped by what applies
@@ -450,7 +454,8 @@ func (s *server) handleShell(w http.ResponseWriter, r *http.Request) {
 // handleView renders the card and drawer as one fragment. "another" flips
 // from the series continuation to a variety pick; "drawer" asks for the
 // drawer alone, and "after" for the follow-up to a page painted from an old
-// library.
+// library. "panel" says the page has opened its drawer, so the drawer's rows
+// travel too; until then only its toggle and status do.
 //
 // A page load never waits on a backend. It paints from what is held and asks
 // the catalogue nothing; the background pass does that. If the library is
@@ -460,16 +465,19 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	q := r.URL.Query()
+	panel := q.Has("panel")
 	switch {
 	case q.Has("drawer"):
-		s.refreshDrawer(ctx, w, q.Get("since"), q.Has("waiting"))
+		s.refreshDrawer(ctx, w, q.Get("since"), q.Has("waiting"), panel)
 		return
 	case q.Has("after"):
-		s.followUp(ctx, w, q.Get("after"), q.Get("keep"), q.Get("stale"))
+		s.followUp(ctx, w, q.Get("after"), q.Get("keep"), q.Get("stale"), panel)
 		return
 	}
 	s.visit()
-	renderView(w, s.pageView(ctx, q.Has("another")), http.StatusOK)
+	data := s.pageView(ctx, q.Has("another"))
+	data.WithPanel = panel
+	renderView(w, data, http.StatusOK)
 }
 
 // pageView is the view a page load shows. It paints from what is held and asks
@@ -507,7 +515,7 @@ func (s *server) visit() {
 // since generation seen, or if the sources down are no longer those in stale,
 // the page's own staleKey; and 204, nothing to swap, if neither. The book
 // keyed keep stays on the card unless something should take its place.
-func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep, stale string) {
+func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep, stale string, panel bool) {
 	after, err := strconv.ParseUint(seen, 10, 64)
 	if s.engine == nil || err != nil {
 		w.WriteHeader(http.StatusNoContent)
@@ -526,7 +534,9 @@ func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	renderView(w, s.viewOf(ctx, false, false, keep), http.StatusOK)
+	data := s.viewOf(ctx, false, false, keep)
+	data.WithPanel = panel
+	renderView(w, data, http.StatusOK)
 }
 
 // staleKey names the sources serving old data, for comparing what a page said
@@ -552,7 +562,7 @@ func staleKey(health []library.Health) string {
 // The card is left alone on purpose: re-running the pick would deal the
 // reader a different book on every refresh. A failure answers an error, so
 // the page keeps the drawer it has and waits before asking again.
-func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since string, waiting bool) {
+func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since string, waiting, panel bool) {
 	if s.engine == nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -578,7 +588,7 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
-	data := viewData{Panel: group(view), Gen: gen, Listening: true}
+	data := viewData{Panel: group(view), Gen: gen, Listening: true, WithPanel: panel}
 	if data.Panel.Pending {
 		s.engine.Nudge()
 	}

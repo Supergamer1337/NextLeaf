@@ -68,7 +68,7 @@ func shelfAndCatalogue() library.Source {
 
 func TestAFinishedShelfOffersTheCatalogue(t *testing.T) {
 	h := warmed(t, shelfAndCatalogue(), testStore(t))
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	// Hardcover's book may be named on the row, but only as Hardcover's: never
 	// as though Grimmory had offered it.
@@ -93,7 +93,7 @@ func TestAFinishedShelfOffersTheCatalogue(t *testing.T) {
 		t.Error("the offer is written out inline again")
 	}
 
-	rec := post(t, h, "/series/switch", url.Values{"name": {"Three-Body"}, "to": {"Remembrance of Earth's Past"}, "from": {"drawer"}})
+	rec := post(t, h, "/series/switch", url.Values{"panel": {"1"}, "name": {"Three-Body"}, "to": {"Remembrance of Earth's Past"}, "from": {"drawer"}})
 	if rec.Code != 200 {
 		t.Fatalf("switch: status = %d, body = %s", rec.Code, rec.Body)
 	}
@@ -106,7 +106,7 @@ func TestTheWheelNamesWhatEachIdentityHoldsNext(t *testing.T) {
 	// Choosing where to continue and choosing how to track are one gesture,
 	// so each candidate says what it would leave the reader with.
 	h := warmed(t, shelfAndCatalogue(), testStore(t))
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	current := between(body, `class="wheel-item" data-to=""`, `</div>`)
 	if !strings.Contains(current, "Nothing left to read") {
@@ -178,7 +178,7 @@ func TestTheDrawerSaysWhenAnswersAreStillComing(t *testing.T) {
 	st := testStore(t)
 	engine := series.NewEngine(st, waitingLibrary(), picker.Prefs{IncludeNovellas: true})
 	h := NewHandler(Deps{Source: waitingLibrary(), Engine: engine})
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	if !strings.Contains(body, "Checking…") {
 		t.Error("a row waiting on a lookup renders silent, as though it held nothing")
@@ -214,7 +214,7 @@ func TestTheDrawerSaysWhenAnswersAreStillComing(t *testing.T) {
 
 	// The refresh only touches the drawer: re-rendering the card would deal
 	// the reader a different book every time.
-	drawer := getBody(t, h, "/view?drawer=1")
+	drawer := getBody(t, h, "/view?panel=1&drawer=1")
 	if strings.Contains(drawer, "Recommended") || strings.Contains(drawer, `id="deck"`) {
 		t.Error("the drawer refresh re-renders the recommendation card")
 	}
@@ -307,7 +307,7 @@ func TestADrawerThatSettlesSaysSoAtOnce(t *testing.T) {
 func TestTheArrowOpensTheSwitcherRatherThanSwitching(t *testing.T) {
 	// The arrow suggests where to continue; the reader sees what that holds,
 	// and what else there is, before the row follows anything.
-	body := getBody(t, warmed(t, shelfAndCatalogue(), testStore(t)), "/view")
+	body := getBody(t, warmed(t, shelfAndCatalogue(), testStore(t)), "/view?panel=1")
 	arrow := between(body, `class="row-follow"`, `>`)
 	if strings.Contains(arrow, "hx-post") {
 		t.Errorf("the arrow switches without showing where it leads:\n%s", arrow)
@@ -366,7 +366,7 @@ func finishedAndUnchecked() library.Source {
 func TestEachUnsettledSeriesIsMarked(t *testing.T) {
 	// The row's own next book is known, so its line reads as settled. Only
 	// the marker says its other series are still being checked.
-	body := getBody(t, warmed(t, twoClaimsOneAnswered(), testStore(t)), "/view")
+	body := getBody(t, warmed(t, twoClaimsOneAnswered(), testStore(t)), "/view?panel=1")
 	row := between(body, `<span class="drawer-name">The Lord of the Rings</span>`, `class="row-tags"`)
 	if !strings.Contains(row, `class="pending-dot"`) {
 		t.Errorf("a row with series still being checked is not marked:\n%s", row)
@@ -387,7 +387,7 @@ func TestACollapsedSectionSaysItHoldsAnUnsettledSeries(t *testing.T) {
 	if _, err := engine.View(ctx); err != nil {
 		t.Fatal(err)
 	}
-	body := getBody(t, NewHandler(Deps{Source: src, Engine: engine}), "/view")
+	body := getBody(t, NewHandler(Deps{Source: src, Engine: engine}), "/view?panel=1")
 	summary := between(body, `data-group="Finished"`, `</summary>`)
 	if !strings.Contains(summary, `class="pending-dot"`) {
 		t.Errorf("the folded Finished section does not say it holds a series still being checked:\n%s", summary)
@@ -399,7 +399,7 @@ func TestACollapsedSectionSaysItHoldsAnUnsettledSeries(t *testing.T) {
 
 func TestAContinuableSeriesIsCountedApartAndCanBeKeptToItsOwnSeries(t *testing.T) {
 	h := warmed(t, shelfAndCatalogue(), testStore(t))
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	sec := section(body, "Continues elsewhere")
 	if !strings.Contains(sec, `<span class="drawer-tally">1</span>`) {
@@ -413,7 +413,7 @@ func TestAContinuableSeriesIsCountedApartAndCanBeKeptToItsOwnSeries(t *testing.T
 	}
 
 	// Keeping it files it with the finished ones, for good.
-	rec := post(t, h, "/series/keep", url.Values{"name": {"Three-Body"}, "from": {"drawer"}})
+	rec := post(t, h, "/series/keep", url.Values{"panel": {"1"}, "name": {"Three-Body"}, "from": {"drawer"}})
 	if rec.Code != 200 {
 		t.Fatalf("keep: status = %d, body = %s", rec.Code, rec.Body)
 	}
@@ -429,7 +429,7 @@ func TestAContinuableSeriesIsCountedApartAndCanBeKeptToItsOwnSeries(t *testing.T
 	if !strings.Contains(fin, `hx-post="/series/unkeep"`) || !strings.Contains(fin, "Suggest others") {
 		t.Error("a kept series has no way to have the others suggested again")
 	}
-	rec = post(t, h, "/series/unkeep", url.Values{"name": {"Three-Body"}, "from": {"drawer"}})
+	rec = post(t, h, "/series/unkeep", url.Values{"panel": {"1"}, "name": {"Three-Body"}, "from": {"drawer"}})
 	if !strings.Contains(section(rec.Body.String(), "Continues elsewhere"), "Three-Body") {
 		t.Error("clearing the keep does not bring the offer back")
 	}
@@ -748,7 +748,7 @@ func TestADecisionOnATwinRowLandsOnThatRow(t *testing.T) {
 	src := witcherTwins()
 	engine := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
 	h := NewHandler(Deps{Source: src, Engine: engine})
-	body := html.UnescapeString(getBody(t, h, "/view"))
+	body := html.UnescapeString(getBody(t, h, "/view?panel=1"))
 	for _, source := range []string{"hardcover", "grimmory"} {
 		if !strings.Contains(body, `"source":"`+source+`"`) {
 			t.Errorf("no decision in the drawer names the %s row", source)
@@ -759,7 +759,7 @@ func TestADecisionOnATwinRowLandsOnThatRow(t *testing.T) {
 	}
 
 	for _, source := range []string{"grimmory", "hardcover"} {
-		rec := post(t, h, "/series/drop", url.Values{"name": {"The Witcher"}, "source": {source}})
+		rec := post(t, h, "/series/drop", url.Values{"panel": {"1"}, "name": {"The Witcher"}, "source": {source}})
 		if rec.Code != 200 {
 			t.Fatalf("drop: status = %d", rec.Code)
 		}
@@ -775,7 +775,7 @@ func TestADecisionOnATwinRowLandsOnThatRow(t *testing.T) {
 				t.Errorf("the %s row: decision = %v, after dropping the %s row", g.Source, g.Decision, source)
 			}
 		}
-		if rec := post(t, h, "/series/clear", url.Values{"name": {"The Witcher"}, "source": {source}}); rec.Code != 200 {
+		if rec := post(t, h, "/series/clear", url.Values{"panel": {"1"}, "name": {"The Witcher"}, "source": {source}}); rec.Code != 200 {
 			t.Fatalf("clear: status = %d", rec.Code)
 		}
 	}

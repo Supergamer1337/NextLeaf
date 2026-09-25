@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -446,16 +447,16 @@ func TestSelectorRerollUsesVariety(t *testing.T) {
 // countingSource records whether a handler touched the library at all.
 type countingSource struct {
 	stubSource
-	reads int
+	reads atomic.Int32
 }
 
 func (c *countingSource) ToRead(ctx context.Context) ([]library.Entry, error) {
-	c.reads++
+	c.reads.Add(1)
 	return c.stubSource.ToRead(ctx)
 }
 
 func (c *countingSource) RecentReads(ctx context.Context, n int) ([]library.Entry, error) {
-	c.reads++
+	c.reads.Add(1)
 	return c.stubSource.RecentReads(ctx, n)
 }
 
@@ -470,8 +471,8 @@ func TestAColdShellIsConstantAndReadsNoSource(t *testing.T) {
 	if first != second {
 		t.Error("the shell differs between requests, so it is not constant")
 	}
-	if src.reads > 0 {
-		t.Errorf("the shell read the source %d times, want 0", src.reads)
+	if n := src.reads.Load(); n > 0 {
+		t.Errorf("the shell read the source %d times, want 0", n)
 	}
 	// The drawer shell is part of the page, but nothing that depends on the
 	// library may be: no card, and no series rows.
@@ -517,11 +518,11 @@ func TestAPageWithTheLibraryHeldCarriesItsCard(t *testing.T) {
 	// its cover at 865ms. With the library held there is nothing to wait for.
 	src := &countingSource{stubSource: midSeries()}
 	h := held(t, library.NewCached(src, time.Hour))
-	before := src.reads
+	before := src.reads.Load()
 
 	page := getBody(t, h, "/")
-	if src.reads != before {
-		t.Errorf("the page read the source %d times, want it painted from what is held", src.reads-before)
+	if n := src.reads.Load(); n != before {
+		t.Errorf("the page read the source %d times, want it painted from what is held", n-before)
 	}
 	app := between(page, `id="app"`, `>`)
 	if strings.Contains(app, "hx-trigger") {

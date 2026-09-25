@@ -142,10 +142,10 @@ func TestPinnedSeriesOutranksAMoreRecentlyFinishedOne(t *testing.T) {
 func TestPanelListsTrackedSeriesAndOffersUndo(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
 
-	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+	if rec := post(t, h, "/series/drop", url.Values{"panel": {"1"}, "name": {"Mistborn"}}); rec.Code != http.StatusOK {
 		t.Fatalf("POST /series/drop: status = %d, want 200", rec.Code)
 	}
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 	if !strings.Contains(body, "Mistborn") {
 		t.Error("the panel does not list the tracked series")
 	}
@@ -247,7 +247,7 @@ func caughtUpSource() *resolverStub {
 
 func TestDrawerFilesACaughtUpSeriesUnderFinished(t *testing.T) {
 	h := warmed(t, caughtUpSource(), testStore(t))
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	finished := section(body, "Finished")
 	if !strings.Contains(finished, "Stormlight") {
@@ -260,7 +260,7 @@ func TestDrawerFilesACaughtUpSeriesUnderFinished(t *testing.T) {
 
 func TestOnlyTheCurrentGroupStartsOpen(t *testing.T) {
 	h := warmed(t, caughtUpSource(), testStore(t))
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	block, ok := enclosingDetails(body, ">Finished")
 	if !ok {
@@ -280,10 +280,10 @@ func TestOnlyTheCurrentGroupStartsOpen(t *testing.T) {
 
 func TestTheParkedGroupStartsCollapsed(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
-	if rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+	if rec := post(t, h, "/series/park", url.Values{"panel": {"1"}, "name": {"Mistborn"}}); rec.Code != http.StatusOK {
 		t.Fatalf("POST /series/park: status = %d, want 200", rec.Code)
 	}
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	block, ok := enclosingDetails(body, ">Parked")
 	if !ok {
@@ -296,10 +296,10 @@ func TestTheParkedGroupStartsCollapsed(t *testing.T) {
 
 func TestFinishedSitsAboveDropped(t *testing.T) {
 	h := warmed(t, caughtUpSource(), testStore(t))
-	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+	if rec := post(t, h, "/series/drop", url.Values{"panel": {"1"}, "name": {"Mistborn"}}); rec.Code != http.StatusOK {
 		t.Fatalf("POST /series/drop: status = %d, want 200", rec.Code)
 	}
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	// Finished is still your history; dropped is what you rejected, and the
 	// rejected pile belongs at the very bottom.
@@ -311,7 +311,7 @@ func TestFinishedSitsAboveDropped(t *testing.T) {
 
 func TestDrawerRowsOfferPark(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	current := section(body, "Current")
 	if !strings.Contains(current, ">Park<") {
@@ -335,7 +335,7 @@ func TestAFoldedRowOffersTheOtherProvider(t *testing.T) {
 
 	// The CSS class definition is always in the stylesheet; what must be
 	// present is the control itself.
-	if body := getBody(t, h, "/view"); !strings.Contains(body, `class="switcher-btn"`) {
+	if body := getBody(t, h, "/view?panel=1"); !strings.Contains(body, `class="switcher-btn"`) {
 		t.Error("the row offers no way to follow the series on the other backend")
 	}
 }
@@ -345,7 +345,7 @@ func TestAFinishedSeriesShowsTheCoverOfTheLastBookRead(t *testing.T) {
 	src.reads[1].Book.CoverURL = "https://covers.example/stormlight4.jpg"
 	h := ready(t, src, testStore(t))
 
-	if body := getBody(t, h, "/view"); !strings.Contains(body, "stormlight4.jpg") {
+	if body := getBody(t, h, "/view?panel=1"); !strings.Contains(body, "stormlight4.jpg") {
 		t.Error("a finished series shows no cover at all")
 	}
 }
@@ -458,7 +458,7 @@ func switchSource() stubSource {
 
 func TestTheSwitcherSpinsInPlace(t *testing.T) {
 	h := ready(t, switchSource(), testStore(t))
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	// The row itself becomes the wheel: an icon-only control, candidate data
 	// for the script to cycle through in place, and one form to submit the
@@ -516,7 +516,7 @@ func TestSwitchingFromTheDrawerChangesWhichSeriesIsTracked(t *testing.T) {
 	if rec := post(t, h, "/series/switch", form); rec.Code != http.StatusOK {
 		t.Fatalf("POST /series/switch: status = %d, want 200", rec.Code)
 	}
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 	if !strings.Contains(body, `drawer-name">The Expanse<`) {
 		t.Errorf("the drawer does not track the preferred identity:\n%s", section(body, "Current"))
 	}
@@ -632,7 +632,7 @@ func TestADecisionConfirmsItselfAndOffersUndo(t *testing.T) {
 // appears in the page behind it. The drawer's controls say so themselves.
 func TestADrawerDecisionRaisesNoBanner(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
-	rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}, "from": {"drawer"}})
+	rec := post(t, h, "/series/park", url.Values{"panel": {"1"}, "name": {"Mistborn"}, "from": {"drawer"}})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -640,7 +640,7 @@ func TestADrawerDecisionRaisesNoBanner(t *testing.T) {
 		t.Errorf("a drawer decision still raises a banner: %q", flash)
 	}
 
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 	if !strings.Contains(body, `&#34;from&#34;:&#34;drawer&#34;`) {
 		t.Error("drawer buttons do not say where they were pressed")
 	}
@@ -674,7 +674,7 @@ func TestAClearedDecisionConfirmsWithoutAnotherUndo(t *testing.T) {
 // hidden input around it. The one form left is the wheel's, whose "to" value
 // the script fills in at confirm time.
 func TestDecisionsAreButtonsNotForms(t *testing.T) {
-	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view")
+	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view?panel=1")
 	if strings.Contains(body, "<form") {
 		t.Error("a decision still travels by form; buttons carry their own hx-vals")
 	}
@@ -682,7 +682,7 @@ func TestDecisionsAreButtonsNotForms(t *testing.T) {
 		t.Error("no hx-vals on the decision buttons, so a POST would carry no series name")
 	}
 
-	body = getBody(t, ready(t, switchSource(), testStore(t)), "/view")
+	body = getBody(t, ready(t, switchSource(), testStore(t)), "/view?panel=1")
 	if strings.Count(body, "<form") != 1 {
 		t.Errorf("%d forms on a page with a wheel, want only the wheel's", strings.Count(body, "<form"))
 	}
@@ -724,7 +724,7 @@ func TestADecisionReturnsTheRefreshedDrawer(t *testing.T) {
 	// what matters is that the response carries the drawer back for the morph,
 	// with the decision already reflected in it.
 	h := ready(t, midSeries(), testStore(t))
-	rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}})
+	rec := post(t, h, "/series/park", url.Values{"panel": {"1"}, "name": {"Mistborn"}})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -764,10 +764,10 @@ func (c *countingSlowResolver) NextInSeries(_ context.Context, _ library.SeriesQ
 
 func TestThePinnedGroupIsOpenAndNamed(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
-	if rec := post(t, h, "/series/pin", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+	if rec := post(t, h, "/series/pin", url.Values{"panel": {"1"}, "name": {"Mistborn"}}); rec.Code != http.StatusOK {
 		t.Fatalf("POST /series/pin: status = %d, want 200", rec.Code)
 	}
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	// The pinned series is the one thing the reader explicitly asked for
 	// next: at most one exists, so it is a plain section with nothing to
@@ -787,7 +787,7 @@ func TestThePinnedGroupIsOpenAndNamed(t *testing.T) {
 func TestRowsWearTheirIdentityBadges(t *testing.T) {
 	// The source and position show on the row itself, so two same-named rows
 	// are tellable apart without opening anything.
-	body := getBody(t, ready(t, switchSource(), testStore(t)), "/view")
+	body := getBody(t, ready(t, switchSource(), testStore(t)), "/view?panel=1")
 
 	i := strings.Index(body, `class="row-head"`)
 	if i < 0 {
@@ -814,7 +814,7 @@ func midSeriesReading() stubSource {
 }
 
 func TestTheNextLineNumbersTheBookItOffers(t *testing.T) {
-	row := drawerRow(t, getBody(t, ready(t, midSeries(), testStore(t)), "/view"))
+	row := drawerRow(t, getBody(t, ready(t, midSeries(), testStore(t)), "/view?panel=1"))
 	if !strings.Contains(row, "Next: Book 4, book 4") {
 		t.Errorf("the offered book is not numbered where it is named: %.300s", row)
 	}
@@ -822,7 +822,7 @@ func TestTheNextLineNumbersTheBookItOffers(t *testing.T) {
 
 func TestARowSaysNothingAboutWhereTheReaderHasBeen(t *testing.T) {
 	// The row offers a book; how far the reader came is the switcher's job.
-	row := drawerRow(t, getBody(t, ready(t, midSeriesReading(), testStore(t)), "/view"))
+	row := drawerRow(t, getBody(t, ready(t, midSeriesReading(), testStore(t)), "/view?panel=1"))
 	if strings.Contains(row, "read to") || strings.Contains(row, "reading book") {
 		t.Errorf("the row still reports the reader's own place: %.300s", row)
 	}
@@ -837,7 +837,7 @@ func TestACaughtUpRowOffersNoNumber(t *testing.T) {
 	done.FinishedAt = time.Now().Add(-24 * time.Hour)
 	src := resolverStub{stubSource: stubSource{reads: []library.Entry{done}}}
 
-	row := drawerRow(t, getBody(t, warmed(t, src, testStore(t)), "/view"))
+	row := drawerRow(t, getBody(t, warmed(t, src, testStore(t)), "/view?panel=1"))
 	if !strings.Contains(row, "Nothing left to read") {
 		t.Errorf("a caught-up row does not say it is done: %.300s", row)
 	}
@@ -856,7 +856,7 @@ func TestANextBookWithoutASlotIsNamedWithoutANumber(t *testing.T) {
 		found:      true,
 	}
 
-	row := drawerRow(t, getBody(t, warmed(t, src, testStore(t)), "/view"))
+	row := drawerRow(t, getBody(t, warmed(t, src, testStore(t)), "/view?panel=1"))
 	if !strings.Contains(row, "Next: The Companion<") {
 		t.Errorf("an unnumbered offer is not named plainly: %.300s", row)
 	}
@@ -866,7 +866,7 @@ func TestANextBookWithoutASlotIsNamedWithoutANumber(t *testing.T) {
 }
 
 func TestTheTagsSitBeneathTheTitle(t *testing.T) {
-	row := drawerRow(t, getBody(t, ready(t, midSeries(), testStore(t)), "/view"))
+	row := drawerRow(t, getBody(t, ready(t, midSeries(), testStore(t)), "/view?panel=1"))
 	head := row[:strings.Index(row, "</span>")]
 	if strings.Contains(head, "row-badge") {
 		t.Errorf("the tags share the title's line: %.300s", row)
@@ -889,7 +889,7 @@ func TestTheSwitcherStillSaysWhereTheReaderStands(t *testing.T) {
 	}, Status: library.StatusCurrentlyRead}
 	src := stubSource{reading: []library.Entry{started}}
 
-	body := getBody(t, ready(t, src, testStore(t)), "/view")
+	body := getBody(t, ready(t, src, testStore(t)), "/view?panel=1")
 	if !strings.Contains(body, ">reading book 1<") {
 		t.Error("the switcher does not say the tracked identity is mid-book")
 	}
@@ -914,7 +914,7 @@ func TestAnOfferAtSlotZeroIsStillNumbered(t *testing.T) {
 		toRead: []library.Entry{seriesEntry("The Prequel", "Saga", 0)},
 	}
 
-	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/view"))
+	row := drawerRow(t, getBody(t, ready(t, src, testStore(t)), "/view?panel=1"))
 	if !strings.Contains(row, "Next: The Prequel, book 0") {
 		t.Errorf("a prequel at slot 0 loses its number: %.300s", row)
 	}
@@ -943,7 +943,7 @@ func TestARefusedDecisionIsRetargetedAtTheNoticeSlot(t *testing.T) {
 // not the server's, and the key is what lets it be matched across a morph
 // that would otherwise reset every group to the markup's default.
 func TestDrawerGroupsCarryAStableFoldKey(t *testing.T) {
-	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view")
+	body := getBody(t, ready(t, midSeries(), testStore(t)), "/view?panel=1")
 	if !strings.Contains(body, `data-group="Current"`) {
 		t.Error("the Current fold has no stable key to restore its state against")
 	}
@@ -960,7 +960,7 @@ func TestSwitchingStillOffersTheNextBook(t *testing.T) {
 		found:      true,
 	}
 	h := ready(t, src, testStore(t))
-	form := url.Values{"name": {"The Expanse (Chronological)"}, "to": {"The Expanse"}}
+	form := url.Values{"name": {"The Expanse (Chronological)"}, "to": {"The Expanse"}, "panel": {"1"}}
 	rec := post(t, h, "/series/switch", form)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -989,10 +989,10 @@ func TestUndroppingStillOffersTheNextBook(t *testing.T) {
 		found:      true,
 	}
 	h := ready(t, src, testStore(t))
-	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+	if rec := post(t, h, "/series/drop", url.Values{"panel": {"1"}, "name": {"Mistborn"}}); rec.Code != http.StatusOK {
 		t.Fatalf("drop: status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	rec := post(t, h, "/series/clear", url.Values{"name": {"Mistborn"}})
+	rec := post(t, h, "/series/clear", url.Values{"panel": {"1"}, "name": {"Mistborn"}})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("clear: status = %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -1006,10 +1006,10 @@ func TestUndroppingStillOffersTheNextBook(t *testing.T) {
 func TestNoRowCarriesACacheMarker(t *testing.T) {
 	src := offShelfSeries()
 	h := ready(t, src, testStore(t))
-	if rec := post(t, h, "/series/drop", url.Values{"name": {"Mistborn"}}); rec.Code != http.StatusOK {
+	if rec := post(t, h, "/series/drop", url.Values{"panel": {"1"}, "name": {"Mistborn"}}); rec.Code != http.StatusOK {
 		t.Fatalf("drop: status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 	if !strings.Contains(body, "Undrop") {
 		t.Fatal("no undrop control to inspect")
 	}
@@ -1094,5 +1094,44 @@ func TestAReaderIsAVisitAndABackgroundRequestIsNot(t *testing.T) {
 		if visited() {
 			t.Errorf("GET %s, a background request, counted as a visit", path)
 		}
+	}
+}
+
+func TestTheDrawerIsBuiltOnlyOnceOpened(t *testing.T) {
+	// Every page and every card carried the whole drawer, and its covers:
+	// 68KB of markup and 4.4MB of images on a real library, for a drawer the
+	// reader may never open. Its toggle and status still travel, so the
+	// count and the pending dot stay live.
+	h := held(t, midSeries())
+	hasRows := func(body string) bool { return strings.Contains(body, `class="drawer-row"`) }
+	hasPieces := func(body string) bool {
+		return strings.Contains(body, `id="drawer-toggle"`) && strings.Contains(body, `id="drawer-status"`)
+	}
+
+	for _, path := range []string{"/", "/view", "/view?another=1", "/view?drawer=1"} {
+		body := getBody(t, h, path)
+		if hasRows(body) {
+			t.Errorf("%s builds the drawer before it is opened", path)
+		}
+		if !hasPieces(body) {
+			t.Errorf("%s does not bring the drawer's toggle and status", path)
+		}
+	}
+	if strings.Contains(getBody(t, h, "/view"), `id="drawer-body"`) {
+		t.Error("a card swaps in an empty drawer body, over whatever the page shows")
+	}
+	if rec := post(t, h, "/series/park", url.Values{"name": {"Mistborn"}}); hasRows(rec.Body.String()) {
+		t.Error("a decision from the card builds the drawer")
+	}
+
+	// A page that has opened its drawer says so, and gets the rows with
+	// everything it asks for.
+	for _, path := range []string{"/view?panel=1", "/view?drawer=1&panel=1", "/view?another=1&panel=1"} {
+		if body := getBody(t, h, path); !hasRows(body) {
+			t.Errorf("%s leaves an opened drawer without its rows", path)
+		}
+	}
+	if rec := post(t, h, "/series/clear", url.Values{"name": {"Mistborn"}, "panel": {"1"}}); !hasRows(rec.Body.String()) {
+		t.Error("a decision made with the drawer open does not bring its rows back")
 	}
 }
