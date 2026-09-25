@@ -11,14 +11,14 @@ import (
 var gzipWriters = sync.Pool{New: func() any { return gzip.NewWriter(nil) }}
 
 // compressed gzips text responses for clients that accept it. Images are
-// compressed already, and are passed through.
+// compressed already, and are passed through. Every text response says it
+// varies by encoding, compressed or not, so a shared cache keeps both.
 func compressed(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !acceptsGzip(r.Header.Get("Accept-Encoding")) || r.Header.Get("Range") != "" {
-			h.ServeHTTP(w, r)
-			return
+		gw := &gzipWriter{ResponseWriter: w,
+			// A range counts bytes as stored, and a HEAD has no body.
+			gzip: acceptsGzip(r.Header.Get("Accept-Encoding")) && r.Header.Get("Range") == "" && r.Method != http.MethodHead,
 		}
-		gw := &gzipWriter{ResponseWriter: w}
 		defer gw.close()
 		h.ServeHTTP(gw, r)
 	})
@@ -45,6 +45,7 @@ func acceptsGzip(header string) bool {
 // compressing, from its type, and compresses the rest if so.
 type gzipWriter struct {
 	http.ResponseWriter
+	gzip    bool // the client takes gzip, and this response can have it
 	zw      *gzip.Writer
 	decided bool
 }
@@ -55,13 +56,21 @@ func (g *gzipWriter) decide(status int) {
 	}
 	g.decided = true
 	h := g.Header()
-	if status == http.StatusNoContent || status == http.StatusNotModified || h.Get("Content-Encoding") != "" || !compressible(h.Get("Content-Type")) {
+	switch {
+	case status == http.StatusNotModified:
+		// It stands for a body that varied; the file server leaves its type out.
+		h.Set("Vary", "Accept-Encoding")
+		return
+	case status == http.StatusNoContent || h.Get("Content-Encoding") != "" || !compressible(h.Get("Content-Type")):
+		return
+	}
+	h.Set("Vary", "Accept-Encoding")
+	if !g.gzip {
 		return
 	}
 	h.Del("Content-Length")
 	h.Del("Accept-Ranges")
 	h.Set("Content-Encoding", "gzip")
-	h.Add("Vary", "Accept-Encoding")
 	g.zw = gzipWriters.Get().(*gzip.Writer)
 	g.zw.Reset(g.ResponseWriter)
 }

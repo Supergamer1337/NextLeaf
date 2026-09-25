@@ -160,3 +160,45 @@ func TestCompressionLeavesAnEncodedBodyAloneAndSniffsAnUntypedOne(t *testing.T) 
 		t.Error("an untyped HTML body was not recognised as text and compressed")
 	}
 }
+
+func TestEveryTextAnswerSaysItVariesByEncoding(t *testing.T) {
+	// A shared cache keys what it stores by the headers named in Vary. An
+	// uncompressed answer without it, cached first, would be served to every
+	// browser after, gzip or not; a revalidation must say the same.
+	h := ready(t, midSeries(), testStore(t))
+	for _, c := range []struct{ path, enc string }{
+		{"/", ""},
+		{"/static/htmx.min.js", ""},
+		{"/static/htmx.min.js", "gzip"},
+	} {
+		rec := fetch(h, http.MethodGet, c.path, c.enc, nil)
+		if got := rec.Header().Values("Vary"); len(got) != 1 || got[0] != "Accept-Encoding" {
+			t.Errorf("%s with Accept-Encoding %q: Vary = %q, want Accept-Encoding once", c.path, c.enc, got)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/static/htmx.min.js", nil)
+	req.Header.Set("If-None-Match", staticETags["static/htmx.min.js"])
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotModified || rec.Header().Get("Vary") != "Accept-Encoding" {
+		t.Errorf("revalidation: status %d, Vary %q; want 304 varying by encoding", rec.Code, rec.Header().Get("Vary"))
+	}
+
+	cover := fetch(ready(t, &coverStub{}, testStore(t)), http.MethodGet, "/cover/grimmory/7", "", nil)
+	if cover.Header().Get("Vary") != "" {
+		t.Error("an image, never compressed, says it varies by encoding")
+	}
+}
+
+func TestAHeadRequestSaysNothingItWouldNotSend(t *testing.T) {
+	// A HEAD has no body to compress; closing a gzip stream anyway wrote its
+	// empty trailer's length into the headers.
+	req := httptest.NewRequest(http.MethodHead, "/static/htmx.min.js", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	NewHandler(Deps{}).ServeHTTP(rec, req)
+	if rec.Header().Get("Content-Encoding") != "" || rec.Body.Len() != 0 {
+		t.Errorf("HEAD: encoding %q with %d bytes, want neither", rec.Header().Get("Content-Encoding"), rec.Body.Len())
+	}
+}
