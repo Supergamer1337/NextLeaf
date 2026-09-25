@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -298,11 +299,17 @@ func (c *Cached) Refresh(ctx context.Context) (bool, error) {
 	defer c.refreshMu.Unlock()
 	var version string
 	if v, ok := c.src.(Versioner); ok {
-		if got, err := v.Version(ctx); err == nil {
-			version = got
-			if c.vouches(version) {
-				return false, nil
+		got, err := v.Version(ctx)
+		switch {
+		case err != nil:
+			log.Printf("library: asking %s whether anything changed: %v", c.src.Name(), err)
+		case c.vouches(got):
+			for _, query := range []string{"reading", "reads", "toRead"} {
+				c.noteSuccess(query)
 			}
+			return false, nil
+		default:
+			version = got
 		}
 	}
 	changed, err := c.fetchAll(ctx)
