@@ -46,10 +46,16 @@ type Client struct {
 	now         func() time.Time // overridable in tests
 
 	// books is the library fetch in flight, shared by every list asked for
-	// while it runs: each list is a filter over the same response.
-	booksMu sync.Mutex
-	books   *booksFetch
+	// while it runs: each list is a filter over the same response. It is
+	// bounded by booksTimeout, as no one caller's deadline governs it.
+	booksMu      sync.Mutex
+	books        *booksFetch
+	booksTimeout time.Duration
 }
+
+// testHookBooks, set by tests, hears each caller of fetchBooks as it starts a
+// fetch or joins the one in flight.
+var testHookBooks func(joined bool)
 
 type booksFetch struct {
 	done  chan struct{}
@@ -82,6 +88,8 @@ func New(baseURL, username, password string, opts ...Option) *Client {
 		userAgent: defaultUserAgent,
 		http:      &http.Client{Timeout: 35 * time.Second},
 		now:       time.Now,
+
+		booksTimeout: 35 * time.Second,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -284,18 +292,26 @@ type metadata struct {
 func (c *Client) fetchBooks(ctx context.Context) ([]book, error) {
 	c.booksMu.Lock()
 	f := c.books
-	if f == nil {
+	joined := f != nil
+	if !joined {
 		f = &booksFetch{done: make(chan struct{})}
 		c.books = f
 		go func() {
-			f.err = c.getJSON(context.WithoutCancel(ctx), "/api/v1/books?withDescription=true&stripForListView=false", &f.books)
+			fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.booksTimeout)
+			defer cancel()
+			var books []book
+			err := c.getJSON(fetchCtx, "/api/v1/books?withDescription=true&stripForListView=false", &books)
 			c.booksMu.Lock()
+			f.books, f.err = books, err
 			c.books = nil
-			c.booksMu.Unlock()
 			close(f.done)
+			c.booksMu.Unlock()
 		}()
 	}
 	c.booksMu.Unlock()
+	if testHookBooks != nil {
+		testHookBooks(joined)
+	}
 	select {
 	case <-f.done:
 		return f.books, f.err
