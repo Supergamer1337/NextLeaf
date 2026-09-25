@@ -509,3 +509,16 @@ func TestASharedFetchNobodyWaitsForStillEnds(t *testing.T) {
 		t.Errorf("a later read waited %v on a fetch nobody was left waiting for", waited)
 	}
 }
+
+func TestCleaningAuthorsLeavesTheSharedResponseAlone(t *testing.T) {
+	// Every list asked for at once maps the same fetched books. Cleaning
+	// names in place wrote to a response other callers were reading.
+	fetched := []string{"David    Allen", "Joan  Didion"}
+	cleaned := cleanAuthors(fetched)
+	if !reflect.DeepEqual(cleaned, []string{"David Allen", "Joan Didion"}) {
+		t.Errorf("cleaned = %q", cleaned)
+	}
+	if fetched[0] != "David    Allen" {
+		t.Errorf("the fetched names were rewritten: %q", fetched)
+	}
+}
