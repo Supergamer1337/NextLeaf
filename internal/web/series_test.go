@@ -1095,6 +1095,11 @@ func TestAReaderIsAVisitAndABackgroundRequestIsNot(t *testing.T) {
 			t.Errorf("GET %s, a background request, counted as a visit", path)
 		}
 	}
+	// An uptime check is not a reader either.
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodHead, "/", nil))
+	if visited() {
+		t.Error("HEAD /, an uptime check, counted as a visit")
+	}
 }
 
 func TestTheDrawerIsBuiltOnlyOnceOpened(t *testing.T) {
