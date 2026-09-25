@@ -122,13 +122,19 @@ var staticETags = func() map[string]string {
 	return tags
 }()
 
-// shellHTML is the constant document every visit starts from: styles,
-// masthead, and the mount the card and drawer are morphed into. It reads no
-// source, so it cannot be slow and it cannot fail.
+// pageTmpl renders the whole page: styles, masthead, and the places the card
+// and the drawer's pieces live.
+var pageTmpl = template.Must(template.New("layout.html").Funcs(selectFuncs).ParseFS(templateFS, "layout.html", "view.html"))
+
+// page is what the page is rendered from: the view it carries, or none.
+type page struct{ View *viewData }
+
+// shellHTML is the page before the library is first held: a skeleton, and a
+// request for the card once the page is up. It reads no source, so it cannot
+// be slow and it cannot fail.
 var shellHTML = func() []byte {
-	t := template.Must(template.New("layout.html").Funcs(selectFuncs).ParseFS(templateFS, "layout.html", "view.html"))
 	var buf bytes.Buffer
-	if err := t.Execute(&buf, nil); err != nil {
+	if err := pageTmpl.Execute(&buf, page{}); err != nil {
 		panic(err) // embedded and data-free: a failure here is a broken build
 	}
 	return buf.Bytes()
@@ -415,12 +421,30 @@ func group(v series.View) panel {
 	return p
 }
 
-// handleShell serves the constant document. It never reads a source, so the
-// browser paints immediately and the card arrives on its own.
-func (s *server) handleShell(w http.ResponseWriter, _ *http.Request) {
+// handleShell serves the page. With the library held it carries the card, so
+// the recommendation is in the first paint; rendering it reads only what is
+// held and waits on no backend. Until the library is first held the page is
+// the skeleton, and fetches the card once it is up.
+func (s *server) handleShell(w http.ResponseWriter, r *http.Request) {
 	s.visit()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(shellHTML)
+	if s.engine == nil {
+		_, _ = w.Write(shellHTML)
+		return
+	}
+	if at, _ := s.engine.Library(); at.IsZero() {
+		_, _ = w.Write(shellHTML)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	data := s.pageView(ctx, false)
+	var buf bytes.Buffer
+	if err := pageTmpl.Execute(&buf, page{View: &data}); err != nil {
+		_, _ = w.Write(shellHTML) // the skeleton still fetches the card
+		return
+	}
+	_, _ = buf.WriteTo(w)
 }
 
 // handleView renders the card and drawer as one fragment. "another" flips
@@ -445,7 +469,13 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.visit()
-	reroll := q.Has("another")
+	renderView(w, s.pageView(ctx, q.Has("another")), http.StatusOK)
+}
+
+// pageView is the view a page load shows. It paints from what is held and asks
+// the catalogue nothing; if the library is getting old it is refreshed behind
+// the page, with a follow-up set for the result.
+func (s *server) pageView(ctx context.Context, reroll bool) viewData {
 	var followUp string
 	if s.engine != nil {
 		at, gen := s.engine.Library()
@@ -461,7 +491,7 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 	}
 	data := s.viewOf(ctx, reroll, false, "")
 	data.FollowUp = followUp
-	renderView(w, data, http.StatusOK)
+	return data
 }
 
 // visit tells the engine a reader is here, as opposed to a tab listening on
