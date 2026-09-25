@@ -356,6 +356,16 @@ func heldBooks(fetches *atomic.Int32, release <-chan struct{}) func(*http.Reques
 	}
 }
 
+// callersOfBooks reports each caller of the library fetch as it starts one or
+// joins one in flight, so a test can wait for them rather than sleep.
+func callersOfBooks(t *testing.T) <-chan bool {
+	t.Helper()
+	callers := make(chan bool, 8)
+	testHookBooks = func(joined bool) { callers <- joined }
+	t.Cleanup(func() { testHookBooks = nil })
+	return callers
+}
+
 func TestListsAskedForTogetherShareOneFetch(t *testing.T) {
 	// Grimmory hands back the whole library in one response, and a refresh
 	// asks for all three lists at once. Fetched once each, the same library
@@ -365,12 +375,15 @@ func TestListsAskedForTogetherShareOneFetch(t *testing.T) {
 	c := New((&fake{books: heldBooks(&fetches, release)}).server(t).URL, "user", "pass")
 	ctx := context.Background()
 
+	callers := callersOfBooks(t)
 	var wg sync.WaitGroup
 	var reading, reads, toRead []library.Entry
 	wg.Go(func() { reading, _ = c.CurrentlyReading(ctx) })
 	wg.Go(func() { reads, _ = c.RecentReads(ctx, 0) })
 	wg.Go(func() { toRead, _ = c.ToRead(ctx) })
-	time.Sleep(100 * time.Millisecond) // all three asking
+	for range 3 {
+		<-callers
+	}
 	close(release)
 	wg.Wait()
 
@@ -395,13 +408,16 @@ func TestACallerGivingUpDoesNotFailTheOthersSharingItsFetch(t *testing.T) {
 	release := make(chan struct{})
 	c := New((&fake{books: heldBooks(&fetches, release)}).server(t).URL, "user", "pass")
 
+	callers := callersOfBooks(t)
 	first, cancel := context.WithCancel(context.Background())
 	gaveUp := make(chan error, 1)
 	go func() {
 		_, err := c.ToRead(first)
 		gaveUp <- err
 	}()
-	time.Sleep(50 * time.Millisecond)
+	if joined := <-callers; joined {
+		t.Fatal("the first caller joined a fetch, with none in flight")
+	}
 	shared := make(chan []library.Entry, 1)
 	go func() {
 		got, err := c.CurrentlyReading(context.Background())
@@ -410,7 +426,9 @@ func TestACallerGivingUpDoesNotFailTheOthersSharingItsFetch(t *testing.T) {
 		}
 		shared <- got
 	}()
-	time.Sleep(50 * time.Millisecond)
+	if joined := <-callers; !joined {
+		t.Fatal("the second caller started a fetch of its own")
+	}
 
 	cancel()
 	if err := <-gaveUp; !errors.Is(err, context.Canceled) {
@@ -438,10 +456,12 @@ func TestASharedFetchThatFailsFailsEveryoneAndIsNotKept(t *testing.T) {
 	}}).server(t).URL, "user", "pass")
 	ctx := context.Background()
 
+	callers := callersOfBooks(t)
 	errs := make(chan error, 2)
 	go func() { _, err := c.ToRead(ctx); errs <- err }()
 	go func() { _, err := c.RecentReads(ctx, 0); errs <- err }()
-	time.Sleep(100 * time.Millisecond) // both asking
+	<-callers
+	<-callers
 	close(release)
 	for range 2 {
 		if err := <-errs; err == nil {
@@ -455,5 +475,37 @@ func TestASharedFetchThatFailsFailsEveryoneAndIsNotKept(t *testing.T) {
 	}
 	if n := fetches.Load(); n != 2 {
 		t.Errorf("fetched %d times, want the failed fetch shared and then one more", n)
+	}
+}
+
+func TestASharedFetchNobodyWaitsForStillEnds(t *testing.T) {
+	// The fetch outlives a caller who gives up, for the others sharing it.
+	// On a client that never times out it must still end of its own accord,
+	// or every later read would join it and wait for good.
+	hang := make(chan struct{})
+	defer close(hang)
+	c := New((&fake{books: func(r *http.Request, _ int32) (int, string) {
+		select {
+		case <-hang:
+		case <-r.Context().Done():
+		}
+		return http.StatusOK, "[]"
+	}}).server(t).URL, "user", "pass", WithHTTPClient(&http.Client{}))
+	c.booksTimeout = 50 * time.Millisecond
+
+	gaveUp, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := c.ToRead(gaveUp); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the caller that gave up got %v, want its own deadline", err)
+	}
+
+	later, cancelLater := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelLater()
+	start := time.Now()
+	if _, err := c.ToRead(later); err == nil {
+		t.Error("a read of a library that never answers succeeded")
+	}
+	if waited := time.Since(start); waited > 2*time.Second {
+		t.Errorf("a later read waited %v on a fetch nobody was left waiting for", waited)
 	}
 }
