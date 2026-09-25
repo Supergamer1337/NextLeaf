@@ -44,6 +44,17 @@ type Client struct {
 	accessToken string
 	tokenExp    time.Time
 	now         func() time.Time // overridable in tests
+
+	// books is the library fetch in flight, shared by every list asked for
+	// while it runs: each list is a filter over the same response.
+	booksMu sync.Mutex
+	books   *booksFetch
+}
+
+type booksFetch struct {
+	done  chan struct{}
+	books []book
+	err   error
 }
 
 // Option configures a Client.
@@ -268,11 +279,27 @@ type metadata struct {
 
 // fetchBooks retrieves every book visible to the account, with full metadata
 // (the list view strips fields like moods and categories that the picker
-// scores on).
+// scores on). Callers arriving while a fetch is in flight share it, and it
+// runs on even if the caller that started it gives up, for the others.
 func (c *Client) fetchBooks(ctx context.Context) ([]book, error) {
-	var books []book
-	if err := c.getJSON(ctx, "/api/v1/books?withDescription=true&stripForListView=false", &books); err != nil {
-		return nil, err
+	c.booksMu.Lock()
+	f := c.books
+	if f == nil {
+		f = &booksFetch{done: make(chan struct{})}
+		c.books = f
+		go func() {
+			f.err = c.getJSON(context.WithoutCancel(ctx), "/api/v1/books?withDescription=true&stripForListView=false", &f.books)
+			c.booksMu.Lock()
+			c.books = nil
+			c.booksMu.Unlock()
+			close(f.done)
+		}()
 	}
-	return books, nil
+	c.booksMu.Unlock()
+	select {
+	case <-f.done:
+		return f.books, f.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }

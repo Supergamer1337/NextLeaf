@@ -2,7 +2,11 @@ package grimmory
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -338,5 +342,83 @@ func TestTagsComeOutInTheSameOrderEveryTime(t *testing.T) {
 	b := mapped([]string{"Fantasy for Children", "Magic", "Low Fantasy"}, []string{"dark", "hopeful"})
 	if !reflect.DeepEqual(a.Genres, b.Genres) || !reflect.DeepEqual(a.Moods, b.Moods) {
 		t.Errorf("the same tags in another order map differently:\n%v %v\n%v %v", a.Genres, a.Moods, b.Genres, b.Moods)
+	}
+}
+
+// heldBooks is a books endpoint that counts its fetches and answers each only
+// once released.
+func heldBooks(fetches *atomic.Int32, release <-chan struct{}) func(*http.Request, int32) (int, string) {
+	serve := acceptLatest(statusFixture)
+	return func(r *http.Request, logins int32) (int, string) {
+		fetches.Add(1)
+		<-release
+		return serve(r, logins)
+	}
+}
+
+func TestListsAskedForTogetherShareOneFetch(t *testing.T) {
+	// Grimmory hands back the whole library in one response, and a refresh
+	// asks for all three lists at once. Fetched once each, the same half
+	// megabyte came down three times.
+	var fetches atomic.Int32
+	release := make(chan struct{})
+	c := New((&fake{books: heldBooks(&fetches, release)}).server(t).URL, "user", "pass")
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	var reading, reads, toRead []library.Entry
+	wg.Go(func() { reading, _ = c.CurrentlyReading(ctx) })
+	wg.Go(func() { reads, _ = c.RecentReads(ctx, 0) })
+	wg.Go(func() { toRead, _ = c.ToRead(ctx) })
+	time.Sleep(100 * time.Millisecond) // all three asking
+	close(release)
+	wg.Wait()
+
+	if n := fetches.Load(); n != 1 {
+		t.Errorf("the library was fetched %d times, want once for the three lists", n)
+	}
+	assertTitles(t, reading, "Reading", "Rereading")
+	assertTitles(t, reads, "ReadNew", "ReadOld", "ReadUndated")
+	assertTitles(t, toRead, "Unset", "Absent", "Unread")
+
+	// Only lists asked for at the same moment share: a later ask is fresh.
+	if _, err := c.ToRead(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := fetches.Load(); n != 2 {
+		t.Errorf("fetched %d times, want a later ask to fetch afresh", n)
+	}
+}
+
+func TestACallerGivingUpDoesNotFailTheOthersSharingItsFetch(t *testing.T) {
+	var fetches atomic.Int32
+	release := make(chan struct{})
+	c := New((&fake{books: heldBooks(&fetches, release)}).server(t).URL, "user", "pass")
+
+	first, cancel := context.WithCancel(context.Background())
+	gaveUp := make(chan error, 1)
+	go func() {
+		_, err := c.ToRead(first)
+		gaveUp <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	shared := make(chan []library.Entry, 1)
+	go func() {
+		got, err := c.CurrentlyReading(context.Background())
+		if err != nil {
+			t.Errorf("the second caller failed with the first's cancellation: %v", err)
+		}
+		shared <- got
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+	if err := <-gaveUp; !errors.Is(err, context.Canceled) {
+		t.Errorf("the caller that gave up got %v, want its own cancellation", err)
+	}
+	close(release)
+	assertTitles(t, <-shared, "Reading", "Rereading")
+	if n := fetches.Load(); n != 1 {
+		t.Errorf("fetched %d times, want the two callers sharing one fetch", n)
 	}
 }
