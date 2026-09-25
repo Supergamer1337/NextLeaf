@@ -167,7 +167,7 @@ func NewHandler(d Deps) http.Handler {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		static.ServeHTTP(w, r)
 	}))
-	return mux
+	return compressed(mux)
 }
 
 // handleSeriesDecision records a statement from the recommendation card or
