@@ -113,6 +113,20 @@ func TestCoverRouteStreamsImage(t *testing.T) {
 	}
 }
 
+func TestAVersionedCoverIsCachedForGood(t *testing.T) {
+	// A cover's URL carries the time it last changed, so a new cover is a new
+	// URL, and the old one never needs asking about again. Each ask is a
+	// round trip to Grimmory on the server.
+	versioned := get(t, &coverStub{}, "/cover/grimmory/7?v=1774801160")
+	if got := versioned.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Errorf("versioned cover: Cache-Control = %q, want it kept for good", got)
+	}
+	plain := get(t, &coverStub{}, "/cover/grimmory/7")
+	if got := plain.Header().Get("Cache-Control"); got != "public, max-age=86400" {
+		t.Errorf("unversioned cover: Cache-Control = %q, want a day", got)
+	}
+}
+
 func TestCoverRouteSniffsMislabeledImages(t *testing.T) {
 	// Grimmory labels cover bytes application/json; only trust image/* types
 	// and let the response writer sniff the rest.
