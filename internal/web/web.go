@@ -186,7 +186,7 @@ func NewHandler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	// {$} matches "/" exactly, so unknown paths fall through to 404 instead of
 	// being swallowed by a catch-all root pattern.
-	mux.HandleFunc("GET /{$}", s.handleShell)
+	mux.HandleFunc("GET /{$}", s.handlePage)
 	mux.HandleFunc("GET /view", s.handleView)
 	mux.HandleFunc("POST /series/{action}", s.handleSeriesDecision)
 	mux.HandleFunc("GET /cover/{source}/{id}", s.handleCover)
@@ -428,11 +428,11 @@ func group(v series.View) panel {
 	return p
 }
 
-// handleShell serves the page. With the library held it carries the card, so
+// handlePage serves the page. With the library held it carries the card, so
 // the recommendation is in the first paint; rendering it reads only what is
 // held and waits on no backend. Until the library is first held the page is
 // the skeleton, and fetches the card once it is up.
-func (s *server) handleShell(w http.ResponseWriter, r *http.Request) {
+func (s *server) handlePage(w http.ResponseWriter, r *http.Request) {
 	s.visit()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if s.engine == nil {
@@ -491,20 +491,28 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 func (s *server) pageView(ctx context.Context, reroll bool) viewData {
 	var followUp string
 	if s.engine != nil {
-		at, gen := s.engine.Library()
-		if time.Since(at) > s.loadFresh {
-			s.engine.RefreshLibrary()
-			// With nothing held yet the render fetches for itself, so there is
-			// nothing newer to follow up with; and a follow-up would undo a
-			// reroll.
-			if !at.IsZero() && !reroll {
-				followUp = strconv.FormatUint(gen, 10)
-			}
+		// With nothing held yet the render fetches for itself, so there is
+		// nothing newer to follow up with; and a follow-up would undo a
+		// reroll.
+		if at, gen, refreshing := s.refreshIfOld(); refreshing && !at.IsZero() && !reroll {
+			followUp = strconv.FormatUint(gen, 10)
 		}
 	}
 	data := s.viewOf(ctx, reroll, false, "")
 	data.FollowUp = followUp
 	return data
+}
+
+// refreshIfOld refreshes the library behind the page if it is older than
+// loadFresh, and reports when it was last refreshed, its generation then,
+// and whether a refresh is now under way.
+func (s *server) refreshIfOld() (at time.Time, gen uint64, refreshing bool) {
+	at, gen = s.engine.Library()
+	if time.Since(at) <= s.loadFresh {
+		return at, gen, false
+	}
+	s.engine.RefreshLibrary()
+	return at, gen, true
 }
 
 // visit tells the engine a reader is here, as opposed to a tab listening on
@@ -532,9 +540,7 @@ func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep
 	}
 	if refresh {
 		s.visit()
-		if at, _ := s.engine.Library(); time.Since(at) > s.loadFresh {
-			s.engine.RefreshLibrary()
-		}
+		s.refreshIfOld()
 	}
 	if done := s.engine.LibraryRefreshing(); done != nil {
 		select {
