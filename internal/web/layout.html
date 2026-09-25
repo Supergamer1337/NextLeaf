@@ -602,6 +602,8 @@
       document.addEventListener("visibilitychange", function () {
         if (document.visibilityState === "visible") { catchUp(); }
       });
+      // On a desktop the tab stays visible behind another window.
+      window.addEventListener("focus", catchUp);
       window.addEventListener("pageshow", function (e) { if (e.persisted) { catchUp(); } });
       // The drawer's one listener asks for the next change since the
       // generation the drawer shows, and is asked again after each answer.
