@@ -8,9 +8,10 @@
        own. */}}
   {{template "drawerToggle" .}}
   {{template "drawerStatus" .}}
-  {{/* Morphed as a whole: a morph keeps the rows' nodes, so covers are not
-       reloaded and nothing unchanged moves. */}}
-  <div class="drawer-body" id="drawer-body" hx-swap-oob="morph">{{template "drawerPanel" .}}</div>
+  {{/* Built once the page has opened the drawer, and morphed as a whole: a
+       morph keeps the rows' nodes, so covers are not reloaded and nothing
+       unchanged moves. */}}
+  {{if .WithPanel}}<div class="drawer-body" id="drawer-body" hx-swap-oob="morph">{{template "drawerPanel" .}}</div>{{end}}
 {{end}}
 
 {{/* Everything that lives in #app. The page renders it in place; a swap
@@ -118,9 +119,9 @@
   </div>
 {{end}}
 
-{{/* What a waiting drawer's refresh brings back: its rows, and the toggle and
-     status that travel beside them. */}}
-{{define "drawerRefresh"}}{{template "drawerToggle" .}}{{template "drawerStatus" .}}{{template "drawerPanel" .}}{{end}}
+{{/* What a waiting drawer's refresh brings back: the toggle and status, and
+     the rows once the drawer has been opened. */}}
+{{define "drawerRefresh"}}{{template "drawerToggle" .}}{{template "drawerStatus" .}}{{if .WithPanel}}{{template "drawerPanel" .}}{{end}}{{end}}
 
 {{define "drawerToggle"}}
   <a class="drawer-toggle" id="drawer-toggle" href="#series" hx-swap-oob="true"{{if not .Panel.Any}} hidden{{end}}>Series <span class="drawer-count">{{.Panel.Count}}</span>{{template "pendingDot" .Panel.Pending}}</a>
