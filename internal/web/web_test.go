@@ -514,8 +514,7 @@ func held(t *testing.T, src library.Source) http.Handler {
 
 func TestAPageWithTheLibraryHeldCarriesItsCard(t *testing.T) {
 	// Fetching the card after the page cost a round trip, and waited on
-	// htmx loading first: the book showed at 435ms on a phone's connection,
-	// its cover at 865ms. With the library held there is nothing to wait for.
+	// htmx loading first. With the library held there is nothing to wait for.
 	src := &countingSource{stubSource: midSeries()}
 	h := held(t, library.NewCached(src, time.Hour))
 	before := src.reads.Load()

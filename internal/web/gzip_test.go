@@ -108,3 +108,55 @@ func TestACompressedRefusalStillSaysWhereItGoes(t *testing.T) {
 		t.Errorf("the refusal's body did not survive compression:\n%s", got)
 	}
 }
+
+func TestWhatCountsAsAcceptingGzip(t *testing.T) {
+	for header, want := range map[string]bool{
+		"gzip":                  true,
+		"GZIP":                  true,
+		"gzip, deflate, br":     true,
+		"br;q=1.0, gzip;q=0.8":  true,
+		"gzip;q=nonsense":       true, // a weight that cannot be read refuses nothing
+		"gzip;q=0":              false,
+		"gzip; q=0.000":         false,
+		"deflate, gzip ;q=0.0 ": false,
+		"br":                    false,
+		"":                      false,
+	} {
+		if got := acceptsGzip(header); got != want {
+			t.Errorf("acceptsGzip(%q) = %v, want %v", header, got, want)
+		}
+	}
+}
+
+func TestARangeIsServedAsTheBytesAsked(t *testing.T) {
+	// A range counts bytes of the file as stored; compressing it would hand
+	// back a slice of something else.
+	req := httptest.NewRequest(http.MethodGet, "/static/htmx.min.js", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Range", "bytes=0-99")
+	rec := httptest.NewRecorder()
+	NewHandler(Deps{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusPartialContent || rec.Header().Get("Content-Encoding") != "" || rec.Body.Len() != 100 {
+		t.Errorf("range: status %d, encoding %q, %d bytes; want 206, none, 100", rec.Code, rec.Header().Get("Content-Encoding"), rec.Body.Len())
+	}
+}
+
+func TestCompressionLeavesAnEncodedBodyAloneAndSniffsAnUntypedOne(t *testing.T) {
+	encoded := compressed(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Encoding", "br")
+		_, _ = io.WriteString(w, "already brotli")
+	}))
+	rec := fetch(encoded, http.MethodGet, "/", "gzip, br", nil)
+	if rec.Header().Get("Content-Encoding") != "br" || rec.Body.String() != "already brotli" {
+		t.Errorf("an encoded body was encoded again: %q, %q", rec.Header().Get("Content-Encoding"), rec.Body.String())
+	}
+
+	untyped := compressed(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "<!DOCTYPE html><p>"+strings.Repeat("words ", 100))
+	}))
+	rec = fetch(untyped, http.MethodGet, "/", "gzip", nil)
+	if rec.Header().Get("Content-Encoding") != "gzip" || !strings.HasPrefix(gunzip(t, rec), "<!DOCTYPE html>") {
+		t.Error("an untyped HTML body was not recognised as text and compressed")
+	}
+}

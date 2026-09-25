@@ -306,8 +306,8 @@ func (v *versionedSource) fetched() int64 {
 }
 
 func TestARefreshKeepsWhatItHoldsWhileTheVersionHolds(t *testing.T) {
-	// Asking whether anything changed costs a few hundred bytes; the lists
-	// themselves cost 146KB. Most refreshes find nothing new.
+	// Asking whether anything changed costs a fraction of fetching the
+	// lists, and most refreshes find nothing new.
 	ctx := context.Background()
 	src := &versionedSource{version: "v1"}
 	c := NewCached(src, time.Hour)

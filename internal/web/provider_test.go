@@ -253,7 +253,7 @@ func TestTheRefreshAnswersTheMomentThereIsSomethingNew(t *testing.T) {
 	gen, _ := engine.Changes()
 
 	// Nothing new since this generation: it waits, then says there is
-	// nothing. Sending the drawer again cost a tab left open 11.6MB an hour.
+	// nothing, rather than sending the whole drawer again.
 	start := time.Now()
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/view?drawer=1&since="+strconv.FormatUint(gen, 10), nil))

@@ -52,9 +52,8 @@ func (c *Client) ToRead(ctx context.Context) ([]library.Entry, error) {
 }
 
 // Version sums up the three lists in one small query: how many books each
-// holds, when any of them last moved, and their ratings. It is a few hundred
-// bytes where the lists are 146KB, and moves whenever a book is added,
-// removed, moved between lists, rated or read again.
+// holds, when any of them last moved, and their ratings. It moves whenever a
+// book is added, removed, moved between lists, rated or read again.
 func (c *Client) Version(ctx context.Context) (string, error) {
 	userID, err := c.currentUserID(ctx)
 	if err != nil {
