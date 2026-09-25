@@ -1077,7 +1077,7 @@ func TestAReaderIsAVisitAndABackgroundRequestIsNot(t *testing.T) {
 			return false
 		}
 	}
-	visited() // a start counts as one
+	visited() // nothing has visited yet: start from an empty channel
 	for _, path := range []string{"/", "/view", "/view?another=1"} {
 		getBody(t, h, path)
 		if !visited() {
@@ -1098,10 +1098,9 @@ func TestAReaderIsAVisitAndABackgroundRequestIsNot(t *testing.T) {
 }
 
 func TestTheDrawerIsBuiltOnlyOnceOpened(t *testing.T) {
-	// Every page and every card carried the whole drawer, and its covers:
-	// 68KB of markup and 4.4MB of images on a real library, for a drawer the
-	// reader may never open. Its toggle and status still travel, so the
-	// count and the pending dot stay live.
+	// Every page and every card carried the whole drawer, and its covers,
+	// for a drawer the reader may never open. Its toggle and status still
+	// travel, so the count and the pending dot stay live.
 	h := held(t, midSeries())
 	hasRows := func(body string) bool { return strings.Contains(body, `class="drawer-row"`) }
 	hasPieces := func(body string) bool {

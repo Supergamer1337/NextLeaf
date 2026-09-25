@@ -10,8 +10,7 @@ import (
 
 var gzipWriters = sync.Pool{New: func() any { return gzip.NewWriter(nil) }}
 
-// compressed gzips text responses for clients that accept it. The page, the
-// view and htmx shrink to a quarter of their size or less; images are
+// compressed gzips text responses for clients that accept it. Images are
 // compressed already, and are passed through.
 func compressed(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -358,8 +358,8 @@ func heldBooks(fetches *atomic.Int32, release <-chan struct{}) func(*http.Reques
 
 func TestListsAskedForTogetherShareOneFetch(t *testing.T) {
 	// Grimmory hands back the whole library in one response, and a refresh
-	// asks for all three lists at once. Fetched once each, the same half
-	// megabyte came down three times.
+	// asks for all three lists at once. Fetched once each, the same library
+	// came down three times.
 	var fetches atomic.Int32
 	release := make(chan struct{})
 	c := New((&fake{books: heldBooks(&fetches, release)}).server(t).URL, "user", "pass")
@@ -420,5 +420,40 @@ func TestACallerGivingUpDoesNotFailTheOthersSharingItsFetch(t *testing.T) {
 	assertTitles(t, <-shared, "Reading", "Rereading")
 	if n := fetches.Load(); n != 1 {
 		t.Errorf("fetched %d times, want the two callers sharing one fetch", n)
+	}
+}
+
+func TestASharedFetchThatFailsFailsEveryoneAndIsNotKept(t *testing.T) {
+	var fetches atomic.Int32
+	release := make(chan struct{})
+	serve := heldBooks(&fetches, release)
+	var down atomic.Bool
+	down.Store(true)
+	c := New((&fake{books: func(r *http.Request, logins int32) (int, string) {
+		status, body := serve(r, logins)
+		if down.Load() {
+			return http.StatusBadGateway, ""
+		}
+		return status, body
+	}}).server(t).URL, "user", "pass")
+	ctx := context.Background()
+
+	errs := make(chan error, 2)
+	go func() { _, err := c.ToRead(ctx); errs <- err }()
+	go func() { _, err := c.RecentReads(ctx, 0); errs <- err }()
+	time.Sleep(100 * time.Millisecond) // both asking
+	close(release)
+	for range 2 {
+		if err := <-errs; err == nil {
+			t.Error("a caller sharing a failed fetch got no error")
+		}
+	}
+
+	down.Store(false)
+	if got, err := c.ToRead(ctx); err != nil || len(got) == 0 {
+		t.Errorf("the next ask got %v, %v; want the failure forgotten and a fresh fetch", got, err)
+	}
+	if n := fetches.Load(); n != 2 {
+		t.Errorf("fetched %d times, want the failed fetch shared and then one more", n)
 	}
 }
