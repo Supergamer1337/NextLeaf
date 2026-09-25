@@ -569,7 +569,6 @@
           if (open && !d.classList.contains("opened")) {
             // First opened: from now on the rows travel, starting at once.
             d.classList.add("opened");
-            drawNow = true;
             listen();
           }
         }
@@ -611,18 +610,18 @@
       // generation the drawer shows, and is asked again after each answer.
       // Until the drawer is opened it hears only the toggle and status.
       var listener = document.getElementById("drawer-listen");
-      var drawNow = false;
       function opened() { var d = drawer(); return !!d && d.classList.contains("opened"); }
       // One retry at most: asking again cancels any that is pending, or a
       // drawer answering "nothing" at once would gain a retry per redraw.
       var retry = null;
+      var listenedAt = 0;
       function listen() {
         clearTimeout(retry);
         retry = null;
         // Opened from the address before htmx is up: the page's load listens.
         if (!window.htmx) { return; }
         var st = document.getElementById("drawer-status");
-        if (listener && st && st.dataset.gen) { htmx.trigger(listener, "listen"); }
+        if (listener && st && st.dataset.gen) { listenedAt = Date.now(); htmx.trigger(listener, "listen"); }
       }
 
       function closeWheel() {
@@ -633,8 +632,10 @@
         openRow = null;
         if (held.card) {
           held.card = false;
+          // A follow-up asks again; a catch-up in flight when the wheel
+          // opened has no follow-up to ask, so it catches up again.
           var follow = document.querySelector(".card-follow");
-          if (follow) { htmx.trigger(follow, "follow"); }
+          if (follow) { htmx.trigger(follow, "follow"); } else { held.back = true; }
         }
         if (held.drawer) {
           held.drawer = false;
@@ -789,10 +790,15 @@
       document.body.addEventListener("htmx:configRequest", function (e) {
         if (opened()) { e.detail.parameters.panel = "1"; }
         if (e.detail.elt !== listener) { return; }
-        // A drawer just opened is drawn at once, not at the next change.
-        if (drawNow) { drawNow = false; return; }
         var st = document.getElementById("drawer-status");
-        e.detail.parameters.since = st.dataset.gen;
+        // An opened drawer listens from the rows it shows, and one with none
+        // yet is drawn at once; a closed one needs only its status.
+        var from = st;
+        if (opened()) {
+          from = document.querySelector("#drawer-body .drawer-drawn");
+          if (!from) { return; }
+        }
+        e.detail.parameters.since = from.dataset.gen;
         if ("waiting" in st.dataset) { e.detail.parameters.waiting = "1"; }
       });
       document.body.addEventListener("htmx:beforeSwap", function (e) {
@@ -806,8 +812,10 @@
       document.body.addEventListener("htmx:afterRequest", function (e) {
         if (e.detail.elt === listener) {
           if (held.drawer) { return; } // it resumes when the wheel closes
-          // A new drawer, or a 204 for nothing new in the while: ask again.
-          if (e.detail.successful) { listen(); return; }
+          // A new drawer, or a 204 after a wait for nothing new: ask again. A
+          // 204 at once is no wait, and asking again at once would loop.
+          var waited = Date.now() - listenedAt >= 1000;
+          if (e.detail.successful && (e.detail.xhr.status !== 204 || waited)) { listen(); return; }
           // Failed, dropped by a restart or a proxy's timeout, or replaced:
           // ask again shortly, unless a request is already out. Nothing to
           // tell the reader.
@@ -910,8 +918,9 @@
       });
       syncDrawer();
       // A card painted with the page brings its drawer's status: listen from
-      // it once htmx is up. A cold page listens once its card lands instead.
-      window.addEventListener("load", listen);
+      // it once htmx has taken the page up, which it does on DOMContentLoaded
+      // after this listener has run. A cold page listens once its card lands.
+      document.addEventListener("DOMContentLoaded", function () { setTimeout(listen, 0); });
     })();
 
     function wireTheme() {
