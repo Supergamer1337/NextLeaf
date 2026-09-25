@@ -395,3 +395,51 @@ func TestAFailedFetchIsNotVouchedForByItsVersion(t *testing.T) {
 		t.Error("the list fetched again still reports stale")
 	}
 }
+
+func TestHeldSaysWhetherAReadWouldWaitOnTheSource(t *testing.T) {
+	// A page painted with its card must not wait on a backend. A list held
+	// is served at once; one never fetched, or whose first fetch failed, is
+	// fetched by the read, however long the source takes.
+	ctx := context.Background()
+	src := &fakeSource{}
+	c := NewCached(src, time.Hour)
+	if Held(c) {
+		t.Error("nothing fetched yet, yet held")
+	}
+	if _, err := c.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !Held(c) {
+		t.Error("every list fetched, yet not held")
+	}
+
+	failing := &fakeSource{toReadErr: errors.New("down")}
+	down := NewCached(failing, time.Hour)
+	_, _ = down.Refresh(ctx)
+	if Held(down) {
+		t.Error("a list whose first fetch failed counts as held")
+	}
+	if Held(Combine(c, down)) {
+		t.Error("a Multi with one source not held counts as held")
+	}
+	if !Held(&fakeSource{}) {
+		t.Error("a source nothing caches is read directly anyway, so it is as held as it gets")
+	}
+
+	// Asking must not wait on a first fetch in flight.
+	blocked := &fakeSource{block: make(chan struct{})}
+	defer close(blocked.block)
+	cold := NewCached(blocked, time.Hour)
+	go func() { _, _ = cold.Refresh(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+	answered := make(chan bool)
+	go func() { answered <- Held(cold) }()
+	select {
+	case held := <-answered:
+		if held {
+			t.Error("a list still being fetched for the first time counts as held")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Held waited on a fetch in flight")
+	}
+}

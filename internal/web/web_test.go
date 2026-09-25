@@ -544,6 +544,35 @@ func TestAPageWithTheLibraryHeldCarriesItsCard(t *testing.T) {
 	}
 }
 
+// downToRead is a source whose want-to-read list cannot be fetched.
+type downToRead struct{ countingSource }
+
+func (d *downToRead) ToRead(ctx context.Context) ([]library.Entry, error) {
+	_, _ = d.countingSource.ToRead(ctx)
+	return nil, errors.New("down")
+}
+
+func TestAPageWhoseLibraryIsNotHeldIsTheSkeleton(t *testing.T) {
+	// A refresh that failed still counts as a refresh. Painting the card
+	// then would fetch the list that failed while the reader waits, up to
+	// half a minute on a hanging source, for a blank page. The skeleton
+	// paints at once and fetches the card behind it.
+	src := &downToRead{countingSource{stubSource: midSeries()}}
+	cached := library.NewCached(src, time.Hour)
+	engine := series.NewEngine(testStore(t), cached, picker.Prefs{})
+	<-engine.RefreshLibrary()
+	h := NewHandler(Deps{Source: cached, Engine: engine})
+	before := src.reads.Load()
+
+	page := getBody(t, h, "/")
+	if !strings.Contains(page, `class="waiting waiting--initial"`) {
+		t.Error("with a list not held, the page is not the skeleton")
+	}
+	if n := src.reads.Load(); n != before {
+		t.Errorf("the page read the source %d times, want none", n-before)
+	}
+}
+
 func TestAPagePaintedFromAnOldLibraryFollowsUp(t *testing.T) {
 	lib := &changingLibrary{}
 	src := library.NewCached(lib, time.Hour)
