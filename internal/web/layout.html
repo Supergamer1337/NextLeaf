@@ -584,7 +584,7 @@
 
       // Background answers that land under an open wheel would close it, so
       // they are held, and asked for again when it closes.
-      var held = { drawer: false, card: false };
+      var held = { drawer: false, card: false, back: false };
       function requestPath(e) {
         var p = e.detail.pathInfo, c = e.detail.requestConfig;
         return (p && p.requestPath) || (c && c.path) || "";
@@ -596,8 +596,10 @@
       // Back on the page after a while away, the library may have moved: a
       // book added in another app meanwhile shows now, not at the next pass.
       function catchUp() {
+        // Under an open wheel it waits, like any background answer.
+        if (openRow) { held.back = true; return; }
         var r = document.querySelector(".card-refresh");
-        if (r && window.htmx && !openRow) { htmx.trigger(r, "refresh"); }
+        if (r && window.htmx) { htmx.trigger(r, "refresh"); }
       }
       document.addEventListener("visibilitychange", function () {
         if (document.visibilityState === "visible") { catchUp(); }
@@ -637,6 +639,10 @@
         if (held.drawer) {
           held.drawer = false;
           listen();
+        }
+        if (held.back) {
+          held.back = false;
+          catchUp();
         }
       }
 
