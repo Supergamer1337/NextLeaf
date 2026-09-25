@@ -2,10 +2,11 @@ package web
 
 import (
 	"context"
+	"errors"
 	"html"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -66,7 +67,7 @@ func shelfAndCatalogue() library.Source {
 
 func TestAFinishedShelfOffersTheCatalogue(t *testing.T) {
 	h := warmed(t, shelfAndCatalogue(), testStore(t))
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	// Hardcover's book may be named on the row, but only as Hardcover's: never
 	// as though Grimmory had offered it.
@@ -91,7 +92,7 @@ func TestAFinishedShelfOffersTheCatalogue(t *testing.T) {
 		t.Error("the offer is written out inline again")
 	}
 
-	rec := post(t, h, "/series/switch", url.Values{"name": {"Three-Body"}, "to": {"Remembrance of Earth's Past"}, "from": {"drawer"}})
+	rec := post(t, h, "/series/switch", url.Values{"panel": {"1"}, "name": {"Three-Body"}, "to": {"Remembrance of Earth's Past"}, "from": {"drawer"}})
 	if rec.Code != 200 {
 		t.Fatalf("switch: status = %d, body = %s", rec.Code, rec.Body)
 	}
@@ -104,7 +105,7 @@ func TestTheWheelNamesWhatEachIdentityHoldsNext(t *testing.T) {
 	// Choosing where to continue and choosing how to track are one gesture,
 	// so each candidate says what it would leave the reader with.
 	h := warmed(t, shelfAndCatalogue(), testStore(t))
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	current := between(body, `class="wheel-item" data-to=""`, `</div>`)
 	if !strings.Contains(current, "Nothing left to read") {
@@ -176,7 +177,7 @@ func TestTheDrawerSaysWhenAnswersAreStillComing(t *testing.T) {
 	st := testStore(t)
 	engine := series.NewEngine(st, waitingLibrary(), picker.Prefs{IncludeNovellas: true})
 	h := NewHandler(Deps{Source: waitingLibrary(), Engine: engine})
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	if !strings.Contains(body, "Checking…") {
 		t.Error("a row waiting on a lookup renders silent, as though it held nothing")
@@ -212,7 +213,7 @@ func TestTheDrawerSaysWhenAnswersAreStillComing(t *testing.T) {
 
 	// The refresh only touches the drawer: re-rendering the card would deal
 	// the reader a different book every time.
-	drawer := getBody(t, h, "/view?drawer=1")
+	drawer := getBody(t, h, "/view?panel=1&drawer=1")
 	if strings.Contains(drawer, "Recommended") || strings.Contains(drawer, `id="deck"`) {
 		t.Error("the drawer refresh re-renders the recommendation card")
 	}
@@ -243,25 +244,50 @@ func TestTheRefreshAnswersTheMomentThereIsSomethingNew(t *testing.T) {
 	st := testStore(t)
 	engine := series.NewEngine(st, waitingLibrary(), picker.Prefs{IncludeNovellas: true})
 	h := NewHandler(Deps{Source: waitingLibrary(), Engine: engine, Wait: 300 * time.Millisecond})
+	before := drawerGen(t, h)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if _, err := engine.View(ctx); err != nil { // an ask ends
 		t.Fatal(err)
 	}
-	gen, _ := engine.Changes()
+	now := drawerGen(t, h)
 
-	// Nothing new since this generation: it waits, then answers anyway.
+	// Nothing new since this generation: it waits, then says there is
+	// nothing, rather than sending the whole drawer again.
 	start := time.Now()
-	getBody(t, h, "/view?drawer=1&since="+strconv.FormatUint(gen, 10))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/view?drawer=1&since="+url.QueryEscape(now), nil))
 	if waited := time.Since(start); waited < 250*time.Millisecond {
 		t.Errorf("answered after %v with nothing new to show", waited)
+	}
+	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Errorf("a listen that heard nothing answered %d with %d bytes, want 204 and nothing", rec.Code, rec.Body.Len())
 	}
 
 	// Something landed after the generation the drawer last saw: at once.
 	start = time.Now()
-	getBody(t, h, "/view?drawer=1&since="+strconv.FormatUint(gen-1, 10))
+	getBody(t, h, "/view?drawer=1&since="+url.QueryEscape(before))
 	if waited := time.Since(start); waited > 150*time.Millisecond {
 		t.Errorf("waited %v with a change already waiting", waited)
+	}
+}
+
+func TestADrawerThatCannotBeDrawnIsAFailureNotANothing(t *testing.T) {
+	// "Nothing new" has the page listen again at once. A drawer that cannot
+	// be drawn, or a server with nothing to listen to, must not say that, or
+	// the page would ask again in a tight loop; as failures, it waits first.
+	down := stubSource{readsErr: errors.New("down")}
+	engine := series.NewEngine(testStore(t), down, picker.Prefs{})
+	rec := httptest.NewRecorder()
+	NewHandler(Deps{Source: down, Engine: engine}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/view?drawer=1", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("a drawer that could not be drawn answered %d, want 503", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	NewHandler(Deps{Source: midSeries()}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/view?drawer=1&since=0", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("with no series tracking, a listen answered %d, want 404", rec.Code)
 	}
 }
 
@@ -281,7 +307,7 @@ func TestADrawerThatSettlesSaysSoAtOnce(t *testing.T) {
 func TestTheArrowOpensTheSwitcherRatherThanSwitching(t *testing.T) {
 	// The arrow suggests where to continue; the reader sees what that holds,
 	// and what else there is, before the row follows anything.
-	body := getBody(t, warmed(t, shelfAndCatalogue(), testStore(t)), "/view")
+	body := getBody(t, warmed(t, shelfAndCatalogue(), testStore(t)), "/view?panel=1")
 	arrow := between(body, `class="row-follow"`, `>`)
 	if strings.Contains(arrow, "hx-post") {
 		t.Errorf("the arrow switches without showing where it leads:\n%s", arrow)
@@ -340,7 +366,7 @@ func finishedAndUnchecked() library.Source {
 func TestEachUnsettledSeriesIsMarked(t *testing.T) {
 	// The row's own next book is known, so its line reads as settled. Only
 	// the marker says its other series are still being checked.
-	body := getBody(t, warmed(t, twoClaimsOneAnswered(), testStore(t)), "/view")
+	body := getBody(t, warmed(t, twoClaimsOneAnswered(), testStore(t)), "/view?panel=1")
 	row := between(body, `<span class="drawer-name">The Lord of the Rings</span>`, `class="row-tags"`)
 	if !strings.Contains(row, `class="pending-dot"`) {
 		t.Errorf("a row with series still being checked is not marked:\n%s", row)
@@ -361,7 +387,7 @@ func TestACollapsedSectionSaysItHoldsAnUnsettledSeries(t *testing.T) {
 	if _, err := engine.View(ctx); err != nil {
 		t.Fatal(err)
 	}
-	body := getBody(t, NewHandler(Deps{Source: src, Engine: engine}), "/view")
+	body := getBody(t, NewHandler(Deps{Source: src, Engine: engine}), "/view?panel=1")
 	summary := between(body, `data-group="Finished"`, `</summary>`)
 	if !strings.Contains(summary, `class="pending-dot"`) {
 		t.Errorf("the folded Finished section does not say it holds a series still being checked:\n%s", summary)
@@ -373,7 +399,7 @@ func TestACollapsedSectionSaysItHoldsAnUnsettledSeries(t *testing.T) {
 
 func TestAContinuableSeriesIsCountedApartAndCanBeKeptToItsOwnSeries(t *testing.T) {
 	h := warmed(t, shelfAndCatalogue(), testStore(t))
-	body := getBody(t, h, "/view")
+	body := getBody(t, h, "/view?panel=1")
 
 	sec := section(body, "Continues elsewhere")
 	if !strings.Contains(sec, `<span class="drawer-tally">1</span>`) {
@@ -387,7 +413,7 @@ func TestAContinuableSeriesIsCountedApartAndCanBeKeptToItsOwnSeries(t *testing.T
 	}
 
 	// Keeping it files it with the finished ones, for good.
-	rec := post(t, h, "/series/keep", url.Values{"name": {"Three-Body"}, "from": {"drawer"}})
+	rec := post(t, h, "/series/keep", url.Values{"panel": {"1"}, "name": {"Three-Body"}, "from": {"drawer"}})
 	if rec.Code != 200 {
 		t.Fatalf("keep: status = %d, body = %s", rec.Code, rec.Body)
 	}
@@ -403,7 +429,7 @@ func TestAContinuableSeriesIsCountedApartAndCanBeKeptToItsOwnSeries(t *testing.T
 	if !strings.Contains(fin, `hx-post="/series/unkeep"`) || !strings.Contains(fin, "Suggest others") {
 		t.Error("a kept series has no way to have the others suggested again")
 	}
-	rec = post(t, h, "/series/unkeep", url.Values{"name": {"Three-Body"}, "from": {"drawer"}})
+	rec = post(t, h, "/series/unkeep", url.Values{"panel": {"1"}, "name": {"Three-Body"}, "from": {"drawer"}})
 	if !strings.Contains(section(rec.Body.String(), "Continues elsewhere"), "Three-Body") {
 		t.Error("clearing the keep does not bring the offer back")
 	}
@@ -518,11 +544,148 @@ func TestABookAddedToTheListShowsUpWithoutWaitingForThePage(t *testing.T) {
 	}
 
 	// With nothing new since, a follow-up leaves the page alone.
-	_, gen := engine.Library()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/view?after="+strconv.FormatUint(gen, 10), nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/view?after="+url.QueryEscape(libraryGen(t, h)), nil))
 	if rec.Code != 204 {
 		t.Errorf("a follow-up with nothing new answered %d, want 204", rec.Code)
+	}
+}
+
+// refreshPath is the request a page makes when the reader comes back to it.
+func refreshPath(t *testing.T, body string) string {
+	t.Helper()
+	el := between(body, `class="card-refresh"`, `>`)
+	i := strings.Index(el, "/view?after=")
+	if i < 0 {
+		t.Fatalf("the page has no way to catch up when the reader comes back:\n%s", el)
+	}
+	path := html.UnescapeString(el[i:])
+	return path[:strings.Index(path, `"`)]
+}
+
+func TestAReaderComingBackToThePageSeesWhatChangedMeanwhile(t *testing.T) {
+	// Add a book in Hardcover's app, switch back to the tab: the page had
+	// no way to hear of it until the next scheduled pass, up to fifteen
+	// minutes later. Coming back now refreshes the library, if it is old,
+	// and brings the change.
+	lib := &changingLibrary{}
+	src := library.NewCached(lib, time.Hour)
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
+	<-engine.RefreshLibrary()
+	h := NewHandler(Deps{Source: src, Engine: engine, LoadFresh: time.Nanosecond})
+	page := getBody(t, h, "/")
+	if strings.Contains(page, "Piranesi") {
+		t.Fatal("the book is on the page before it was added")
+	}
+	back := refreshPath(t, page)
+	if !strings.Contains(back, "refresh=1") {
+		t.Errorf("coming back does not ask for a refresh: %s", back)
+	}
+
+	lib.mu.Lock()
+	lib.toRead = []library.Entry{{Book: library.Book{Title: "Piranesi", Authors: []string{"Susanna Clarke"}}, Status: library.StatusWantToRead}}
+	lib.mu.Unlock()
+	if body := getBody(t, h, back); !strings.Contains(body, "Piranesi") {
+		t.Error("coming back to the page did not bring the book just added")
+	}
+
+	// Back again with nothing new: nothing to swap.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, refreshPath(t, getBody(t, h, "/view")), nil))
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("coming back with nothing new answered %d, want 204", rec.Code)
+	}
+}
+
+func TestComingBackSoonAfterAsksNothing(t *testing.T) {
+	// Switching tabs back and forth is not worth a refresh each time: a
+	// library refreshed within the last half minute is fresh enough.
+	lib := &countingSource{stubSource: midSeries()}
+	src := library.NewCached(lib, time.Hour)
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
+	<-engine.RefreshLibrary()
+	h := NewHandler(Deps{Source: src, Engine: engine})
+	back := refreshPath(t, getBody(t, h, "/"))
+	before := lib.reads.Load()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, back, nil))
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("coming back at once answered %d, want 204", rec.Code)
+	}
+	if n := lib.reads.Load(); n != before {
+		t.Errorf("coming back at once read the source %d times, want none", n-before)
+	}
+}
+
+// attr reads the first value of the named attribute in s.
+func attr(t *testing.T, s, name string) string {
+	t.Helper()
+	i := strings.Index(s, name+`="`)
+	if i < 0 {
+		t.Fatalf("no %s in %s", name, s)
+	}
+	rest := s[i+len(name)+2:]
+	return html.UnescapeString(rest[:strings.Index(rest, `"`)])
+}
+
+// drawerGen is the generation token the page's drawer shows now.
+func drawerGen(t *testing.T, h http.Handler) string {
+	t.Helper()
+	return attr(t, getBody(t, h, "/view?drawer=1"), "data-gen")
+}
+
+// libraryGen is the library token a page painted now carries.
+func libraryGen(t *testing.T, h http.Handler) string {
+	t.Helper()
+	return param(t, between(getBody(t, h, "/view"), `class="card-refresh"`, `>`), "after")
+}
+
+// param reads one query parameter out of an element's hx-get.
+func param(t *testing.T, el, name string) string {
+	t.Helper()
+	i := strings.Index(el, `hx-get="`)
+	if i < 0 {
+		t.Fatalf("no hx-get in %s", el)
+	}
+	raw := html.UnescapeString(el[i+len(`hx-get="`):])
+	u, err := url.Parse(raw[:strings.Index(raw, `"`)])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Query().Get(name)
+}
+
+func TestAPageFromBeforeARestartHearsWhatIsNewAtOnce(t *testing.T) {
+	// The page echoes back the generations it was drawn at, and a restart
+	// counts them from zero again. Compared as they were, a page from before
+	// it heard "nothing new" until the new process had counted past it.
+	lib := &changingLibrary{}
+	src := library.NewCached(lib, time.Hour)
+	before := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
+	for _, title := range []string{"A", "B", "C"} { // a process that has seen some changes
+		lib.mu.Lock()
+		lib.toRead = append(lib.toRead, library.Entry{Book: library.Book{Title: title}, Status: library.StatusWantToRead})
+		lib.mu.Unlock()
+		<-before.RefreshLibrary()
+	}
+	old := getBody(t, NewHandler(Deps{Source: src, Engine: before}), "/view")
+	since := attr(t, old, "data-gen")
+	after := param(t, between(old, `class="card-refresh"`, `>`), "after")
+
+	restarted := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
+	<-restarted.RefreshLibrary()
+	h := NewHandler(Deps{Source: src, Engine: restarted, Wait: 5 * time.Second})
+
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/view?drawer=1&since="+url.QueryEscape(since), nil))
+	if rec.Code != http.StatusOK || time.Since(start) > time.Second {
+		t.Errorf("a listen from before the restart answered %d after %v, want the drawer at once", rec.Code, time.Since(start))
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/view?after="+url.QueryEscape(after), nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("a follow-up from before the restart answered %d, want the view", rec.Code)
 	}
 }
 
@@ -621,12 +784,16 @@ func TestAWaitingRefreshEndsWhenItsRequestDoes(t *testing.T) {
 	// rest of its wait.
 	engine := series.NewEngine(testStore(t), midSeries(), picker.Prefs{})
 	h := NewHandler(Deps{Source: midSeries(), Engine: engine, Wait: time.Minute})
-	gen, _ := engine.Changes()
 	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest("GET", "/view?drawer=1&since="+strconv.FormatUint(gen, 10), nil).WithContext(ctx)
+	req := httptest.NewRequest("GET", "/view?drawer=1&since="+url.QueryEscape(drawerGen(t, h)), nil).WithContext(ctx)
 	done := make(chan struct{})
 	go func() { h.ServeHTTP(httptest.NewRecorder(), req); close(done) }()
 	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("the refresh answered with nothing new instead of waiting")
+	default:
+	}
 	cancel()
 	select {
 	case <-done:
@@ -642,14 +809,19 @@ func TestAWaitingRefreshAnswersAsSoonAsTheServerDrains(t *testing.T) {
 	engine := series.NewEngine(testStore(t), midSeries(), picker.Prefs{})
 	draining := make(chan struct{})
 	h := NewHandler(Deps{Source: midSeries(), Engine: engine, Wait: time.Minute, Draining: draining})
-	gen, _ := engine.Changes()
+	since := drawerGen(t, h)
 	rec := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
-		h.ServeHTTP(rec, httptest.NewRequest("GET", "/view?drawer=1&since="+strconv.FormatUint(gen, 10), nil))
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/view?drawer=1&since="+url.QueryEscape(since), nil))
 		close(done)
 	}()
 	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("the refresh answered with nothing new instead of waiting")
+	default:
+	}
 	close(draining)
 	select {
 	case <-done:
@@ -677,13 +849,18 @@ func TestAWaitingFollowUpAnswersAsSoonAsTheServerDrains(t *testing.T) {
 
 	draining := make(chan struct{})
 	h := NewHandler(Deps{Source: src, Engine: engine, Wait: time.Minute, Draining: draining})
-	_, gen := engine.Library()
+	after := libraryGen(t, h)
 	done := make(chan struct{})
 	go func() {
-		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/view?after="+strconv.FormatUint(gen, 10), nil))
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/view?after="+url.QueryEscape(after), nil))
 		close(done)
 	}()
 	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("the follow-up answered before the refresh behind it was done")
+	default:
+	}
 	close(draining)
 	select {
 	case <-done:
@@ -722,7 +899,7 @@ func TestADecisionOnATwinRowLandsOnThatRow(t *testing.T) {
 	src := witcherTwins()
 	engine := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
 	h := NewHandler(Deps{Source: src, Engine: engine})
-	body := html.UnescapeString(getBody(t, h, "/view"))
+	body := html.UnescapeString(getBody(t, h, "/view?panel=1"))
 	for _, source := range []string{"hardcover", "grimmory"} {
 		if !strings.Contains(body, `"source":"`+source+`"`) {
 			t.Errorf("no decision in the drawer names the %s row", source)
@@ -733,7 +910,7 @@ func TestADecisionOnATwinRowLandsOnThatRow(t *testing.T) {
 	}
 
 	for _, source := range []string{"grimmory", "hardcover"} {
-		rec := post(t, h, "/series/drop", url.Values{"name": {"The Witcher"}, "source": {source}})
+		rec := post(t, h, "/series/drop", url.Values{"panel": {"1"}, "name": {"The Witcher"}, "source": {source}})
 		if rec.Code != 200 {
 			t.Fatalf("drop: status = %d", rec.Code)
 		}
@@ -749,7 +926,7 @@ func TestADecisionOnATwinRowLandsOnThatRow(t *testing.T) {
 				t.Errorf("the %s row: decision = %v, after dropping the %s row", g.Source, g.Decision, source)
 			}
 		}
-		if rec := post(t, h, "/series/clear", url.Values{"name": {"The Witcher"}, "source": {source}}); rec.Code != 200 {
+		if rec := post(t, h, "/series/clear", url.Values{"panel": {"1"}, "name": {"The Witcher"}, "source": {source}}); rec.Code != 200 {
 			t.Fatalf("clear: status = %d", rec.Code)
 		}
 	}

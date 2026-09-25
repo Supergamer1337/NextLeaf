@@ -1262,6 +1262,119 @@ func TestALibraryRefreshIsSharedAndCountsOnlyChanges(t *testing.T) {
 	}
 }
 
+func TestAPassRightAfterARefreshDoesNotFetchTheLibraryAgain(t *testing.T) {
+	// A refresh that changes the library nudges the pass, for the questions
+	// the change raises. The pass asks those, and leaves the library it was
+	// handed alone: fetching it again at once doubled every change's traffic.
+	var refreshed, changes int32 = 0, 1
+	gm := changingShelf{shelf: shelf{name: "grimmory"}, refreshed: &refreshed, changes: &changes}
+	e := NewEngine(openStore(t), library.Combine(&catalogue{name: "hardcover"}, gm), picker.Prefs{})
+	e.pace = 0
+	now := time.Now()
+	e.now = func() time.Time { return now }
+
+	<-e.RefreshLibrary()
+	select {
+	case <-e.Nudged():
+	default:
+		t.Fatal("a refresh that changed the library did not nudge the pass")
+	}
+	e.Warm(context.Background())
+	if n := atomic.LoadInt32(&refreshed); n != 1 {
+		t.Errorf("refreshed %d times, want the pass to use the refresh it followed", n)
+	}
+
+	// A scheduled pass, long after, fetches it as ever.
+	now = now.Add(15 * time.Minute)
+	e.Warm(context.Background())
+	if n := atomic.LoadInt32(&refreshed); n != 2 {
+		t.Errorf("refreshed %d times, want a later pass to fetch the library", n)
+	}
+}
+
+func TestAPassDoesNotNudgeItselfIntoAnother(t *testing.T) {
+	// A pass's own refresh, finding a change, nudges for the questions it
+	// raises, and this pass is the one that asks them. Taken as a call for
+	// another pass, it ran every changing pass twice.
+	var refreshed, changes int32 = 0, 1
+	gm := changingShelf{shelf: shelf{name: "grimmory"}, refreshed: &refreshed, changes: &changes}
+	e := NewEngine(openStore(t), library.Combine(&catalogue{name: "hardcover"}, gm), picker.Prefs{})
+	e.pace, e.retryGap = 0, 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx, time.Hour)
+	time.Sleep(500 * time.Millisecond)
+	if gen, _ := e.Changes(); gen != 2 {
+		t.Errorf("generation = %d, want 2: the refresh's change, and one pass ending", gen)
+	}
+}
+
+func TestThePassSlowsWhileNobodyVisits(t *testing.T) {
+	// Every fifteen minutes the pass refreshes a library nobody may be
+	// looking at. A page load refreshes it anyway, so while the app sits
+	// unused the pass can wait longer without anyone seeing older data.
+	e := testEngine(t, fakeSource{})
+	start := time.Now()
+	now := start
+	e.now = func() time.Time { return now }
+	e.Visit()
+	for _, c := range []struct {
+		since time.Duration
+		every time.Duration
+		want  time.Duration
+	}{
+		{0, 15 * time.Minute, 15 * time.Minute},
+		{time.Hour, 15 * time.Minute, 15 * time.Minute},
+		{3 * time.Hour, 15 * time.Minute, time.Hour},
+		{25 * time.Hour, 15 * time.Minute, 24 * time.Hour},
+		{3 * time.Hour, 2 * time.Hour, 2 * time.Hour}, // never faster than asked
+	} {
+		now = start.Add(c.since)
+		if got := e.cadence(c.every); got != c.want {
+			t.Errorf("%v after a visit, every %v: waits %v, want %v", c.since, c.every, got, c.want)
+		}
+	}
+}
+
+func TestAVisitBringsASlowedPassBackAtOnce(t *testing.T) {
+	e, _, _ := continuable(t)
+	e.pace, e.retryGap = 0, 0
+	e.lastVisit = time.Now().Add(-48 * time.Hour) // nobody for two days
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	passEnd := func(within time.Duration) bool {
+		deadline := time.After(within)
+		for {
+			_, c := e.Changes()
+			select {
+			case <-c:
+			case <-time.After(150 * time.Millisecond):
+				return true
+			case <-deadline:
+				return false
+			}
+		}
+	}
+
+	_, changed := e.Changes()
+	go e.Run(ctx, 50*time.Millisecond)
+	<-changed
+	passEnd(5 * time.Second)
+	_, changed = e.Changes()
+	select {
+	case <-changed:
+		t.Fatal("with nobody visiting for two days, the pass still ran on the short schedule")
+	case <-time.After(400 * time.Millisecond):
+	}
+
+	e.Visit()
+	select {
+	case <-changed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a visit left the pass on the slow schedule")
+	}
+}
+
 func TestARowNotYetLookedUpByISBNSaysItIsStillChecking(t *testing.T) {
 	// A finished row learns where it might continue from an ISBN lookup. Until
 	// that has happened, "nothing left" is not yet the whole answer.

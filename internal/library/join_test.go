@@ -120,3 +120,22 @@ func TestMultiToReadSuppressesABookReadUnderAnotherDescription(t *testing.T) {
 		t.Errorf("ToRead = %v, want the copy read elsewhere dropped", titles(got))
 	}
 }
+
+func TestKeyIndexReadsALowercaseCheckDigit(t *testing.T) {
+	a := withISBNs(authored("Shadowland", "Peter Straub"), "0-8044-2957-x")
+	b := withISBNs(authored("Shadowland", "P. Straub"), "9780804429573")
+	ix := NewKeyIndex([]Entry{a, b})
+	if ix.Key(a) != ix.Key(b) {
+		t.Error("an ISBN-10 ending in a lowercase x is the same number as its ISBN-13")
+	}
+}
+
+func TestKeyIndexIgnoresOverlongNumbers(t *testing.T) {
+	// Two numbers run together are no ISBN, even if one of them is.
+	a := withISBNs(authored("One", "A"), "97804522842419780452284241")
+	b := withISBNs(authored("Two", "B"), "9780452284241")
+	ix := NewKeyIndex([]Entry{a, b})
+	if ix.Key(a) == ix.Key(b) {
+		t.Error("a run of digits longer than an ISBN joined two books")
+	}
+}

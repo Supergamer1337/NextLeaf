@@ -2,7 +2,11 @@ package grimmory
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -338,5 +342,183 @@ func TestTagsComeOutInTheSameOrderEveryTime(t *testing.T) {
 	b := mapped([]string{"Fantasy for Children", "Magic", "Low Fantasy"}, []string{"dark", "hopeful"})
 	if !reflect.DeepEqual(a.Genres, b.Genres) || !reflect.DeepEqual(a.Moods, b.Moods) {
 		t.Errorf("the same tags in another order map differently:\n%v %v\n%v %v", a.Genres, a.Moods, b.Genres, b.Moods)
+	}
+}
+
+// heldBooks is a books endpoint that counts its fetches and answers each only
+// once released.
+func heldBooks(fetches *atomic.Int32, release <-chan struct{}) func(*http.Request, int32) (int, string) {
+	serve := acceptLatest(statusFixture)
+	return func(r *http.Request, logins int32) (int, string) {
+		fetches.Add(1)
+		<-release
+		return serve(r, logins)
+	}
+}
+
+// callersOfBooks reports each caller of the library fetch as it starts one or
+// joins one in flight, so a test can wait for them rather than sleep.
+func callersOfBooks(t *testing.T) <-chan bool {
+	t.Helper()
+	callers := make(chan bool, 8)
+	testHookBooks = func(joined bool) { callers <- joined }
+	t.Cleanup(func() { testHookBooks = nil })
+	return callers
+}
+
+func TestListsAskedForTogetherShareOneFetch(t *testing.T) {
+	// Grimmory hands back the whole library in one response, and a refresh
+	// asks for all three lists at once. Fetched once each, the same library
+	// came down three times.
+	var fetches atomic.Int32
+	release := make(chan struct{})
+	c := New((&fake{books: heldBooks(&fetches, release)}).server(t).URL, "user", "pass")
+	ctx := context.Background()
+
+	callers := callersOfBooks(t)
+	var wg sync.WaitGroup
+	var reading, reads, toRead []library.Entry
+	wg.Go(func() { reading, _ = c.CurrentlyReading(ctx) })
+	wg.Go(func() { reads, _ = c.RecentReads(ctx, 0) })
+	wg.Go(func() { toRead, _ = c.ToRead(ctx) })
+	for range 3 {
+		<-callers
+	}
+	close(release)
+	wg.Wait()
+
+	if n := fetches.Load(); n != 1 {
+		t.Errorf("the library was fetched %d times, want once for the three lists", n)
+	}
+	assertTitles(t, reading, "Reading", "Rereading")
+	assertTitles(t, reads, "ReadNew", "ReadOld", "ReadUndated")
+	assertTitles(t, toRead, "Unset", "Absent", "Unread")
+
+	// Only lists asked for at the same moment share: a later ask is fresh.
+	if _, err := c.ToRead(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := fetches.Load(); n != 2 {
+		t.Errorf("fetched %d times, want a later ask to fetch afresh", n)
+	}
+}
+
+func TestACallerGivingUpDoesNotFailTheOthersSharingItsFetch(t *testing.T) {
+	var fetches atomic.Int32
+	release := make(chan struct{})
+	c := New((&fake{books: heldBooks(&fetches, release)}).server(t).URL, "user", "pass")
+
+	callers := callersOfBooks(t)
+	first, cancel := context.WithCancel(context.Background())
+	gaveUp := make(chan error, 1)
+	go func() {
+		_, err := c.ToRead(first)
+		gaveUp <- err
+	}()
+	if joined := <-callers; joined {
+		t.Fatal("the first caller joined a fetch, with none in flight")
+	}
+	shared := make(chan []library.Entry, 1)
+	go func() {
+		got, err := c.CurrentlyReading(context.Background())
+		if err != nil {
+			t.Errorf("the second caller failed with the first's cancellation: %v", err)
+		}
+		shared <- got
+	}()
+	if joined := <-callers; !joined {
+		t.Fatal("the second caller started a fetch of its own")
+	}
+
+	cancel()
+	if err := <-gaveUp; !errors.Is(err, context.Canceled) {
+		t.Errorf("the caller that gave up got %v, want its own cancellation", err)
+	}
+	close(release)
+	assertTitles(t, <-shared, "Reading", "Rereading")
+	if n := fetches.Load(); n != 1 {
+		t.Errorf("fetched %d times, want the two callers sharing one fetch", n)
+	}
+}
+
+func TestASharedFetchThatFailsFailsEveryoneAndIsNotKept(t *testing.T) {
+	var fetches atomic.Int32
+	release := make(chan struct{})
+	serve := heldBooks(&fetches, release)
+	var down atomic.Bool
+	down.Store(true)
+	c := New((&fake{books: func(r *http.Request, logins int32) (int, string) {
+		status, body := serve(r, logins)
+		if down.Load() {
+			return http.StatusBadGateway, ""
+		}
+		return status, body
+	}}).server(t).URL, "user", "pass")
+	ctx := context.Background()
+
+	callers := callersOfBooks(t)
+	errs := make(chan error, 2)
+	go func() { _, err := c.ToRead(ctx); errs <- err }()
+	go func() { _, err := c.RecentReads(ctx, 0); errs <- err }()
+	<-callers
+	<-callers
+	close(release)
+	for range 2 {
+		if err := <-errs; err == nil {
+			t.Error("a caller sharing a failed fetch got no error")
+		}
+	}
+
+	down.Store(false)
+	if got, err := c.ToRead(ctx); err != nil || len(got) == 0 {
+		t.Errorf("the next ask got %v, %v; want the failure forgotten and a fresh fetch", got, err)
+	}
+	if n := fetches.Load(); n != 2 {
+		t.Errorf("fetched %d times, want the failed fetch shared and then one more", n)
+	}
+}
+
+func TestASharedFetchNobodyWaitsForStillEnds(t *testing.T) {
+	// The fetch outlives a caller who gives up, for the others sharing it.
+	// On a client that never times out it must still end of its own accord,
+	// or every later read would join it and wait for good.
+	hang := make(chan struct{})
+	defer close(hang)
+	c := New((&fake{books: func(r *http.Request, _ int32) (int, string) {
+		select {
+		case <-hang:
+		case <-r.Context().Done():
+		}
+		return http.StatusOK, "[]"
+	}}).server(t).URL, "user", "pass", WithHTTPClient(&http.Client{}))
+	c.booksTimeout = 50 * time.Millisecond
+
+	gaveUp, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := c.ToRead(gaveUp); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the caller that gave up got %v, want its own deadline", err)
+	}
+
+	later, cancelLater := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelLater()
+	start := time.Now()
+	if _, err := c.ToRead(later); err == nil {
+		t.Error("a read of a library that never answers succeeded")
+	}
+	if waited := time.Since(start); waited > 2*time.Second {
+		t.Errorf("a later read waited %v on a fetch nobody was left waiting for", waited)
+	}
+}
+
+func TestCleaningAuthorsLeavesTheSharedResponseAlone(t *testing.T) {
+	// Every list asked for at once maps the same fetched books. Cleaning
+	// names in place wrote to a response other callers were reading.
+	fetched := []string{"David    Allen", "Joan  Didion"}
+	cleaned := cleanAuthors(fetched)
+	if !reflect.DeepEqual(cleaned, []string{"David Allen", "Joan Didion"}) {
+		t.Errorf("cleaned = %q", cleaned)
+	}
+	if fetched[0] != "David    Allen" {
+		t.Errorf("the fetched names were rewritten: %q", fetched)
 	}
 }

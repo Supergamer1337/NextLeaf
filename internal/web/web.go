@@ -4,11 +4,14 @@ package web
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"html/template"
 	"io"
+	"io/fs"
 	"mime"
 	"net/http"
 	"net/url"
@@ -96,13 +99,42 @@ var selectFuncs = template.FuncMap{
 	},
 }
 
-// shellHTML is the constant document every visit starts from: styles,
-// masthead, and the mount the card and drawer are morphed into. It reads no
-// source, so it cannot be slow and it cannot fail.
+// staticETags names each embedded asset by its content. Embedded files have
+// no modification time, so the file server has nothing else to validate
+// against. The tags are weak: compressed and plain copies share them.
+var staticETags = func() map[string]string {
+	tags := map[string]string{}
+	err := fs.WalkDir(staticFS, "static", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := staticFS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(b)
+		tags[path] = `W/"` + hex.EncodeToString(sum[:8]) + `"`
+		return nil
+	})
+	if err != nil {
+		panic(err) // embedded: unreadable means a broken build
+	}
+	return tags
+}()
+
+// pageTmpl renders the whole page: styles, masthead, and the places the card
+// and the drawer's pieces live.
+var pageTmpl = template.Must(template.New("layout.html").Funcs(selectFuncs).ParseFS(templateFS, "layout.html", "view.html"))
+
+// page is what the page is rendered from: the view it carries, or none.
+type page struct{ View *viewData }
+
+// shellHTML is the page before the library is first held: a skeleton, and a
+// request for the card once the page is up. It reads no source, so it cannot
+// be slow and it cannot fail.
 var shellHTML = func() []byte {
-	t := template.Must(template.New("layout.html").Funcs(selectFuncs).ParseFS(templateFS, "layout.html", "view.html"))
 	var buf bytes.Buffer
-	if err := t.Execute(&buf, nil); err != nil {
+	if err := pageTmpl.Execute(&buf, page{}); err != nil {
 		panic(err) // embedded and data-free: a failure here is a broken build
 	}
 	return buf.Bytes()
@@ -138,12 +170,16 @@ type server struct {
 	wait      time.Duration
 	loadFresh time.Duration
 	draining  <-chan struct{}
+	// epoch names this process in the generations handed to a page, which
+	// are counted afresh after a restart.
+	epoch string
 }
 
 // NewHandler returns the application's HTTP handler. d.Source may be nil, in
 // which case the selector explains that no source is configured.
 func NewHandler(d Deps) http.Handler {
-	s := &server{src: d.Source, engine: d.Engine, wait: d.Wait, loadFresh: d.LoadFresh, draining: d.Draining}
+	s := &server{src: d.Source, engine: d.Engine, wait: d.Wait, loadFresh: d.LoadFresh, draining: d.Draining,
+		epoch: strconv.FormatInt(time.Now().UnixNano(), 36)}
 	if s.wait == 0 {
 		s.wait = 20 * time.Second
 	}
@@ -154,20 +190,24 @@ func NewHandler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	// {$} matches "/" exactly, so unknown paths fall through to 404 instead of
 	// being swallowed by a catch-all root pattern.
-	mux.HandleFunc("GET /{$}", handleShell)
+	mux.HandleFunc("GET /{$}", s.handlePage)
 	mux.HandleFunc("GET /view", s.handleView)
 	mux.HandleFunc("POST /series/{action}", s.handleSeriesDecision)
 	mux.HandleFunc("GET /cover/{source}/{id}", s.handleCover)
 	mux.HandleFunc("GET /healthcheck", handleHealthcheck)
 	// Paths line up with the embed, so no prefix stripping is needed. The
 	// assets are vendored and change only with a deploy, so a day-long cache
-	// costs at worst one stale day after one.
+	// costs at worst one stale day after one. Past that day the ETag lets the
+	// browser revalidate what it holds instead of fetching it again.
 	static := http.FileServerFS(staticFS)
 	mux.Handle("GET /static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
+		if tag, ok := staticETags[strings.TrimPrefix(r.URL.Path, "/")]; ok {
+			w.Header().Set("ETag", tag)
+		}
 		static.ServeHTTP(w, r)
 	}))
-	return mux
+	return compressed(mux)
 }
 
 // handleSeriesDecision records a statement from the recommendation card or
@@ -191,6 +231,7 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 		flash(w, "a series name is required", http.StatusBadRequest)
 		return
 	}
+	s.visit()
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -214,6 +255,7 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 	// the group with no cached answer, which is the one case the re-render must
 	// be allowed to ask, or the row comes back with nothing next.
 	data := s.viewOf(ctx, false, uncached, "")
+	data.WithPanel = r.FormValue("panel") != ""
 	// A decision made in the drawer shows its effect where the reader is
 	// standing — the row moves, undo alongside — so only card decisions get
 	// the confirmation banner.
@@ -247,7 +289,12 @@ func (s *server) handleCover(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(contentType, "image/") {
 		w.Header().Set("Content-Type", contentType)
 	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	// A versioned URL names one cover for good: a new cover is a new URL.
+	if r.URL.Query().Get("v") != "" {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+	}
 	_, _ = io.Copy(w, body)
 }
 
@@ -304,10 +351,11 @@ type viewData struct {
 	// a series is a park, so the decision is recorded rather than given away.
 	Continuation bool
 	Panel        panel
-	// Gen is the engine's generation when the drawer was rendered, so a
-	// waiting drawer can ask for whatever lands after it. Listening is false
-	// with no series tracking, when there is nothing to listen for.
-	Gen       uint64
+	// Gen is the engine's generation when the drawer was rendered, as a
+	// token, so a waiting drawer can ask for whatever lands after it.
+	// Listening is false with no series tracking, when there is nothing to
+	// listen for.
+	Gen       string
 	Listening bool
 	// Settled marks the render in which a waiting drawer got its last answer.
 	Settled bool
@@ -319,6 +367,12 @@ type viewData struct {
 	CardKey  string
 	// StaleKey is the query-escaped staleKey the page was painted with.
 	StaleKey string
+	// LibGen is the library generation the page was painted from, for it to
+	// catch up from when the reader comes back to it.
+	LibGen string
+	// WithPanel is set once the page has opened its drawer: only then do the
+	// drawer's rows, and their covers, travel with the rest.
+	WithPanel bool
 }
 
 // panel is the series drawer: every tracked series, grouped by what applies
@@ -379,17 +433,44 @@ func group(v series.View) panel {
 	return p
 }
 
-// handleShell serves the constant document. It never reads a source, so the
-// browser paints immediately and the card arrives on its own.
-func handleShell(w http.ResponseWriter, _ *http.Request) {
+// handlePage serves the page. With the library held it carries the card, so
+// the recommendation is in the first paint; rendering it reads only what is
+// held and waits on no backend. Until the library is first held the page is
+// the skeleton, and fetches the card once it is up.
+func (s *server) handlePage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(shellHTML)
+	// An uptime check is no reader, and has no card to see.
+	if r.Method == http.MethodHead {
+		_, _ = w.Write(shellHTML)
+		return
+	}
+	s.visit()
+	if s.engine == nil {
+		_, _ = w.Write(shellHTML)
+		return
+	}
+	// Painting the card reads the library, which must not mean fetching a
+	// list that has yet to arrive, or whose first fetch failed.
+	if at, _ := s.engine.Library(); at.IsZero() || !library.Held(s.src) {
+		_, _ = w.Write(shellHTML)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	data := s.pageView(ctx, false)
+	var buf bytes.Buffer
+	if err := pageTmpl.Execute(&buf, page{View: &data}); err != nil {
+		_, _ = w.Write(shellHTML) // the skeleton still fetches the card
+		return
+	}
+	_, _ = buf.WriteTo(w)
 }
 
 // handleView renders the card and drawer as one fragment. "another" flips
 // from the series continuation to a variety pick; "drawer" asks for the
 // drawer alone, and "after" for the follow-up to a page painted from an old
-// library.
+// library. "panel" says the page has opened its drawer, so the drawer's rows
+// travel too; until then only its toggle and status do.
 //
 // A page load never waits on a backend. It paints from what is held and asks
 // the catalogue nothing; the background pass does that. If the library is
@@ -399,31 +480,78 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	q := r.URL.Query()
+	panel := q.Has("panel")
 	switch {
 	case q.Has("drawer"):
-		s.refreshDrawer(ctx, w, q.Get("since"), q.Has("waiting"))
+		s.refreshDrawer(ctx, w, q.Get("since"), q.Has("waiting"), panel)
 		return
 	case q.Has("after"):
-		s.followUp(ctx, w, q.Get("after"), q.Get("keep"), q.Get("stale"))
+		s.followUp(ctx, w, q.Get("after"), q.Get("keep"), q.Get("stale"), panel, q.Has("refresh"))
 		return
 	}
-	reroll := q.Has("another")
+	s.visit()
+	data := s.pageView(ctx, q.Has("another"))
+	data.WithPanel = panel
+	renderView(w, data, http.StatusOK)
+}
+
+// pageView is the view a page load shows. It paints from what is held and asks
+// the catalogue nothing; if the library is getting old it is refreshed behind
+// the page, with a follow-up set for the result.
+func (s *server) pageView(ctx context.Context, reroll bool) viewData {
 	var followUp string
 	if s.engine != nil {
-		at, gen := s.engine.Library()
-		if time.Since(at) > s.loadFresh {
-			s.engine.RefreshLibrary()
-			// With nothing held yet the render fetches for itself, so there is
-			// nothing newer to follow up with; and a follow-up would undo a
-			// reroll.
-			if !at.IsZero() && !reroll {
-				followUp = strconv.FormatUint(gen, 10)
-			}
+		// With nothing held yet the render fetches for itself, so there is
+		// nothing newer to follow up with; and a follow-up would undo a
+		// reroll.
+		if at, gen, refreshing := s.refreshIfOld(); refreshing && !at.IsZero() && !reroll {
+			followUp = s.token(gen)
 		}
 	}
 	data := s.viewOf(ctx, reroll, false, "")
 	data.FollowUp = followUp
-	renderView(w, data, http.StatusOK)
+	return data
+}
+
+// refreshIfOld refreshes the library behind the page if it is older than
+// loadFresh, and reports when it was last refreshed, its generation then,
+// and whether a refresh is now under way.
+func (s *server) refreshIfOld() (at time.Time, gen uint64, refreshing bool) {
+	at, gen = s.engine.Library()
+	if time.Since(at) <= s.loadFresh {
+		return at, gen, false
+	}
+	s.engine.RefreshLibrary()
+	return at, gen, true
+}
+
+// token names generation gen of this process for a page to echo back.
+func (s *server) token(gen uint64) string {
+	return s.epoch + "." + strconv.FormatUint(gen, 10)
+}
+
+// generation reads a page's token back: the generation it names, and
+// whether this process named it. A token from before a restart counts from
+// another zero, so it says nothing about what is new here. ok is false for
+// something that is no token at all.
+func (s *server) generation(token string) (gen uint64, current, ok bool) {
+	epoch, n, named := strings.Cut(token, ".")
+	if !named {
+		n = epoch // a page from before tokens carried a bare count
+	}
+	gen, err := strconv.ParseUint(n, 10, 64)
+	if err != nil {
+		return 0, false, false
+	}
+	return gen, named && epoch == s.epoch, true
+}
+
+// visit tells the engine a reader is here, as opposed to a tab listening on
+// its own, so the background pass keeps to its schedule.
+func (s *server) visit() {
+	if s.engine != nil {
+		s.engine.Visit()
+	}
 }
 
 // followUp answers a page painted from an old library. Once the refresh behind
@@ -431,11 +559,19 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 // since generation seen, or if the sources down are no longer those in stale,
 // the page's own staleKey; and 204, nothing to swap, if neither. The book
 // keyed keep stays on the card unless something should take its place.
-func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep, stale string) {
-	after, err := strconv.ParseUint(seen, 10, 64)
-	if s.engine == nil || err != nil {
+//
+// With refresh, it is a reader coming back to the page, which starts a
+// refresh of its own if the library is getting old: a book added elsewhere
+// meanwhile shows on their return, not at the next scheduled pass.
+func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep, stale string, panel, refresh bool) {
+	after, current, ok := s.generation(seen)
+	if s.engine == nil || !ok {
 		w.WriteHeader(http.StatusNoContent)
 		return
+	}
+	if refresh {
+		s.visit()
+		s.refreshIfOld()
 	}
 	if done := s.engine.LibraryRefreshing(); done != nil {
 		select {
@@ -446,11 +582,13 @@ func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep
 			return
 		}
 	}
-	if _, gen := s.engine.Library(); gen <= after && staleKey(library.HealthOf(s.src)) == stale {
+	if _, gen := s.engine.Library(); current && gen <= after && staleKey(library.HealthOf(s.src)) == stale {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	renderView(w, s.viewOf(ctx, false, false, keep), http.StatusOK)
+	data := s.viewOf(ctx, false, false, keep)
+	data.WithPanel = panel
+	renderView(w, data, http.StatusOK)
 }
 
 // staleKey names the sources serving old data, for comparing what a page said
@@ -468,23 +606,27 @@ func staleKey(health []library.Health) string {
 
 // refreshDrawer renders the drawer alone, for an open page listening for
 // change. Given the generation it last saw, it waits for the next change, up
-// to s.wait, so the drawer hears of it at once without polling. It asks
-// nothing itself: the background pass does the fetching, and is nudged if
-// anything is still missing.
+// to s.wait, so the drawer hears of it at once without polling; with nothing
+// by then it answers 204, and the page listens again. It asks nothing
+// itself: the background pass does the fetching, and is nudged if anything
+// is still missing.
 //
 // The card is left alone on purpose: re-running the pick would deal the
-// reader a different book on every refresh. Any failure answers 204, so the
-// drawer on screen stays put.
-func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since string, waiting bool) {
+// reader a different book on every refresh. A failure answers an error, so
+// the page keeps the drawer it has and waits before asking again.
+func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since string, waiting, panel bool) {
 	if s.engine == nil {
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	if seen, err := strconv.ParseUint(since, 10, 64); err == nil {
+	// A drawer from another process, or with no generation, is drawn at once.
+	if seen, current, _ := s.generation(since); current {
 		if gen, changed := s.engine.Changes(); gen <= seen {
 			select {
 			case <-changed:
 			case <-time.After(s.wait):
+				w.WriteHeader(http.StatusNoContent)
+				return
 			case <-s.draining:
 			case <-ctx.Done():
 				return
@@ -496,10 +638,10 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since
 	gen, _ := s.engine.Changes()
 	view, err := s.engine.ViewCached(ctx)
 	if err != nil {
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
-	data := viewData{Panel: group(view), Gen: gen, Listening: true}
+	data := viewData{Panel: group(view), Gen: s.token(gen), Listening: true, WithPanel: panel}
 	if data.Panel.Pending {
 		s.engine.Nudge()
 	}
@@ -507,7 +649,7 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since
 	data.Settled = waiting && !data.Panel.Pending
 	var buf bytes.Buffer
 	if err := viewTmpl.ExecuteTemplate(&buf, "drawerRefresh", data); err != nil {
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -528,7 +670,12 @@ func (s *server) viewOf(ctx context.Context, reroll, catalogue bool, keep string
 		view series.View
 		err  error
 	)
-	data.Gen, _ = s.engine.Changes()
+	gen, _ := s.engine.Changes()
+	data.Gen = s.token(gen)
+	// Read before rendering, as Gen is: a change landing mid-render is then
+	// one the page can still ask for.
+	_, libGen := s.engine.Library()
+	data.LibGen = s.token(libGen)
 	data.Listening = true
 	switch {
 	case catalogue:

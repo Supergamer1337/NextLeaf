@@ -509,6 +509,12 @@
       </button>
     </header>
 
+    {{/* With the library held, the page carries its card: nothing waits on a
+         second request, or on script, before the recommendation shows. Only
+         a cold start, with nothing to paint from yet, fetches it after. */}}
+    {{with .View}}
+    <div id="app" aria-live="polite" aria-busy="false">{{template "card" .}}</div>
+    {{else}}
     <div id="app" hx-get="/view" hx-trigger="load" aria-live="polite" aria-busy="true">
       <div class="deck" id="deck">
         <div class="waiting waiting--initial" aria-hidden="true">{{template "waitingCard"}}</div>
@@ -516,17 +522,20 @@
           <button class="btn btn--quiet" type="button" hx-get="/view" hx-disabled-elt="this">Try again</button></p>
       </div>
     </div>
+    {{end}}
   </main>
 
-  <a class="drawer-toggle" id="drawer-toggle" href="#series" hidden>Series <span class="drawer-count">0</span></a>
+  {{with .View}}{{template "drawerToggle" .}}{{else}}<a class="drawer-toggle" id="drawer-toggle" href="#series" hidden>Series <span class="drawer-count">0</span></a>{{end}}
   <div class="drawer-scrim" aria-hidden="true"></div>
   <aside class="drawer" id="series" aria-label="Series you're tracking">
     <div class="drawer-head">
       <h2 class="drawer-title">Series</h2>
-      <span class="drawer-status is-idle" id="drawer-status"></span>
+      {{with .View}}{{template "drawerStatus" .}}{{else}}<span class="drawer-status is-idle" id="drawer-status"></span>{{end}}
       <a class="drawer-close" href="#" aria-label="Close">&times;</a>
     </div>
     <div class="drawer-dim"></div>
+    {{/* Empty until the drawer is first opened: its rows, and their covers,
+         are fetched then rather than with every page. */}}
     <div class="drawer-body" id="drawer-body"></div>
     {{/* The page's one drawer listener: here, where no swap reaches, so a
          redraw can never leave a second one running. It asks for the next
@@ -555,7 +564,14 @@
       function syncDrawer() {
         var open = location.hash === "#series";
         var d = drawer();
-        if (d) { d.classList.toggle("open", open); }
+        if (d) {
+          d.classList.toggle("open", open);
+          if (open && !d.classList.contains("opened")) {
+            // First opened: from now on the rows travel, starting at once.
+            d.classList.add("opened");
+            listen();
+          }
+        }
         var scrim = document.querySelector(".drawer-scrim");
         if (scrim) { scrim.classList.toggle("open", open); }
         // However the drawer closed (scrim, Back, a link), a wheel left open
@@ -567,7 +583,7 @@
 
       // Background answers that land under an open wheel would close it, so
       // they are held, and asked for again when it closes.
-      var held = { drawer: false, card: false };
+      var held = { drawer: false, card: false, back: false };
       function requestPath(e) {
         var p = e.detail.pathInfo, c = e.detail.requestConfig;
         return (p && p.requestPath) || (c && c.path) || "";
@@ -576,17 +592,36 @@
       // A background request: a drawer refresh, or a page's follow-up. Neither
       // is anything the reader asked for, so neither is shown as loading.
       function isBackground(e) { return isDrawerRefresh(e) || requestPath(e).indexOf("after=") >= 0; }
+      // Back on the page after a while away, the library may have moved: a
+      // book added in another app meanwhile shows now, not at the next pass.
+      function catchUp() {
+        // Under an open wheel it waits, like any background answer.
+        if (openRow) { held.back = true; return; }
+        var r = document.querySelector(".card-refresh");
+        if (r && window.htmx) { htmx.trigger(r, "refresh"); }
+      }
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "visible") { catchUp(); }
+      });
+      // On a desktop the tab stays visible behind another window.
+      window.addEventListener("focus", catchUp);
+      window.addEventListener("pageshow", function (e) { if (e.persisted) { catchUp(); } });
       // The drawer's one listener asks for the next change since the
       // generation the drawer shows, and is asked again after each answer.
+      // Until the drawer is opened it hears only the toggle and status.
       var listener = document.getElementById("drawer-listen");
+      function opened() { var d = drawer(); return !!d && d.classList.contains("opened"); }
       // One retry at most: asking again cancels any that is pending, or a
       // drawer answering "nothing" at once would gain a retry per redraw.
       var retry = null;
+      var listenedAt = 0;
       function listen() {
         clearTimeout(retry);
         retry = null;
+        // Opened from the address before htmx is up: the page's load listens.
+        if (!window.htmx) { return; }
         var st = document.getElementById("drawer-status");
-        if (listener && st && st.dataset.gen) { htmx.trigger(listener, "listen"); }
+        if (listener && st && st.dataset.gen) { listenedAt = Date.now(); htmx.trigger(listener, "listen"); }
       }
 
       function closeWheel() {
@@ -597,12 +632,18 @@
         openRow = null;
         if (held.card) {
           held.card = false;
+          // A follow-up asks again; a catch-up in flight when the wheel
+          // opened has no follow-up to ask, so it catches up again.
           var follow = document.querySelector(".card-follow");
-          if (follow) { htmx.trigger(follow, "follow"); }
+          if (follow) { htmx.trigger(follow, "follow"); } else { held.back = true; }
         }
         if (held.drawer) {
           held.drawer = false;
           listen();
+        }
+        if (held.back) {
+          held.back = false;
+          catchUp();
         }
       }
 
@@ -747,9 +788,17 @@
       // the notice slot. Anything that fails without saying where it belongs —
       // a proxy's 502 page, say — would otherwise be morphed over the card.
       document.body.addEventListener("htmx:configRequest", function (e) {
+        if (opened()) { e.detail.parameters.panel = "1"; }
         if (e.detail.elt !== listener) { return; }
         var st = document.getElementById("drawer-status");
-        e.detail.parameters.since = st.dataset.gen;
+        // An opened drawer listens from the rows it shows, and one with none
+        // yet is drawn at once; a closed one needs only its status.
+        var from = st;
+        if (opened()) {
+          from = document.querySelector("#drawer-body .drawer-drawn");
+          if (!from) { return; }
+        }
+        e.detail.parameters.since = from.dataset.gen;
         if ("waiting" in st.dataset) { e.detail.parameters.waiting = "1"; }
       });
       document.body.addEventListener("htmx:beforeSwap", function (e) {
@@ -763,10 +812,13 @@
       document.body.addEventListener("htmx:afterRequest", function (e) {
         if (e.detail.elt === listener) {
           if (held.drawer) { return; } // it resumes when the wheel closes
-          if (e.detail.successful && e.detail.xhr.status !== 204) { listen(); return; }
-          // Dropped by a restart or a proxy's timeout, or replaced: ask again
-          // shortly, unless a request is already out. Nothing to tell the
-          // reader.
+          // A new drawer, or a 204 after a wait for nothing new: ask again. A
+          // 204 at once is no wait, and asking again at once would loop.
+          var waited = Date.now() - listenedAt >= 1000;
+          if (e.detail.successful && (e.detail.xhr.status !== 204 || waited)) { listen(); return; }
+          // Failed, dropped by a restart or a proxy's timeout, or replaced:
+          // ask again shortly, unless a request is already out. Nothing to
+          // tell the reader.
           clearTimeout(retry);
           retry = setTimeout(function () {
             retry = null;
@@ -791,8 +843,10 @@
       });
 
       // Before the first card arrives there is no notice slot to write into,
-      // and the skeleton would otherwise sit there for good.
-      function loadFailed() {
+      // and the skeleton would otherwise sit there for good. A background
+      // request failing is no reason to give up on the card.
+      function loadFailed(e) {
+        if (isBackground(e)) { return; }
         app.setAttribute("aria-busy", "false");
         if (!app.querySelector(".waiting--initial")) { return; }
         app.classList.add("failed");
@@ -809,7 +863,10 @@
       // snapped invisible and faded back in — a cached one immediately, an
       // uncached one when its pixels arrive — so arrival always reads the
       // same. A re-render of the same book keeps its cover still.
-      var shownCover = null;
+      // A card painted with the page is already where it belongs: only a cover
+      // that changes after that fades in.
+      var firstCover = document.querySelector("img.cover");
+      var shownCover = firstCover ? firstCover.getAttribute("src") : null;
       function settleCovers() {
         var img = document.querySelector("img.cover");
         if (!img) { shownCover = null; return; }
@@ -860,6 +917,10 @@
         app.setAttribute("aria-busy", "true");
       });
       syncDrawer();
+      // A card painted with the page brings its drawer's status: listen from
+      // it once htmx has taken the page up, which it does on DOMContentLoaded
+      // after this listener has run. A cold page listens once its card lands.
+      document.addEventListener("DOMContentLoaded", function () { setTimeout(listen, 0); });
     })();
 
     function wireTheme() {

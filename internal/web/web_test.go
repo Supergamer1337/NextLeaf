@@ -7,9 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"nextleaf/internal/library"
+	"nextleaf/internal/picker"
+	"nextleaf/internal/series"
 )
 
 // stubSource is a library.Source with canned results for handler tests.
@@ -110,6 +114,20 @@ func TestCoverRouteStreamsImage(t *testing.T) {
 	}
 	if src.lastID != "7" {
 		t.Errorf("provider saw id %q, want 7", src.lastID)
+	}
+}
+
+func TestAVersionedCoverIsCachedForGood(t *testing.T) {
+	// A cover's URL carries the time it last changed, so a new cover is a new
+	// URL, and the old one never needs asking about again. Each ask is a
+	// round trip to Grimmory on the server.
+	versioned := get(t, &coverStub{}, "/cover/grimmory/7?v=1774801160")
+	if got := versioned.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Errorf("versioned cover: Cache-Control = %q, want it kept for good", got)
+	}
+	plain := get(t, &coverStub{}, "/cover/grimmory/7")
+	if got := plain.Header().Get("Cache-Control"); got != "public, max-age=86400" {
+		t.Errorf("unversioned cover: Cache-Control = %q, want a day", got)
 	}
 }
 
@@ -429,22 +447,23 @@ func TestSelectorRerollUsesVariety(t *testing.T) {
 // countingSource records whether a handler touched the library at all.
 type countingSource struct {
 	stubSource
-	reads int
+	reads atomic.Int32
 }
 
 func (c *countingSource) ToRead(ctx context.Context) ([]library.Entry, error) {
-	c.reads++
+	c.reads.Add(1)
 	return c.stubSource.ToRead(ctx)
 }
 
 func (c *countingSource) RecentReads(ctx context.Context, n int) ([]library.Entry, error) {
-	c.reads++
+	c.reads.Add(1)
 	return c.stubSource.RecentReads(ctx, n)
 }
 
-// The shell is the same document for everyone. It reads no source, so it can
-// neither be slow nor fail, whatever state the library is in.
-func TestShellIsConstantAndReadsNoSource(t *testing.T) {
+// Before the library is first held, the shell is the same document for
+// everyone. It reads no source, so it can neither be slow nor fail, whatever
+// state the backends are in.
+func TestAColdShellIsConstantAndReadsNoSource(t *testing.T) {
 	src := &countingSource{stubSource: midSeries()}
 	h := ready(t, src, testStore(t))
 
@@ -452,8 +471,8 @@ func TestShellIsConstantAndReadsNoSource(t *testing.T) {
 	if first != second {
 		t.Error("the shell differs between requests, so it is not constant")
 	}
-	if src.reads > 0 {
-		t.Errorf("the shell read the source %d times, want 0", src.reads)
+	if n := src.reads.Load(); n > 0 {
+		t.Errorf("the shell read the source %d times, want 0", n)
 	}
 	// The drawer shell is part of the page, but nothing that depends on the
 	// library may be: no card, and no series rows.
@@ -468,16 +487,111 @@ func TestShellIsConstantAndReadsNoSource(t *testing.T) {
 	}
 }
 
-// The shell owns the only skeleton, shown before the first card. The fragment
-// must not carry one: after the first load the card stays on screen and is
-// morphed in place, never blanked while a request is in flight.
-func TestOnlyTheShellCarriesASkeleton(t *testing.T) {
+// The cold shell owns the only skeleton, shown before the first card. The
+// fragment must not carry one: after the first load the card stays on screen
+// and is morphed in place, never blanked while a request is in flight.
+func TestOnlyTheColdShellCarriesASkeleton(t *testing.T) {
 	h := ready(t, midSeries(), testStore(t))
 	if shell := getBody(t, h, "/"); !strings.Contains(shell, `class="waiting waiting--initial"`) {
 		t.Error("the shell has no skeleton to show before the first card arrives")
 	}
 	if frag := getBody(t, h, "/view"); strings.Contains(frag, `class="waiting`) {
 		t.Error("the fragment carries a skeleton, so a swap would blank the card instead of morphing it")
+	}
+	if page := getBody(t, held(t, midSeries()), "/"); strings.Contains(page, `class="waiting`) {
+		t.Error("a page carrying its card also carries the skeleton")
+	}
+}
+
+// held is a handler whose engine has fetched the library once, as the
+// background pass does right after the server starts.
+func held(t *testing.T, src library.Source) http.Handler {
+	t.Helper()
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
+	<-engine.RefreshLibrary()
+	return NewHandler(Deps{Source: src, Engine: engine})
+}
+
+func TestAPageWithTheLibraryHeldCarriesItsCard(t *testing.T) {
+	// Fetching the card after the page cost a round trip, and waited on
+	// htmx loading first. With the library held there is nothing to wait for.
+	src := &countingSource{stubSource: midSeries()}
+	h := held(t, library.NewCached(src, time.Hour))
+	before := src.reads.Load()
+
+	page := getBody(t, h, "/")
+	if n := src.reads.Load(); n != before {
+		t.Errorf("the page read the source %d times, want it painted from what is held", n-before)
+	}
+	app := between(page, `id="app"`, `>`)
+	if strings.Contains(app, "hx-trigger") {
+		t.Errorf("a page carrying its card still fetches one:\n%s", app)
+	}
+	if !strings.Contains(between(page, `id="app"`, `</article>`), `class="rec-title">Book 4<`) {
+		t.Error("the card is not in the page")
+	}
+	// The drawer's pieces are in their own places, not in #app, and the
+	// status says where the page's listener should start.
+	if !strings.Contains(between(page, `id="drawer-toggle"`, `</a>`), `<span class="drawer-count">1</span>`) {
+		t.Errorf("the drawer toggle does not count the series:\n%s", between(page, `id="drawer-toggle"`, `</a>`))
+	}
+	if !strings.Contains(between(page, `id="drawer-status"`, `>`), `data-gen="`) {
+		t.Error("the page's drawer status gives the listener nothing to start from")
+	}
+	if strings.Count(page, `id="drawer-toggle"`) != 1 || strings.Count(page, `id="drawer-status"`) != 1 {
+		t.Error("the drawer's pieces appear twice in the page")
+	}
+}
+
+// downToRead is a source whose want-to-read list cannot be fetched.
+type downToRead struct{ countingSource }
+
+func (d *downToRead) ToRead(ctx context.Context) ([]library.Entry, error) {
+	_, _ = d.countingSource.ToRead(ctx)
+	return nil, errors.New("down")
+}
+
+func TestAPageWhoseLibraryIsNotHeldIsTheSkeleton(t *testing.T) {
+	// A refresh that failed still counts as a refresh. Painting the card
+	// then would fetch the list that failed while the reader waits, up to
+	// half a minute on a hanging source, for a blank page. The skeleton
+	// paints at once and fetches the card behind it.
+	src := &downToRead{countingSource{stubSource: midSeries()}}
+	cached := library.NewCached(src, time.Hour)
+	engine := series.NewEngine(testStore(t), cached, picker.Prefs{})
+	<-engine.RefreshLibrary()
+	h := NewHandler(Deps{Source: cached, Engine: engine})
+	before := src.reads.Load()
+
+	page := getBody(t, h, "/")
+	if !strings.Contains(page, `class="waiting waiting--initial"`) {
+		t.Error("with a list not held, the page is not the skeleton")
+	}
+	if n := src.reads.Load(); n != before {
+		t.Errorf("the page read the source %d times, want none", n-before)
+	}
+}
+
+func TestAPagePaintedFromAnOldLibraryFollowsUp(t *testing.T) {
+	lib := &changingLibrary{}
+	src := library.NewCached(lib, time.Hour)
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{})
+	<-engine.RefreshLibrary()
+	h := NewHandler(Deps{Source: src, Engine: engine, LoadFresh: time.Nanosecond})
+	if page := getBody(t, h, "/"); !strings.Contains(between(page, `class="card-follow"`, `>`), "/view?after=") {
+		t.Error("a page painted from an old library does not follow up on the refresh behind it")
+	}
+}
+
+func TestTheCardsCoverIsFetchedFirst(t *testing.T) {
+	// It is the one image the reader is waiting for; lazily loaded, it
+	// queued behind everything else on the page.
+	src := stubSource{toRead: []library.Entry{{Book: library.Book{Title: "Piranesi", CoverURL: "https://covers.example/p.jpg"}}}}
+	for _, path := range []string{"/", "/view"} {
+		cover := between(getBody(t, held(t, src), path), `<img class="cover"`, `>`)
+		if !strings.Contains(cover, `fetchpriority="high"`) || strings.Contains(cover, `loading="lazy"`) {
+			t.Errorf("%s: the card's cover is not fetched first:\n%s", path, cover)
+		}
 	}
 }
 

@@ -199,10 +199,14 @@ func (c *Client) resolveCover(thumb string) string {
 // which Grimmory metadata sometimes carries, so the picker's author dimension
 // cleanAuthors normalizes author names by collapsing internal whitespace to single spaces.
 func cleanAuthors(names []string) []string {
-	for i, n := range names {
-		names[i] = strings.Join(strings.Fields(n), " ")
+	if names == nil {
+		return nil
 	}
-	return names
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = strings.Join(strings.Fields(n), " ")
+	}
+	return out
 }
 
 // parseInstant reads an ISO-8601 timestamp, returning the zero time on any
