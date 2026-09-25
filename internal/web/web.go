@@ -154,7 +154,7 @@ func NewHandler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	// {$} matches "/" exactly, so unknown paths fall through to 404 instead of
 	// being swallowed by a catch-all root pattern.
-	mux.HandleFunc("GET /{$}", handleShell)
+	mux.HandleFunc("GET /{$}", s.handleShell)
 	mux.HandleFunc("GET /view", s.handleView)
 	mux.HandleFunc("POST /series/{action}", s.handleSeriesDecision)
 	mux.HandleFunc("GET /cover/{source}/{id}", s.handleCover)
@@ -191,6 +191,7 @@ func (s *server) handleSeriesDecision(w http.ResponseWriter, r *http.Request) {
 		flash(w, "a series name is required", http.StatusBadRequest)
 		return
 	}
+	s.visit()
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -381,7 +382,8 @@ func group(v series.View) panel {
 
 // handleShell serves the constant document. It never reads a source, so the
 // browser paints immediately and the card arrives on its own.
-func handleShell(w http.ResponseWriter, _ *http.Request) {
+func (s *server) handleShell(w http.ResponseWriter, _ *http.Request) {
+	s.visit()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(shellHTML)
 }
@@ -407,6 +409,7 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 		s.followUp(ctx, w, q.Get("after"), q.Get("keep"), q.Get("stale"))
 		return
 	}
+	s.visit()
 	reroll := q.Has("another")
 	var followUp string
 	if s.engine != nil {
@@ -424,6 +427,14 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 	data := s.viewOf(ctx, reroll, false, "")
 	data.FollowUp = followUp
 	renderView(w, data, http.StatusOK)
+}
+
+// visit tells the engine a reader is here, as opposed to a tab listening on
+// its own, so the background pass keeps to its schedule.
+func (s *server) visit() {
+	if s.engine != nil {
+		s.engine.Visit()
+	}
 }
 
 // followUp answers a page painted from an old library. Once the refresh behind

@@ -30,6 +30,11 @@ const (
 	// libraryFresh is how recently a refresh must have run for a pass to use
 	// its library rather than fetch it again: the refresh that nudged it.
 	libraryFresh = time.Minute
+	// After idleAfter without a visit the pass runs hourly, and after
+	// dormantAfter daily: a page load refreshes the library itself, so
+	// nobody sees the older data.
+	idleAfter    = 2 * time.Hour
+	dormantAfter = 24 * time.Hour
 )
 
 // Engine computes the series view from the sources and the statement log, and
@@ -70,6 +75,12 @@ type Engine struct {
 	// pace spaces the background pass's lookups; retryGap is the least time
 	// between passes (see Run). Fields so tests need not wait on them.
 	pace, retryGap time.Duration
+
+	// lastVisit is when a reader last used the app, which sets how often the
+	// pass runs; visited wakes a pass waiting on the slow schedule.
+	visitMu   sync.Mutex
+	lastVisit time.Time
+	visited   chan struct{}
 }
 
 type findFailure struct {
@@ -88,8 +99,10 @@ func NewEngine(store *Store, src library.Source, prefs picker.Prefs) *Engine {
 	e := &Engine{
 		src: src, store: store, prefs: prefs, now: time.Now, found: map[string]foundClaims{}, findFailed: map[string]findFailure{},
 		changed: make(chan struct{}), nudge: make(chan struct{}, 1),
-		pace: warmPause, retryGap: failureTTL,
+		pace: warmPause, retryGap: failureTTL, visited: make(chan struct{}, 1),
 	}
+	// A start is someone deploying or restarting it: as good as a visit.
+	e.lastVisit = e.now()
 	e.finders = library.AsSeriesFinders(src)
 	if resolver, ok := library.AsSeriesResolver(src); ok {
 		e.lookahead = NewLookahead(resolver, lookaheadTTL)
@@ -218,8 +231,38 @@ func (e *Engine) LibraryRefreshing() <-chan struct{} {
 // Nudged delivers a nudge not yet taken up; Run is what waits on it.
 func (e *Engine) Nudged() <-chan struct{} { return e.nudge }
 
+// Visit records that a reader is using the app, which keeps the pass on its
+// schedule, or brings it back to it.
+func (e *Engine) Visit() {
+	e.visitMu.Lock()
+	e.lastVisit = e.now()
+	e.visitMu.Unlock()
+	select {
+	case e.visited <- struct{}{}:
+	default:
+	}
+}
+
+// Visited delivers a visit not yet taken up; Run is what waits on it.
+func (e *Engine) Visited() <-chan struct{} { return e.visited }
+
+// cadence is how long the pass waits after one: every while the app is in
+// use, and longer the longer nobody has visited.
+func (e *Engine) cadence(every time.Duration) time.Duration {
+	e.visitMu.Lock()
+	idle := e.now().Sub(e.lastVisit)
+	e.visitMu.Unlock()
+	switch {
+	case idle >= dormantAfter:
+		return max(every, 24*time.Hour)
+	case idle >= idleAfter:
+		return max(every, time.Hour)
+	}
+	return every
+}
+
 // Run keeps the library and the lookup cache fresh until ctx ends, so page
-// loads read and never wait: a pass at once, then one every interval, and one
+// loads read and never wait: a pass at once, then one every cadence, and one
 // whenever a render nudges. Nudged passes run at once but at least retryGap
 // apart: a failure is held that long, so a sooner one could not answer
 // anything new, and renders would otherwise nudge in a loop.
@@ -227,17 +270,25 @@ func (e *Engine) Run(ctx context.Context, every time.Duration) {
 	var lastNudged time.Time
 	for {
 		e.Warm(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(every):
-		case <-e.nudge:
+		passed := time.Now()
+	wait:
+		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(time.Until(lastNudged.Add(e.retryGap))):
+			case <-time.After(time.Until(passed.Add(e.cadence(every)))):
+				break wait
+			case <-e.visited:
+				// The schedule may have come closer: wait on it afresh.
+			case <-e.nudge:
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Until(lastNudged.Add(e.retryGap))):
+				}
+				lastNudged = time.Now()
+				break wait
 			}
-			lastNudged = time.Now()
 		}
 	}
 }

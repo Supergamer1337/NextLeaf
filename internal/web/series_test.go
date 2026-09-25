@@ -1062,3 +1062,37 @@ func TestAVarietyPickOffersNotNow(t *testing.T) {
 		t.Error(`"Not now" does not reroll`)
 	}
 }
+
+func TestAReaderIsAVisitAndABackgroundRequestIsNot(t *testing.T) {
+	// The background pass slows while nobody uses the app. A tab left open
+	// keeps listening for the drawer and following up, and nobody need be
+	// looking at it; a page load, a reroll or a decision is someone there.
+	engine := series.NewEngine(testStore(t), midSeries(), picker.Prefs{IncludeNovellas: true})
+	h := NewHandler(Deps{Source: midSeries(), Engine: engine, Wait: time.Millisecond})
+	visited := func() bool {
+		select {
+		case <-engine.Visited():
+			return true
+		default:
+			return false
+		}
+	}
+	visited() // a start counts as one
+	for _, path := range []string{"/", "/view", "/view?another=1"} {
+		getBody(t, h, path)
+		if !visited() {
+			t.Errorf("GET %s did not count as a visit", path)
+		}
+	}
+	post(t, h, "/series/park", url.Values{"name": {"Mistborn"}})
+	if !visited() {
+		t.Error("a decision did not count as a visit")
+	}
+	for _, path := range []string{"/view?drawer=1", "/view?drawer=1&since=0", "/view?after=0"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if visited() {
+			t.Errorf("GET %s, a background request, counted as a visit", path)
+		}
+	}
+}
