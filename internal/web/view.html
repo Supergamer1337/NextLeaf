@@ -25,6 +25,11 @@
        for when it lands under an open wheel. */}}
   <span class="card-follow" hx-get="/view?after={{.}}{{with $.CardKey}}&keep={{.}}{{end}}{{with $.StaleKey}}&stale={{.}}{{end}}" hx-trigger="load, follow" hx-sync="#app:drop" hx-indicator="this" hidden></span>
   {{end}}
+  {{/* The same, for when the reader comes back to the page: it refreshes the
+       library first if it is getting old. */}}
+  {{if .Listening}}
+  <span class="card-refresh" hx-get="/view?after={{.LibGen}}{{with .CardKey}}&keep={{.}}{{end}}{{with .StaleKey}}&stale={{.}}{{end}}&refresh=1" hx-trigger="refresh" hx-sync="#app:drop" hx-indicator="this" hidden></span>
+  {{end}}
   {{/* No role="status" here: #app is already a polite live region, and a
        nested one would announce every notice twice. */}}
   <div id="flash">
