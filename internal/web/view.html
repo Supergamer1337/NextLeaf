@@ -1,4 +1,21 @@
+{{/* The fragment htmx swaps in: the card, with the drawer's pieces beside it
+     to be swapped into their own places. */}}
 {{define "view"}}
+  {{template "card" .}}
+  {{/* Only these pieces of the drawer travel. The overlay itself stays in
+       the page, so a decision never disturbs the drawer the reader is
+       standing in: no reopening, and the scroll position survives on its
+       own. */}}
+  {{template "drawerToggle" .}}
+  {{template "drawerStatus" .}}
+  {{/* Morphed as a whole: a morph keeps the rows' nodes, so covers are not
+       reloaded and nothing unchanged moves. */}}
+  <div class="drawer-body" id="drawer-body" hx-swap-oob="morph">{{template "drawerPanel" .}}</div>
+{{end}}
+
+{{/* Everything that lives in #app. The page renders it in place; a swap
+     brings it in with the drawer's pieces. */}}
+{{define "card"}}
   {{with .FollowUp}}
   {{/* Painted from a library a refresh is updating behind it: this asks once
        for the result, and gets the whole view only if the library changed. */}}
@@ -99,14 +116,6 @@
 
     {{end}}
   </div>
-  {{/* Only these two pieces of the drawer travel. The overlay itself stays in
-       the page, so a decision never disturbs the drawer the reader is standing
-       in: no reopening, and the scroll position survives on its own. */}}
-  {{template "drawerToggle" .}}
-  {{template "drawerStatus" .}}
-  {{/* Morphed as a whole: a morph keeps the rows' nodes, so covers are not
-       reloaded and nothing unchanged moves. */}}
-  <div class="drawer-body" id="drawer-body" hx-swap-oob="morph">{{template "drawerPanel" .}}</div>
 {{end}}
 
 {{/* What a waiting drawer's refresh brings back: its rows, and the toggle and
@@ -146,7 +155,8 @@
 
 {{define "cover"}}
   {{- if .Book.CoverURL -}}
-    <img class="cover" src="{{.Book.CoverURL}}" alt="Cover of {{.Book.Title}}" loading="lazy">
+    {{/* The one image the reader is waiting for: fetched first, not lazily. */}}
+    <img class="cover" src="{{.Book.CoverURL}}" alt="Cover of {{.Book.Title}}" fetchpriority="high">
   {{- else -}}
     <div class="cover cover--blank"><span>{{.Book.Title}}</span></div>
   {{- end -}}

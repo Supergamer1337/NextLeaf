@@ -509,6 +509,12 @@
       </button>
     </header>
 
+    {{/* With the library held, the page carries its card: nothing waits on a
+         second request, or on script, before the recommendation shows. Only
+         a cold start, with nothing to paint from yet, fetches it after. */}}
+    {{with .View}}
+    <div id="app" aria-live="polite" aria-busy="false">{{template "card" .}}</div>
+    {{else}}
     <div id="app" hx-get="/view" hx-trigger="load" aria-live="polite" aria-busy="true">
       <div class="deck" id="deck">
         <div class="waiting waiting--initial" aria-hidden="true">{{template "waitingCard"}}</div>
@@ -516,18 +522,19 @@
           <button class="btn btn--quiet" type="button" hx-get="/view" hx-disabled-elt="this">Try again</button></p>
       </div>
     </div>
+    {{end}}
   </main>
 
-  <a class="drawer-toggle" id="drawer-toggle" href="#series" hidden>Series <span class="drawer-count">0</span></a>
+  {{with .View}}{{template "drawerToggle" .}}{{else}}<a class="drawer-toggle" id="drawer-toggle" href="#series" hidden>Series <span class="drawer-count">0</span></a>{{end}}
   <div class="drawer-scrim" aria-hidden="true"></div>
   <aside class="drawer" id="series" aria-label="Series you're tracking">
     <div class="drawer-head">
       <h2 class="drawer-title">Series</h2>
-      <span class="drawer-status is-idle" id="drawer-status"></span>
+      {{with .View}}{{template "drawerStatus" .}}{{else}}<span class="drawer-status is-idle" id="drawer-status"></span>{{end}}
       <a class="drawer-close" href="#" aria-label="Close">&times;</a>
     </div>
     <div class="drawer-dim"></div>
-    <div class="drawer-body" id="drawer-body"></div>
+    <div class="drawer-body" id="drawer-body">{{with .View}}{{template "drawerPanel" .}}{{end}}</div>
     {{/* The page's one drawer listener: here, where no swap reaches, so a
          redraw can never leave a second one running. It asks for the next
          change since the generation the status shows (see the script), and
@@ -812,7 +819,10 @@
       // snapped invisible and faded back in — a cached one immediately, an
       // uncached one when its pixels arrive — so arrival always reads the
       // same. A re-render of the same book keeps its cover still.
-      var shownCover = null;
+      // A card painted with the page is already where it belongs: only a cover
+      // that changes after that fades in.
+      var firstCover = document.querySelector("img.cover");
+      var shownCover = firstCover ? firstCover.getAttribute("src") : null;
       function settleCovers() {
         var img = document.querySelector("img.cover");
         if (!img) { shownCover = null; return; }
@@ -863,6 +873,9 @@
         app.setAttribute("aria-busy", "true");
       });
       syncDrawer();
+      // A card painted with the page brings its drawer's status: listen from
+      // it once htmx is up. A cold page listens once its card lands instead.
+      window.addEventListener("load", listen);
     })();
 
     function wireTheme() {
