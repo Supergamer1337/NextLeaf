@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -245,18 +244,19 @@ func TestTheRefreshAnswersTheMomentThereIsSomethingNew(t *testing.T) {
 	st := testStore(t)
 	engine := series.NewEngine(st, waitingLibrary(), picker.Prefs{IncludeNovellas: true})
 	h := NewHandler(Deps{Source: waitingLibrary(), Engine: engine, Wait: 300 * time.Millisecond})
+	before := drawerGen(t, h)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if _, err := engine.View(ctx); err != nil { // an ask ends
 		t.Fatal(err)
 	}
-	gen, _ := engine.Changes()
+	now := drawerGen(t, h)
 
 	// Nothing new since this generation: it waits, then says there is
 	// nothing, rather than sending the whole drawer again.
 	start := time.Now()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/view?drawer=1&since="+strconv.FormatUint(gen, 10), nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/view?drawer=1&since="+url.QueryEscape(now), nil))
 	if waited := time.Since(start); waited < 250*time.Millisecond {
 		t.Errorf("answered after %v with nothing new to show", waited)
 	}
@@ -266,7 +266,7 @@ func TestTheRefreshAnswersTheMomentThereIsSomethingNew(t *testing.T) {
 
 	// Something landed after the generation the drawer last saw: at once.
 	start = time.Now()
-	getBody(t, h, "/view?drawer=1&since="+strconv.FormatUint(gen-1, 10))
+	getBody(t, h, "/view?drawer=1&since="+url.QueryEscape(before))
 	if waited := time.Since(start); waited > 150*time.Millisecond {
 		t.Errorf("waited %v with a change already waiting", waited)
 	}
@@ -544,9 +544,8 @@ func TestABookAddedToTheListShowsUpWithoutWaitingForThePage(t *testing.T) {
 	}
 
 	// With nothing new since, a follow-up leaves the page alone.
-	_, gen := engine.Library()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/view?after="+strconv.FormatUint(gen, 10), nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/view?after="+url.QueryEscape(libraryGen(t, h)), nil))
 	if rec.Code != 204 {
 		t.Errorf("a follow-up with nothing new answered %d, want 204", rec.Code)
 	}
@@ -615,6 +614,78 @@ func TestComingBackSoonAfterAsksNothing(t *testing.T) {
 	}
 	if n := lib.reads.Load(); n != before {
 		t.Errorf("coming back at once read the source %d times, want none", n-before)
+	}
+}
+
+// attr reads the first value of the named attribute in s.
+func attr(t *testing.T, s, name string) string {
+	t.Helper()
+	i := strings.Index(s, name+`="`)
+	if i < 0 {
+		t.Fatalf("no %s in %s", name, s)
+	}
+	rest := s[i+len(name)+2:]
+	return html.UnescapeString(rest[:strings.Index(rest, `"`)])
+}
+
+// drawerGen is the generation token the page's drawer shows now.
+func drawerGen(t *testing.T, h http.Handler) string {
+	t.Helper()
+	return attr(t, getBody(t, h, "/view?drawer=1"), "data-gen")
+}
+
+// libraryGen is the library token a page painted now carries.
+func libraryGen(t *testing.T, h http.Handler) string {
+	t.Helper()
+	return param(t, between(getBody(t, h, "/view"), `class="card-refresh"`, `>`), "after")
+}
+
+// param reads one query parameter out of an element's hx-get.
+func param(t *testing.T, el, name string) string {
+	t.Helper()
+	i := strings.Index(el, `hx-get="`)
+	if i < 0 {
+		t.Fatalf("no hx-get in %s", el)
+	}
+	raw := html.UnescapeString(el[i+len(`hx-get="`):])
+	u, err := url.Parse(raw[:strings.Index(raw, `"`)])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Query().Get(name)
+}
+
+func TestAPageFromBeforeARestartHearsWhatIsNewAtOnce(t *testing.T) {
+	// The page echoes back the generations it was drawn at, and a restart
+	// counts them from zero again. Compared as they were, a page from before
+	// it heard "nothing new" until the new process had counted past it.
+	lib := &changingLibrary{}
+	src := library.NewCached(lib, time.Hour)
+	before := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
+	for _, title := range []string{"A", "B", "C"} { // a process that has seen some changes
+		lib.mu.Lock()
+		lib.toRead = append(lib.toRead, library.Entry{Book: library.Book{Title: title}, Status: library.StatusWantToRead})
+		lib.mu.Unlock()
+		<-before.RefreshLibrary()
+	}
+	old := getBody(t, NewHandler(Deps{Source: src, Engine: before}), "/view")
+	since := attr(t, old, "data-gen")
+	after := param(t, between(old, `class="card-refresh"`, `>`), "after")
+
+	restarted := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
+	<-restarted.RefreshLibrary()
+	h := NewHandler(Deps{Source: src, Engine: restarted, Wait: 5 * time.Second})
+
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/view?drawer=1&since="+url.QueryEscape(since), nil))
+	if rec.Code != http.StatusOK || time.Since(start) > time.Second {
+		t.Errorf("a listen from before the restart answered %d after %v, want the drawer at once", rec.Code, time.Since(start))
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/view?after="+url.QueryEscape(after), nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("a follow-up from before the restart answered %d, want the view", rec.Code)
 	}
 }
 
@@ -713,12 +784,16 @@ func TestAWaitingRefreshEndsWhenItsRequestDoes(t *testing.T) {
 	// rest of its wait.
 	engine := series.NewEngine(testStore(t), midSeries(), picker.Prefs{})
 	h := NewHandler(Deps{Source: midSeries(), Engine: engine, Wait: time.Minute})
-	gen, _ := engine.Changes()
 	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest("GET", "/view?drawer=1&since="+strconv.FormatUint(gen, 10), nil).WithContext(ctx)
+	req := httptest.NewRequest("GET", "/view?drawer=1&since="+url.QueryEscape(drawerGen(t, h)), nil).WithContext(ctx)
 	done := make(chan struct{})
 	go func() { h.ServeHTTP(httptest.NewRecorder(), req); close(done) }()
 	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("the refresh answered with nothing new instead of waiting")
+	default:
+	}
 	cancel()
 	select {
 	case <-done:
@@ -734,14 +809,19 @@ func TestAWaitingRefreshAnswersAsSoonAsTheServerDrains(t *testing.T) {
 	engine := series.NewEngine(testStore(t), midSeries(), picker.Prefs{})
 	draining := make(chan struct{})
 	h := NewHandler(Deps{Source: midSeries(), Engine: engine, Wait: time.Minute, Draining: draining})
-	gen, _ := engine.Changes()
+	since := drawerGen(t, h)
 	rec := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
-		h.ServeHTTP(rec, httptest.NewRequest("GET", "/view?drawer=1&since="+strconv.FormatUint(gen, 10), nil))
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/view?drawer=1&since="+url.QueryEscape(since), nil))
 		close(done)
 	}()
 	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("the refresh answered with nothing new instead of waiting")
+	default:
+	}
 	close(draining)
 	select {
 	case <-done:
@@ -769,13 +849,18 @@ func TestAWaitingFollowUpAnswersAsSoonAsTheServerDrains(t *testing.T) {
 
 	draining := make(chan struct{})
 	h := NewHandler(Deps{Source: src, Engine: engine, Wait: time.Minute, Draining: draining})
-	_, gen := engine.Library()
+	after := libraryGen(t, h)
 	done := make(chan struct{})
 	go func() {
-		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/view?after="+strconv.FormatUint(gen, 10), nil))
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/view?after="+url.QueryEscape(after), nil))
 		close(done)
 	}()
 	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("the follow-up answered before the refresh behind it was done")
+	default:
+	}
 	close(draining)
 	select {
 	case <-done:
