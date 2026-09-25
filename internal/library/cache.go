@@ -42,9 +42,11 @@ type Cached struct {
 	toReadAt time.Time
 	toReadOK atomic.Bool
 
-	// version is the source's Version when its lists were last all fetched
-	// cleanly, at versionAt; empty when that cannot vouch for what is held.
-	versionMu sync.Mutex
+	// refreshMu runs refreshes one at a time, so an older one cannot land
+	// over a newer. version is the source's Version when its lists were last
+	// all fetched cleanly, at versionAt; empty when that cannot vouch for
+	// what is held.
+	refreshMu sync.Mutex
 	version   string
 	versionAt time.Time
 
@@ -292,6 +294,8 @@ func Refresh(ctx context.Context, s Source) (changed bool, err error) {
 // a change, so the lists are fetched regardless once they are a TTL old.
 func (c *Cached) Refresh(ctx context.Context) (bool, error) {
 	c.ahead.Store(true)
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
 	var version string
 	if v, ok := c.src.(Versioner); ok {
 		if got, err := v.Version(ctx); err == nil {
@@ -302,20 +306,16 @@ func (c *Cached) Refresh(ctx context.Context) (bool, error) {
 		}
 	}
 	changed, err := c.fetchAll(ctx)
-	c.versionMu.Lock()
 	if err != nil {
 		version = ""
 	}
 	c.version, c.versionAt = version, c.now()
-	c.versionMu.Unlock()
 	return changed, err
 }
 
 // vouches reports whether version is the one every list was last fetched
-// cleanly at, within the TTL.
+// cleanly at, within the TTL. The caller holds refreshMu.
 func (c *Cached) vouches(version string) bool {
-	c.versionMu.Lock()
-	defer c.versionMu.Unlock()
 	return version != "" && version == c.version && c.now().Sub(c.versionAt) < c.ttl
 }
 

@@ -443,3 +443,31 @@ func TestHeldSaysWhetherAReadWouldWaitOnTheSource(t *testing.T) {
 		t.Fatal("Held waited on a fetch in flight")
 	}
 }
+
+func TestRefreshesRunOneAtATime(t *testing.T) {
+	// Two refreshes fetching side by side can land out of order, the older
+	// lists and version overwriting the newer. The second waits its turn.
+	ctx := context.Background()
+	src := &fakeSource{}
+	c := NewCached(src, time.Hour)
+	if _, err := c.Refresh(ctx); err != nil { // held: fetches no longer take the lists' locks
+		t.Fatal(err)
+	}
+	src.block = make(chan struct{})
+	first, second := make(chan struct{}), make(chan struct{})
+	go func() { _, _ = c.Refresh(ctx); close(first) }()
+	for atomic.LoadInt64(&src.reads) < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	go func() { _, _ = c.Refresh(ctx); close(second) }()
+	time.Sleep(50 * time.Millisecond)
+	if n := atomic.LoadInt64(&src.reads); n != 2 {
+		t.Errorf("a second refresh fetched while the first was still fetching (%d fetches)", n)
+	}
+	close(src.block)
+	<-first
+	<-second
+	if n := atomic.LoadInt64(&src.reads); n != 3 {
+		t.Errorf("fetched %d times, want the second refresh to run once the first was done", n)
+	}
+}
