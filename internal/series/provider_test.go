@@ -1292,6 +1292,72 @@ func TestAPassRightAfterARefreshDoesNotFetchTheLibraryAgain(t *testing.T) {
 	}
 }
 
+func TestThePassSlowsWhileNobodyVisits(t *testing.T) {
+	// Every fifteen minutes the pass refreshes a library nobody may be
+	// looking at. A page load refreshes it anyway, so while the app sits
+	// unused the pass can wait longer without anyone seeing older data.
+	e := testEngine(t, fakeSource{})
+	start := time.Now()
+	now := start
+	e.now = func() time.Time { return now }
+	e.Visit()
+	for _, c := range []struct {
+		since time.Duration
+		every time.Duration
+		want  time.Duration
+	}{
+		{0, 15 * time.Minute, 15 * time.Minute},
+		{time.Hour, 15 * time.Minute, 15 * time.Minute},
+		{3 * time.Hour, 15 * time.Minute, time.Hour},
+		{25 * time.Hour, 15 * time.Minute, 24 * time.Hour},
+		{3 * time.Hour, 2 * time.Hour, 2 * time.Hour}, // never faster than asked
+	} {
+		now = start.Add(c.since)
+		if got := e.cadence(c.every); got != c.want {
+			t.Errorf("%v after a visit, every %v: waits %v, want %v", c.since, c.every, got, c.want)
+		}
+	}
+}
+
+func TestAVisitBringsASlowedPassBackAtOnce(t *testing.T) {
+	e, _, _ := continuable(t)
+	e.pace, e.retryGap = 0, 0
+	e.lastVisit = time.Now().Add(-48 * time.Hour) // nobody for two days
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	passEnd := func(within time.Duration) bool {
+		deadline := time.After(within)
+		for {
+			_, c := e.Changes()
+			select {
+			case <-c:
+			case <-time.After(150 * time.Millisecond):
+				return true
+			case <-deadline:
+				return false
+			}
+		}
+	}
+
+	_, changed := e.Changes()
+	go e.Run(ctx, 50*time.Millisecond)
+	<-changed
+	passEnd(5 * time.Second)
+	_, changed = e.Changes()
+	select {
+	case <-changed:
+		t.Fatal("with nobody visiting for two days, the pass still ran on the short schedule")
+	case <-time.After(400 * time.Millisecond):
+	}
+
+	e.Visit()
+	select {
+	case <-changed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a visit left the pass on the slow schedule")
+	}
+}
+
 func TestARowNotYetLookedUpByISBNSaysItIsStillChecking(t *testing.T) {
 	// A finished row learns where it might continue from an ISBN lookup. Until
 	// that has happened, "nothing left" is not yet the whole answer.

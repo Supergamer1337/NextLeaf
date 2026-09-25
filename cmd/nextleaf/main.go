@@ -21,8 +21,9 @@ import (
 )
 
 // refreshInterval is how often the background pass refreshes the library and
-// asks the catalogue whatever is due, so page loads find it done. Most passes
-// ask nothing: answers are re-checked daily, or weekly for finished series.
+// asks the catalogue whatever is due while the app is in use, so page loads
+// find it done. Most passes ask nothing: answers are re-checked daily, or
+// weekly for finished series. With nobody visiting, the pass runs less often.
 const refreshInterval = 15 * time.Minute
 
 func main() {
