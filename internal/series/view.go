@@ -283,6 +283,9 @@ func followJoins(statements []Statement, ix *library.KeyIndex) []Statement {
 func mergeBooks(in Input, ix *library.KeyIndex) []*book {
 	var order []*book
 	byKey := map[string]*book{}
+	// A classic can carry two thousand ISBNs, so a book's are deduplicated
+	// by set rather than by scanning what it already holds.
+	isbnsOf := map[*book]map[string]bool{}
 
 	add := func(e library.Entry, role string) {
 		k := ix.Key(e)
@@ -303,8 +306,14 @@ func mergeBooks(in Input, ix *library.KeyIndex) []*book {
 		if plain := library.BookKey(e); !contains(b.plainKeys, plain) {
 			b.plainKeys = append(b.plainKeys, plain)
 		}
+		seen := isbnsOf[b]
+		if seen == nil {
+			seen = map[string]bool{}
+			isbnsOf[b] = seen
+		}
 		for _, isbn := range e.Book.ISBNs {
-			if !contains(b.isbns, isbn) {
+			if !seen[isbn] {
+				seen[isbn] = true
 				b.isbns = append(b.isbns, isbn)
 			}
 		}
