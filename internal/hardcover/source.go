@@ -14,11 +14,12 @@ import (
 	"nextleaf/internal/library"
 )
 
-// Client is a reading Source, a SeriesResolver, and a Verifier.
+// Client is a reading Source, a SeriesResolver, a Verifier, and a Versioner.
 var (
 	_ library.Source         = (*Client)(nil)
 	_ library.SeriesResolver = (*Client)(nil)
 	_ library.Verifier       = (*Client)(nil)
+	_ library.Versioner      = (*Client)(nil)
 )
 
 // Name identifies this Source.
@@ -48,6 +49,34 @@ func (c *Client) RecentReads(ctx context.Context, limit int) ([]library.Entry, e
 // later favours books that have waited longest.
 func (c *Client) ToRead(ctx context.Context) ([]library.Entry, error) {
 	return c.fetchEntries(ctx, int(library.StatusWantToRead), "date_added: asc", 0)
+}
+
+// Version sums up the three lists in one small query: how many books each
+// holds, when any of them last moved, and their ratings. It is a few hundred
+// bytes where the lists are 146KB, and moves whenever a book is added,
+// removed, moved between lists, rated or read again.
+func (c *Client) Version(ctx context.Context) (string, error) {
+	userID, err := c.currentUserID(ctx)
+	if err != nil {
+		return "", err
+	}
+	var q strings.Builder
+	q.WriteString("query Version($userID: Int!) {")
+	for _, list := range []struct {
+		name   string
+		status library.Status
+	}{{"reading", library.StatusCurrentlyRead}, {"read", library.StatusRead}, {"toRead", library.StatusWantToRead}} {
+		fmt.Fprintf(&q, `
+  %s: user_books_aggregate(where: {user_id: {_eq: $userID}, status_id: {_eq: %d}}) {
+    aggregate { count max { updated_at date_added last_read_date } sum { rating } }
+  }`, list.name, list.status)
+	}
+	q.WriteString("\n}")
+	var data json.RawMessage
+	if err := c.execute(ctx, q.String(), map[string]any{"userID": userID}, &data); err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 const (

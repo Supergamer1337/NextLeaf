@@ -42,6 +42,12 @@ type Cached struct {
 	toReadAt time.Time
 	toReadOK bool
 
+	// version is the source's Version when its lists were last all fetched
+	// cleanly, at versionAt; empty when that cannot vouch for what is held.
+	versionMu sync.Mutex
+	version   string
+	versionAt time.Time
+
 	healthMu sync.Mutex
 	// Staleness is per query: one query recovering must not mask another
 	// still serving fallback data.
@@ -208,6 +214,13 @@ type Refresher interface {
 	Refresh(ctx context.Context) (changed bool, err error)
 }
 
+// Versioner is an OPTIONAL Source capability: a token that stays the same for
+// as long as none of the source's lists change, and costs far less to ask for
+// than the lists do.
+type Versioner interface {
+	Version(ctx context.Context) (string, error)
+}
+
 // Refresh refreshes every Refresher within s, seeing through Multi and other
 // wrappers.
 func Refresh(ctx context.Context, s Source) (changed bool, err error) {
@@ -239,8 +252,40 @@ func Refresh(ctx context.Context, s Source) (changed bool, err error) {
 // Only a query with nothing held yet is fetched under its lock, since its
 // readers would have to wait for it either way. A failed fetch keeps what is
 // held, marked stale, as a failed read does.
+//
+// A source that is a Versioner is asked first, and while its version is the
+// one the held lists were fetched at, nothing is fetched. A version can miss
+// a change, so the lists are fetched regardless once they are a TTL old.
 func (c *Cached) Refresh(ctx context.Context) (bool, error) {
 	c.ahead.Store(true)
+	var version string
+	if v, ok := c.src.(Versioner); ok {
+		if got, err := v.Version(ctx); err == nil {
+			version = got
+			if c.vouches(version) {
+				return false, nil
+			}
+		}
+	}
+	changed, err := c.fetchAll(ctx)
+	c.versionMu.Lock()
+	if err != nil {
+		version = ""
+	}
+	c.version, c.versionAt = version, c.now()
+	c.versionMu.Unlock()
+	return changed, err
+}
+
+// vouches reports whether version is the one every list was last fetched
+// cleanly at, within the TTL.
+func (c *Cached) vouches(version string) bool {
+	c.versionMu.Lock()
+	defer c.versionMu.Unlock()
+	return version != "" && version == c.version && c.now().Sub(c.versionAt) < c.ttl
+}
+
+func (c *Cached) fetchAll(ctx context.Context) (bool, error) {
 	// The three lists at once: each is its own round trip.
 	var changed [3]bool
 	var errs [3]error
