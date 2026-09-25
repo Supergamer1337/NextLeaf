@@ -27,6 +27,9 @@ const (
 	// cacheKeep is how long a kept answer outlives the last time it was asked
 	// for; past that, the question is one nothing will ask again.
 	cacheKeep = 30 * 24 * time.Hour
+	// libraryFresh is how recently a refresh must have run for a pass to use
+	// its library rather than fetch it again: the refresh that nudged it.
+	libraryFresh = time.Minute
 )
 
 // Engine computes the series view from the sources and the statement log, and
@@ -729,18 +732,21 @@ func (e *Engine) fillTwins(v *View) {
 	}
 }
 
-// Warm refreshes the library, then asks the catalogue whatever is new or due,
-// paced so it cannot trip the source's rate limit. Even the first pass is
-// paced: run flat out against Hardcover it tripped the limit within seconds.
+// Warm refreshes the library, unless a refresh has just done so, then asks
+// the catalogue whatever is new or due, paced so it cannot trip the source's
+// rate limit. Even the first pass is paced: run flat out against Hardcover it
+// tripped the limit within seconds.
 func (e *Engine) Warm(ctx context.Context) {
 	select { // this pass covers any nudge made before it
 	case <-e.nudge:
 	default:
 	}
-	select {
-	case <-e.RefreshLibrary():
-	case <-ctx.Done():
-		return
+	if at, _ := e.Library(); e.now().Sub(at) >= libraryFresh {
+		select {
+		case <-e.RefreshLibrary():
+		case <-ctx.Done():
+			return
+		}
 	}
 	pass, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()

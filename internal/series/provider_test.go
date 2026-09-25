@@ -1262,6 +1262,36 @@ func TestALibraryRefreshIsSharedAndCountsOnlyChanges(t *testing.T) {
 	}
 }
 
+func TestAPassRightAfterARefreshDoesNotFetchTheLibraryAgain(t *testing.T) {
+	// A refresh that changes the library nudges the pass, for the questions
+	// the change raises. The pass asks those, and leaves the library it was
+	// handed alone: fetching it again at once doubled every change's traffic.
+	var refreshed, changes int32 = 0, 1
+	gm := changingShelf{shelf: shelf{name: "grimmory"}, refreshed: &refreshed, changes: &changes}
+	e := NewEngine(openStore(t), library.Combine(&catalogue{name: "hardcover"}, gm), picker.Prefs{})
+	e.pace = 0
+	now := time.Now()
+	e.now = func() time.Time { return now }
+
+	<-e.RefreshLibrary()
+	select {
+	case <-e.Nudged():
+	default:
+		t.Fatal("a refresh that changed the library did not nudge the pass")
+	}
+	e.Warm(context.Background())
+	if n := atomic.LoadInt32(&refreshed); n != 1 {
+		t.Errorf("refreshed %d times, want the pass to use the refresh it followed", n)
+	}
+
+	// A scheduled pass, long after, fetches it as ever.
+	now = now.Add(15 * time.Minute)
+	e.Warm(context.Background())
+	if n := atomic.LoadInt32(&refreshed); n != 2 {
+		t.Errorf("refreshed %d times, want a later pass to fetch the library", n)
+	}
+}
+
 func TestARowNotYetLookedUpByISBNSaysItIsStillChecking(t *testing.T) {
 	// A finished row learns where it might continue from an ISBN lookup. Until
 	// that has happened, "nothing left" is not yet the whole answer.
