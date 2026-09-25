@@ -471,3 +471,30 @@ func TestRefreshesRunOneAtATime(t *testing.T) {
 		t.Errorf("fetched %d times, want the second refresh to run once the first was done", n)
 	}
 }
+
+func TestAVouchedRefreshCountsAsFresh(t *testing.T) {
+	// A refresh the version vouched for confirmed the lists were current.
+	// An outage after it must date the data from then, not from the last
+	// time the lists came down in full.
+	ctx := context.Background()
+	src := &versionedSource{version: "v1"}
+	c := NewCached(src, time.Hour)
+	now := time.Now()
+	c.now = func() time.Time { return now }
+	if _, err := c.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(10 * time.Minute)
+	vouched := now
+	if _, err := c.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(10 * time.Minute)
+	src.version, src.toReadErr = "v2", errors.New("down")
+	_, _ = c.Refresh(ctx)
+	h := c.Health()
+	if !h.Stale || !h.Since.Equal(vouched) {
+		t.Errorf("Health = %+v, want stale since the vouched refresh at %v", h, vouched)
+	}
+}
