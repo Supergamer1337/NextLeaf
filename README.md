@@ -97,7 +97,9 @@ docker run -d --name nextleaf --restart unless-stopped \
 Either way the app is now at `http://localhost:8080`. Keep the volume. It holds
 your series decisions, and without it you lose them every time you replace the
 container. `/healthcheck` returns 200 when the server is up. Check it from
-outside the container, because the image has no shell or curl inside.
+outside the container, because the image has no shell or curl inside. Point
+uptime monitors there rather than at the page: a page load counts as someone
+using the app, and keeps it checking your lists every fifteen minutes.
 
 ## Development
 
