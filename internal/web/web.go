@@ -514,16 +514,17 @@ func staleKey(health []library.Health) string {
 
 // refreshDrawer renders the drawer alone, for an open page listening for
 // change. Given the generation it last saw, it waits for the next change, up
-// to s.wait, so the drawer hears of it at once without polling. It asks
-// nothing itself: the background pass does the fetching, and is nudged if
-// anything is still missing.
+// to s.wait, so the drawer hears of it at once without polling; with nothing
+// by then it answers 204, and the page listens again. It asks nothing
+// itself: the background pass does the fetching, and is nudged if anything
+// is still missing.
 //
 // The card is left alone on purpose: re-running the pick would deal the
-// reader a different book on every refresh. Any failure answers 204, so the
-// drawer on screen stays put.
+// reader a different book on every refresh. A failure answers an error, so
+// the page keeps the drawer it has and waits before asking again.
 func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since string, waiting bool) {
 	if s.engine == nil {
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 	if seen, err := strconv.ParseUint(since, 10, 64); err == nil {
@@ -531,6 +532,8 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since
 			select {
 			case <-changed:
 			case <-time.After(s.wait):
+				w.WriteHeader(http.StatusNoContent)
+				return
 			case <-s.draining:
 			case <-ctx.Done():
 				return
@@ -542,7 +545,7 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since
 	gen, _ := s.engine.Changes()
 	view, err := s.engine.ViewCached(ctx)
 	if err != nil {
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
 	data := viewData{Panel: group(view), Gen: gen, Listening: true}
@@ -553,7 +556,7 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since
 	data.Settled = waiting && !data.Panel.Pending
 	var buf bytes.Buffer
 	if err := viewTmpl.ExecuteTemplate(&buf, "drawerRefresh", data); err != nil {
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

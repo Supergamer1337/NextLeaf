@@ -2,7 +2,9 @@ package web
 
 import (
 	"context"
+	"errors"
 	"html"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
@@ -250,11 +252,16 @@ func TestTheRefreshAnswersTheMomentThereIsSomethingNew(t *testing.T) {
 	}
 	gen, _ := engine.Changes()
 
-	// Nothing new since this generation: it waits, then answers anyway.
+	// Nothing new since this generation: it waits, then says there is
+	// nothing. Sending the drawer again cost a tab left open 11.6MB an hour.
 	start := time.Now()
-	getBody(t, h, "/view?drawer=1&since="+strconv.FormatUint(gen, 10))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/view?drawer=1&since="+strconv.FormatUint(gen, 10), nil))
 	if waited := time.Since(start); waited < 250*time.Millisecond {
 		t.Errorf("answered after %v with nothing new to show", waited)
+	}
+	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Errorf("a listen that heard nothing answered %d with %d bytes, want 204 and nothing", rec.Code, rec.Body.Len())
 	}
 
 	// Something landed after the generation the drawer last saw: at once.
@@ -262,6 +269,25 @@ func TestTheRefreshAnswersTheMomentThereIsSomethingNew(t *testing.T) {
 	getBody(t, h, "/view?drawer=1&since="+strconv.FormatUint(gen-1, 10))
 	if waited := time.Since(start); waited > 150*time.Millisecond {
 		t.Errorf("waited %v with a change already waiting", waited)
+	}
+}
+
+func TestADrawerThatCannotBeDrawnIsAFailureNotANothing(t *testing.T) {
+	// "Nothing new" has the page listen again at once. A drawer that cannot
+	// be drawn, or a server with nothing to listen to, must not say that, or
+	// the page would ask again in a tight loop; as failures, it waits first.
+	down := stubSource{readsErr: errors.New("down")}
+	engine := series.NewEngine(testStore(t), down, picker.Prefs{})
+	rec := httptest.NewRecorder()
+	NewHandler(Deps{Source: down, Engine: engine}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/view?drawer=1", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("a drawer that could not be drawn answered %d, want 503", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	NewHandler(Deps{Source: midSeries()}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/view?drawer=1&since=0", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("with no series tracking, a listen answered %d, want 404", rec.Code)
 	}
 }
 

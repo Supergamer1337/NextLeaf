@@ -763,10 +763,11 @@
       document.body.addEventListener("htmx:afterRequest", function (e) {
         if (e.detail.elt === listener) {
           if (held.drawer) { return; } // it resumes when the wheel closes
-          if (e.detail.successful && e.detail.xhr.status !== 204) { listen(); return; }
-          // Dropped by a restart or a proxy's timeout, or replaced: ask again
-          // shortly, unless a request is already out. Nothing to tell the
-          // reader.
+          // A new drawer, or a 204 for nothing new in the while: ask again.
+          if (e.detail.successful) { listen(); return; }
+          // Failed, dropped by a restart or a proxy's timeout, or replaced:
+          // ask again shortly, unless a request is already out. Nothing to
+          // tell the reader.
           clearTimeout(retry);
           retry = setTimeout(function () {
             retry = null;
@@ -791,8 +792,10 @@
       });
 
       // Before the first card arrives there is no notice slot to write into,
-      // and the skeleton would otherwise sit there for good.
-      function loadFailed() {
+      // and the skeleton would otherwise sit there for good. A background
+      // request failing is no reason to give up on the card.
+      function loadFailed(e) {
+        if (isBackground(e)) { return; }
         app.setAttribute("aria-busy", "false");
         if (!app.querySelector(".waiting--initial")) { return; }
         app.classList.add("failed");
