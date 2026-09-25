@@ -1,6 +1,8 @@
 package series
 
 import (
+	"fmt"
+	"slices"
 	"testing"
 
 	"nextleaf/internal/library"
@@ -54,5 +56,40 @@ func TestADecisionFollowsItsBookIntoAJoin(t *testing.T) {
 	v := Compute(hobbitInput(true, drop))
 	if len(v.Groups) != 1 || v.Groups[0].Decision != Dropped {
 		t.Errorf("groups = %v, decision = %v; want the joined series dropped", groupNames(v), v.Groups[0].Decision)
+	}
+}
+
+func TestAJoinedBookKeepsEachISBNOnce(t *testing.T) {
+	hc, gm := hobbits(true)
+	hc.Book.ISBNs = append(hc.Book.ISBNs, "9780007487318") // a catalogue repeating itself
+	books := mergeBooks(Input{Reads: []library.Entry{hc, gm}}, library.NewKeyIndex([]library.Entry{hc, gm}))
+	if len(books) != 1 {
+		t.Fatalf("books = %d, want the two copies joined", len(books))
+	}
+	want := []string{"9780007487318", "9780261102217"}
+	if got := books[0].isbns; !slices.Equal(got, want) {
+		t.Errorf("isbns = %v, want %v: each once, in the order first seen", got, want)
+	}
+}
+
+// BenchmarkComputeWithManyEditions computes a view over a library shaped like
+// a real one: Hardcover lists every edition's ISBN, and a classic can have
+// two thousand of them.
+func BenchmarkComputeWithManyEditions(b *testing.B) {
+	var in Input
+	for i := range 40 {
+		e := read(fmt.Sprintf("Book %d", i), fmt.Sprintf("Series %d", i%10), float64(i/10+1), day0)
+		e.Book.Authors = []string{"An Author"}
+		editions := 12
+		if i%10 == 0 {
+			editions = 2000
+		}
+		for j := range editions {
+			e.Book.ISBNs = append(e.Book.ISBNs, fmt.Sprintf("978%03d%07d", i, j))
+		}
+		in.Reads = append(in.Reads, e)
+	}
+	for b.Loop() {
+		Compute(in)
 	}
 }

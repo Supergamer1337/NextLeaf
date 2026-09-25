@@ -1,6 +1,6 @@
 package library
 
-import "strings"
+import "bytes"
 
 // KeyIndex keys books so that several descriptions of one book share a key.
 // Sources describe a book differently — a longer title, an edition's
@@ -85,29 +85,42 @@ func (ix *KeyIndex) union(a, b string) {
 }
 
 // normalizeISBN reduces an ISBN to its 13-digit form so the two notations of
-// one number compare equal. Anything that is not an ISBN yields "".
+// one number compare equal. Anything that is not an ISBN yields "". It runs
+// once per ISBN per render, over thousands of them, so it does not allocate
+// until it has an answer.
 func normalizeISBN(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToUpper(s) {
-		if (r >= '0' && r <= '9') || r == 'X' {
-			b.WriteRune(r)
+	var d [13]byte
+	n := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == 'x' {
+			c = 'X'
 		}
+		if (c < '0' || c > '9') && c != 'X' {
+			continue
+		}
+		if n == len(d) {
+			return ""
+		}
+		d[n] = c
+		n++
 	}
-	d := b.String()
 	switch {
-	case len(d) == 13 && !strings.Contains(d, "X"):
-		return d
-	case len(d) == 10 && !strings.Contains(d[:9], "X"):
-		body := "978" + d[:9]
+	case n == 13 && bytes.IndexByte(d[:], 'X') < 0:
+		return string(d[:])
+	case n == 10 && bytes.IndexByte(d[:9], 'X') < 0:
+		isbn := [13]byte{'9', '7', '8'}
+		copy(isbn[3:], d[:9])
 		sum := 0
-		for i, r := range body {
+		for i, r := range isbn[:12] {
 			w := 1
 			if i%2 == 1 {
 				w = 3
 			}
 			sum += int(r-'0') * w
 		}
-		return body + string(rune('0'+(10-sum%10)%10))
+		isbn[12] = byte('0' + (10-sum%10)%10)
+		return string(isbn[:])
 	}
 	return ""
 }

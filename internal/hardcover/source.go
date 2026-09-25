@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -476,9 +475,11 @@ func mapBook(b bookData) library.Book {
 	if all := seriesMemberships(b); len(all) > 0 {
 		book.Series, book.OtherSeries = &all[0], all[1:]
 	}
+	seen := make(map[string]bool, 2*len(b.ISBNEditions))
 	for _, ed := range b.ISBNEditions {
 		for _, isbn := range []string{ed.ISBN13, ed.ISBN10} {
-			if isbn != "" && !slices.Contains(book.ISBNs, isbn) {
+			if isbn != "" && !seen[isbn] {
+				seen[isbn] = true
 				book.ISBNs = append(book.ISBNs, isbn)
 			}
 		}
