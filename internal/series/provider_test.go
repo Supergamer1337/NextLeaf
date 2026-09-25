@@ -1292,6 +1292,23 @@ func TestAPassRightAfterARefreshDoesNotFetchTheLibraryAgain(t *testing.T) {
 	}
 }
 
+func TestAPassDoesNotNudgeItselfIntoAnother(t *testing.T) {
+	// A pass's own refresh, finding a change, nudges for the questions it
+	// raises, and this pass is the one that asks them. Taken as a call for
+	// another pass, it ran every changing pass twice.
+	var refreshed, changes int32 = 0, 1
+	gm := changingShelf{shelf: shelf{name: "grimmory"}, refreshed: &refreshed, changes: &changes}
+	e := NewEngine(openStore(t), library.Combine(&catalogue{name: "hardcover"}, gm), picker.Prefs{})
+	e.pace, e.retryGap = 0, 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx, time.Hour)
+	time.Sleep(500 * time.Millisecond)
+	if gen, _ := e.Changes(); gen != 2 {
+		t.Errorf("generation = %d, want 2: the refresh's change, and one pass ending", gen)
+	}
+}
+
 func TestThePassSlowsWhileNobodyVisits(t *testing.T) {
 	// Every fifteen minutes the pass refreshes a library nobody may be
 	// looking at. A page load refreshes it anyway, so while the app sits

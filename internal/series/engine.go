@@ -204,11 +204,13 @@ func (e *Engine) RefreshLibrary() <-chan struct{} {
 		}
 		e.libDone = nil
 		e.libMu.Unlock()
-		close(done)
+		// Nudged before anyone waiting hears it is done, so a pass waiting on
+		// this refresh can take the nudge as its own.
 		if changed {
 			e.bump()
 			e.Nudge()
 		}
+		close(done)
 	}()
 	return done
 }
@@ -797,6 +799,10 @@ func (e *Engine) Warm(ctx context.Context) {
 		case <-e.RefreshLibrary():
 		case <-ctx.Done():
 			return
+		}
+		select { // its refresh's nudge is for this pass's questions
+		case <-e.nudge:
+		default:
 		}
 	}
 	pass, cancel := context.WithTimeout(ctx, 30*time.Minute)
