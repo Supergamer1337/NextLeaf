@@ -439,7 +439,9 @@ func (s *server) handleShell(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(shellHTML)
 		return
 	}
-	if at, _ := s.engine.Library(); at.IsZero() {
+	// Painting the card reads the library, which must not mean fetching a
+	// list that has yet to arrive, or whose first fetch failed.
+	if at, _ := s.engine.Library(); at.IsZero() || !library.Held(s.src) {
 		_, _ = w.Write(shellHTML)
 		return
 	}

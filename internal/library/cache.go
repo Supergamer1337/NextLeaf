@@ -29,18 +29,18 @@ type Cached struct {
 	readingMu sync.Mutex
 	reading   []Entry
 	readingAt time.Time
-	readingOK bool
+	readingOK atomic.Bool
 
 	readsMu    sync.Mutex
 	reads      []Entry
 	readsLimit int
 	readsAt    time.Time
-	readsOK    bool
+	readsOK    atomic.Bool
 
 	toReadMu sync.Mutex
 	toRead   []Entry
 	toReadAt time.Time
-	toReadOK bool
+	toReadOK atomic.Bool
 
 	// version is the source's Version when its lists were last all fetched
 	// cleanly, at versionAt; empty when that cannot vouch for what is held.
@@ -122,7 +122,7 @@ func (c *Cached) CurrentlyReading(ctx context.Context) ([]Entry, error) {
 	c.readingMu.Lock()
 	defer c.readingMu.Unlock()
 
-	if c.fresh(c.readingAt, c.readingOK) {
+	if c.fresh(c.readingAt, c.readingOK.Load()) {
 		return c.reading, nil
 	}
 
@@ -130,14 +130,15 @@ func (c *Cached) CurrentlyReading(ctx context.Context) ([]Entry, error) {
 	if err != nil {
 		// A source that answered before is down, not gone: old data with a
 		// visible staleness flag beats an error page.
-		if c.readingOK {
+		if c.readingOK.Load() {
 			c.noteFallback("reading", err)
 			return c.reading, nil
 		}
 		return nil, err
 	}
 	c.noteSuccess("reading")
-	c.reading, c.readingAt, c.readingOK = entries, c.now(), true
+	c.reading, c.readingAt = entries, c.now()
+	c.readingOK.Store(true)
 	return entries, nil
 }
 
@@ -152,7 +153,7 @@ func (c *Cached) RecentReads(ctx context.Context, limit int) ([]Entry, error) {
 	// answers only its own cap. That lets the engine's full fetch and the
 	// picker's window share one cache entry instead of thrashing it.
 	servable := func() bool {
-		return c.readsOK && (c.readsLimit == limit || c.readsLimit == 0)
+		return c.readsOK.Load() && (c.readsLimit == limit || c.readsLimit == 0)
 	}
 	capped := func() []Entry {
 		if limit > 0 && limit < len(c.reads) {
@@ -161,7 +162,7 @@ func (c *Cached) RecentReads(ctx context.Context, limit int) ([]Entry, error) {
 		return c.reads
 	}
 
-	if servable() && c.fresh(c.readsAt, c.readsOK) {
+	if servable() && c.fresh(c.readsAt, c.readsOK.Load()) {
 		return capped(), nil
 	}
 
@@ -178,7 +179,8 @@ func (c *Cached) RecentReads(ctx context.Context, limit int) ([]Entry, error) {
 		return nil, err
 	}
 	c.noteSuccess("reads")
-	c.reads, c.readsLimit, c.readsAt, c.readsOK = entries, limit, c.now(), true
+	c.reads, c.readsLimit, c.readsAt = entries, limit, c.now()
+	c.readsOK.Store(true)
 	return entries, nil
 }
 
@@ -188,7 +190,7 @@ func (c *Cached) ToRead(ctx context.Context) ([]Entry, error) {
 	c.toReadMu.Lock()
 	defer c.toReadMu.Unlock()
 
-	if c.fresh(c.toReadAt, c.toReadOK) {
+	if c.fresh(c.toReadAt, c.toReadOK.Load()) {
 		return c.toRead, nil
 	}
 
@@ -196,14 +198,15 @@ func (c *Cached) ToRead(ctx context.Context) ([]Entry, error) {
 	if err != nil {
 		// A source that answered before is down, not gone: old data with a
 		// visible staleness flag beats an error page.
-		if c.toReadOK {
+		if c.toReadOK.Load() {
 			c.noteFallback("toRead", err)
 			return c.toRead, nil
 		}
 		return nil, err
 	}
 	c.noteSuccess("toRead")
-	c.toRead, c.toReadAt, c.toReadOK = entries, c.now(), true
+	c.toRead, c.toReadAt = entries, c.now()
+	c.toReadOK.Store(true)
 	return entries, nil
 }
 
@@ -212,6 +215,37 @@ func (c *Cached) ToRead(ctx context.Context) ([]Entry, error) {
 // changed reports whether the source said anything different.
 type Refresher interface {
 	Refresh(ctx context.Context) (changed bool, err error)
+}
+
+// Held reports whether every list is held, so a read is served without
+// waiting on the source. It never waits itself, even on a first fetch.
+func (c *Cached) Held() bool {
+	return c.readingOK.Load() && c.readsOK.Load() && c.toReadOK.Load()
+}
+
+// Held reports whether every cache within s holds all its lists, seeing
+// through known decorators and a Multi. A source nothing caches is read
+// directly anyway, so it counts as held.
+func Held(s Source) bool {
+	for s != nil {
+		if m, ok := s.(*Multi); ok {
+			for _, sub := range m.sources {
+				if !Held(sub) {
+					return false
+				}
+			}
+			return true
+		}
+		if c, ok := s.(*Cached); ok {
+			return c.Held()
+		}
+		u, ok := s.(unwrapper)
+		if !ok {
+			return true
+		}
+		s = u.Unwrap()
+	}
+	return true
 }
 
 // Versioner is an OPTIONAL Source capability: a token that stays the same for
@@ -310,10 +344,10 @@ func (c *Cached) fetchAll(ctx context.Context) (bool, error) {
 	return changed[0] || changed[1] || changed[2], errors.Join(errs[:]...)
 }
 
-func (c *Cached) swapIn(ctx context.Context, query string, mu *sync.Mutex, ok, changed *bool,
+func (c *Cached) swapIn(ctx context.Context, query string, mu *sync.Mutex, ok *atomic.Bool, changed *bool,
 	fetch func(context.Context) ([]Entry, error), held func() []Entry, keep func([]Entry)) error {
 	mu.Lock()
-	cold := !*ok
+	cold := !ok.Load()
 	if !cold {
 		mu.Unlock()
 	}
@@ -323,14 +357,14 @@ func (c *Cached) swapIn(ctx context.Context, query string, mu *sync.Mutex, ok, c
 	}
 	defer mu.Unlock()
 	if err != nil {
-		if *ok {
+		if ok.Load() {
 			c.noteFallback(query, err)
 		}
 		return fmt.Errorf("refreshing %s: %w", query, err)
 	}
 	c.noteSuccess(query)
-	*changed = !*ok || !reflect.DeepEqual(held(), entries)
+	*changed = !ok.Load() || !reflect.DeepEqual(held(), entries)
 	keep(entries)
-	*ok = true
+	ok.Store(true)
 	return nil
 }
