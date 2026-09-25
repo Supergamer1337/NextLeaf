@@ -170,12 +170,16 @@ type server struct {
 	wait      time.Duration
 	loadFresh time.Duration
 	draining  <-chan struct{}
+	// epoch names this process in the generations handed to a page, which
+	// are counted afresh after a restart.
+	epoch string
 }
 
 // NewHandler returns the application's HTTP handler. d.Source may be nil, in
 // which case the selector explains that no source is configured.
 func NewHandler(d Deps) http.Handler {
-	s := &server{src: d.Source, engine: d.Engine, wait: d.Wait, loadFresh: d.LoadFresh, draining: d.Draining}
+	s := &server{src: d.Source, engine: d.Engine, wait: d.Wait, loadFresh: d.LoadFresh, draining: d.Draining,
+		epoch: strconv.FormatInt(time.Now().UnixNano(), 36)}
 	if s.wait == 0 {
 		s.wait = 20 * time.Second
 	}
@@ -347,10 +351,11 @@ type viewData struct {
 	// a series is a park, so the decision is recorded rather than given away.
 	Continuation bool
 	Panel        panel
-	// Gen is the engine's generation when the drawer was rendered, so a
-	// waiting drawer can ask for whatever lands after it. Listening is false
-	// with no series tracking, when there is nothing to listen for.
-	Gen       uint64
+	// Gen is the engine's generation when the drawer was rendered, as a
+	// token, so a waiting drawer can ask for whatever lands after it.
+	// Listening is false with no series tracking, when there is nothing to
+	// listen for.
+	Gen       string
 	Listening bool
 	// Settled marks the render in which a waiting drawer got its last answer.
 	Settled bool
@@ -495,7 +500,7 @@ func (s *server) pageView(ctx context.Context, reroll bool) viewData {
 		// nothing newer to follow up with; and a follow-up would undo a
 		// reroll.
 		if at, gen, refreshing := s.refreshIfOld(); refreshing && !at.IsZero() && !reroll {
-			followUp = strconv.FormatUint(gen, 10)
+			followUp = s.token(gen)
 		}
 	}
 	data := s.viewOf(ctx, reroll, false, "")
@@ -513,6 +518,27 @@ func (s *server) refreshIfOld() (at time.Time, gen uint64, refreshing bool) {
 	}
 	s.engine.RefreshLibrary()
 	return at, gen, true
+}
+
+// token names generation gen of this process for a page to echo back.
+func (s *server) token(gen uint64) string {
+	return s.epoch + "." + strconv.FormatUint(gen, 10)
+}
+
+// generation reads a page's token back: the generation it names, and
+// whether this process named it. A token from before a restart counts from
+// another zero, so it says nothing about what is new here. ok is false for
+// something that is no token at all.
+func (s *server) generation(token string) (gen uint64, current, ok bool) {
+	epoch, n, named := strings.Cut(token, ".")
+	if !named {
+		n = epoch // a page from before tokens carried a bare count
+	}
+	gen, err := strconv.ParseUint(n, 10, 64)
+	if err != nil {
+		return 0, false, false
+	}
+	return gen, named && epoch == s.epoch, true
 }
 
 // visit tells the engine a reader is here, as opposed to a tab listening on
@@ -533,8 +559,8 @@ func (s *server) visit() {
 // refresh of its own if the library is getting old: a book added elsewhere
 // meanwhile shows on their return, not at the next scheduled pass.
 func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep, stale string, panel, refresh bool) {
-	after, err := strconv.ParseUint(seen, 10, 64)
-	if s.engine == nil || err != nil {
+	after, current, ok := s.generation(seen)
+	if s.engine == nil || !ok {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -551,7 +577,7 @@ func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep
 			return
 		}
 	}
-	if _, gen := s.engine.Library(); gen <= after && staleKey(library.HealthOf(s.src)) == stale {
+	if _, gen := s.engine.Library(); current && gen <= after && staleKey(library.HealthOf(s.src)) == stale {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -588,7 +614,8 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	if seen, err := strconv.ParseUint(since, 10, 64); err == nil {
+	// A drawer from another process, or with no generation, is drawn at once.
+	if seen, current, _ := s.generation(since); current {
 		if gen, changed := s.engine.Changes(); gen <= seen {
 			select {
 			case <-changed:
@@ -609,7 +636,7 @@ func (s *server) refreshDrawer(ctx context.Context, w http.ResponseWriter, since
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
-	data := viewData{Panel: group(view), Gen: gen, Listening: true, WithPanel: panel}
+	data := viewData{Panel: group(view), Gen: s.token(gen), Listening: true, WithPanel: panel}
 	if data.Panel.Pending {
 		s.engine.Nudge()
 	}
@@ -638,11 +665,12 @@ func (s *server) viewOf(ctx context.Context, reroll, catalogue bool, keep string
 		view series.View
 		err  error
 	)
-	data.Gen, _ = s.engine.Changes()
+	gen, _ := s.engine.Changes()
+	data.Gen = s.token(gen)
 	// Read before rendering, as Gen is: a change landing mid-render is then
 	// one the page can still ask for.
 	_, libGen := s.engine.Library()
-	data.LibGen = strconv.FormatUint(libGen, 10)
+	data.LibGen = s.token(libGen)
 	data.Listening = true
 	switch {
 	case catalogue:
