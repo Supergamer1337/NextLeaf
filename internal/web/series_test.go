@@ -1139,3 +1139,25 @@ func TestTheDrawerIsBuiltOnlyOnceOpened(t *testing.T) {
 		t.Error("a decision made with the drawer open does not bring its rows back")
 	}
 }
+
+func TestTheDrawersRowsSayWhichGenerationTheyShow(t *testing.T) {
+	// The status travels with every answer, the rows only with those asked
+	// for with the drawer open. Listening from the status, a drawer whose
+	// rows came before a decision, or never came, waited for a change that
+	// had already happened.
+	h := held(t, midSeries())
+	withRows := getBody(t, h, "/view?panel=1")
+	drawn := between(withRows, `class="drawer-drawn"`, `>`)
+	if !strings.Contains(drawn, `data-gen="`) || attr(t, drawn, "data-gen") != attr(t, withRows, "data-gen") {
+		t.Errorf("the rows do not say which generation they show:\n%s", drawn)
+	}
+	if !strings.Contains(between(withRows, `id="drawer-body"`, `drawer-group`), `class="drawer-drawn"`) {
+		t.Error("the rows' generation is not inside the drawer body, where the rows are")
+	}
+	if strings.Contains(getBody(t, h, "/view"), "drawer-drawn") {
+		t.Error("an answer without rows claims to have drawn them")
+	}
+	if !strings.Contains(getBody(t, h, "/view?drawer=1&panel=1"), `class="drawer-drawn"`) {
+		t.Error("the listener's rows do not say which generation they show")
+	}
+}

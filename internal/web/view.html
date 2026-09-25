@@ -145,6 +145,10 @@
 {{/* The drawer's rows, on their own so the refresh can fetch them without
      touching the card. */}}
 {{define "drawerPanel"}}
+      {{/* The generation these rows were drawn at: an opened drawer listens
+           from its rows, which only some answers bring, not from its status,
+           which every answer does. */}}
+      <span class="drawer-drawn" data-gen="{{.Gen}}" hidden></span>
       {{template "drawerGroup" dict "Label" "Reading next — pinned" "Items" .Panel.Pinned "Undo" "Unpin" "Flat" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Current" "Items" .Panel.Active "Open" true "CanPick" true "CanPark" true "CanDrop" true}}
       {{template "drawerGroup" dict "Label" "Parked" "Items" .Panel.Parked "Undo" "Resume now" "CanPick" true "CanDrop" true}}
