@@ -438,8 +438,13 @@ func group(v series.View) panel {
 // held and waits on no backend. Until the library is first held the page is
 // the skeleton, and fetches the card once it is up.
 func (s *server) handlePage(w http.ResponseWriter, r *http.Request) {
-	s.visit()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// An uptime check is no reader, and has no card to see.
+	if r.Method == http.MethodHead {
+		_, _ = w.Write(shellHTML)
+		return
+	}
+	s.visit()
 	if s.engine == nil {
 		_, _ = w.Write(shellHTML)
 		return
