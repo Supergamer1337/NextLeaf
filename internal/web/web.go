@@ -362,6 +362,9 @@ type viewData struct {
 	CardKey  string
 	// StaleKey is the query-escaped staleKey the page was painted with.
 	StaleKey string
+	// LibGen is the library generation the page was painted from, for it to
+	// catch up from when the reader comes back to it.
+	LibGen string
 	// WithPanel is set once the page has opened its drawer: only then do the
 	// drawer's rows, and their covers, travel with the rest.
 	WithPanel bool
@@ -471,7 +474,7 @@ func (s *server) handleView(w http.ResponseWriter, r *http.Request) {
 		s.refreshDrawer(ctx, w, q.Get("since"), q.Has("waiting"), panel)
 		return
 	case q.Has("after"):
-		s.followUp(ctx, w, q.Get("after"), q.Get("keep"), q.Get("stale"), panel)
+		s.followUp(ctx, w, q.Get("after"), q.Get("keep"), q.Get("stale"), panel, q.Has("refresh"))
 		return
 	}
 	s.visit()
@@ -515,11 +518,21 @@ func (s *server) visit() {
 // since generation seen, or if the sources down are no longer those in stale,
 // the page's own staleKey; and 204, nothing to swap, if neither. The book
 // keyed keep stays on the card unless something should take its place.
-func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep, stale string, panel bool) {
+//
+// With refresh, it is a reader coming back to the page, which starts a
+// refresh of its own if the library is getting old: a book added elsewhere
+// meanwhile shows on their return, not at the next scheduled pass.
+func (s *server) followUp(ctx context.Context, w http.ResponseWriter, seen, keep, stale string, panel, refresh bool) {
 	after, err := strconv.ParseUint(seen, 10, 64)
 	if s.engine == nil || err != nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
+	}
+	if refresh {
+		s.visit()
+		if at, _ := s.engine.Library(); time.Since(at) > s.loadFresh {
+			s.engine.RefreshLibrary()
+		}
 	}
 	if done := s.engine.LibraryRefreshing(); done != nil {
 		select {
@@ -618,6 +631,10 @@ func (s *server) viewOf(ctx context.Context, reroll, catalogue bool, keep string
 		err  error
 	)
 	data.Gen, _ = s.engine.Changes()
+	// Read before rendering, as Gen is: a change landing mid-render is then
+	// one the page can still ask for.
+	_, libGen := s.engine.Library()
+	data.LibGen = strconv.FormatUint(libGen, 10)
 	data.Listening = true
 	switch {
 	case catalogue:

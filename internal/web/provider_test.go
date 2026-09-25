@@ -552,6 +552,72 @@ func TestABookAddedToTheListShowsUpWithoutWaitingForThePage(t *testing.T) {
 	}
 }
 
+// refreshPath is the request a page makes when the reader comes back to it.
+func refreshPath(t *testing.T, body string) string {
+	t.Helper()
+	el := between(body, `class="card-refresh"`, `>`)
+	i := strings.Index(el, "/view?after=")
+	if i < 0 {
+		t.Fatalf("the page has no way to catch up when the reader comes back:\n%s", el)
+	}
+	path := html.UnescapeString(el[i:])
+	return path[:strings.Index(path, `"`)]
+}
+
+func TestAReaderComingBackToThePageSeesWhatChangedMeanwhile(t *testing.T) {
+	// Add a book in Hardcover's app, switch back to the tab: the page had
+	// no way to hear of it until the next scheduled pass, up to fifteen
+	// minutes later. Coming back now refreshes the library, if it is old,
+	// and brings the change.
+	lib := &changingLibrary{}
+	src := library.NewCached(lib, time.Hour)
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
+	<-engine.RefreshLibrary()
+	h := NewHandler(Deps{Source: src, Engine: engine, LoadFresh: time.Nanosecond})
+	page := getBody(t, h, "/")
+	if strings.Contains(page, "Piranesi") {
+		t.Fatal("the book is on the page before it was added")
+	}
+	back := refreshPath(t, page)
+	if !strings.Contains(back, "refresh=1") {
+		t.Errorf("coming back does not ask for a refresh: %s", back)
+	}
+
+	lib.mu.Lock()
+	lib.toRead = []library.Entry{{Book: library.Book{Title: "Piranesi", Authors: []string{"Susanna Clarke"}}, Status: library.StatusWantToRead}}
+	lib.mu.Unlock()
+	if body := getBody(t, h, back); !strings.Contains(body, "Piranesi") {
+		t.Error("coming back to the page did not bring the book just added")
+	}
+
+	// Back again with nothing new: nothing to swap.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, refreshPath(t, getBody(t, h, "/view")), nil))
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("coming back with nothing new answered %d, want 204", rec.Code)
+	}
+}
+
+func TestComingBackSoonAfterAsksNothing(t *testing.T) {
+	// Switching tabs back and forth is not worth a refresh each time: a
+	// library refreshed within the last half minute is fresh enough.
+	lib := &countingSource{stubSource: midSeries()}
+	src := library.NewCached(lib, time.Hour)
+	engine := series.NewEngine(testStore(t), src, picker.Prefs{IncludeNovellas: true})
+	<-engine.RefreshLibrary()
+	h := NewHandler(Deps{Source: src, Engine: engine})
+	back := refreshPath(t, getBody(t, h, "/"))
+	before := lib.reads.Load()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, back, nil))
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("coming back at once answered %d, want 204", rec.Code)
+	}
+	if n := lib.reads.Load(); n != before {
+		t.Errorf("coming back at once read the source %d times, want none", n-before)
+	}
+}
+
 func TestAFollowUpLeavesTheCardOnScreen(t *testing.T) {
 	// The follow-up redraws the page with what the refresh brought. The card
 	// the reader is already looking at stays, rather than being dealt afresh.

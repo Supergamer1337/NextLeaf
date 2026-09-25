@@ -593,6 +593,16 @@
       // A background request: a drawer refresh, or a page's follow-up. Neither
       // is anything the reader asked for, so neither is shown as loading.
       function isBackground(e) { return isDrawerRefresh(e) || requestPath(e).indexOf("after=") >= 0; }
+      // Back on the page after a while away, the library may have moved: a
+      // book added in another app meanwhile shows now, not at the next pass.
+      function catchUp() {
+        var r = document.querySelector(".card-refresh");
+        if (r && window.htmx && !openRow) { htmx.trigger(r, "refresh"); }
+      }
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "visible") { catchUp(); }
+      });
+      window.addEventListener("pageshow", function (e) { if (e.persisted) { catchUp(); } });
       // The drawer's one listener asks for the next change since the
       // generation the drawer shows, and is asked again after each answer.
       // Until the drawer is opened it hears only the toggle and status.
