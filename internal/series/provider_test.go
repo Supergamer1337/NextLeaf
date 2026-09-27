@@ -2,6 +2,7 @@ package series
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -1290,6 +1291,46 @@ func TestAPassRightAfterARefreshDoesNotFetchTheLibraryAgain(t *testing.T) {
 	if n := atomic.LoadInt32(&refreshed); n != 2 {
 		t.Errorf("refreshed %d times, want a later pass to fetch the library", n)
 	}
+}
+
+func TestARenderNeverWaitsOnThePassWritingWhatItFound(t *testing.T) {
+	// The pass wrote each ISBN match to disk while holding the engine's
+	// lock, which every render takes: a page load waited on the disk, for
+	// seconds when a day's matches were due again at once.
+	hc := &catalogue{byISBN: map[string][]library.Series{
+		"9780765377104": {{Name: "Remembrance of Earth's Past", Source: "hardcover", Position: library.At(3)}},
+	}}
+	gm := shelf{fakeSource: fakeSource{reads: []library.Entry{readOn("grimmory", "Death's End", "Three-Body", 3, "9780765377104")}}}
+	e := twoProviders(t, hc, gm)
+	found := make(chan *sql.Tx, 1)
+	hc.onFind = func() {
+		tx, err := e.store.db.Begin() // the store's one connection, busy
+		if err != nil {
+			t.Error(err)
+		}
+		found <- tx
+	}
+	passed := make(chan struct{})
+	go func() {
+		_, _ = e.View(context.Background())
+		close(passed)
+	}()
+	tx := <-found
+	time.Sleep(50 * time.Millisecond) // the pass reaches its write
+
+	rendered := make(chan struct{})
+	go func() {
+		e.Changes()
+		close(rendered)
+	}()
+	select {
+	case <-rendered:
+	case <-time.After(time.Second):
+		t.Error("a render waited on the pass writing its matches to disk")
+	}
+	_ = tx.Rollback()
+	<-passed
+	<-rendered
 }
 
 func TestAPassDoesNotNudgeItselfIntoAnother(t *testing.T) {

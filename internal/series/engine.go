@@ -643,6 +643,12 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 			continue
 		}
 
+		type kept struct {
+			key    string
+			claims []library.Series
+			at     time.Time
+		}
+		var keep []kept
 		e.mu.Lock()
 		for _, b := range asking {
 			var claims []library.Series
@@ -658,14 +664,19 @@ func (e *Engine) discover(ctx context.Context, v *View, budget int, pause time.D
 			}
 			for _, k := range b.plainKeys {
 				e.found[k] = foundClaims{claims: inferred, at: e.now()}
-				if e.store != nil {
-					if err := e.store.SaveClaims(ctx, k, inferred, e.now()); err != nil {
-						log.Printf("series: keeping ISBN matches: %v", err)
-					}
-				}
+				keep = append(keep, kept{k, inferred, e.now()})
 			}
 		}
 		e.mu.Unlock()
+		// Written once the lock is let go: every render takes it, and would
+		// otherwise wait on the disk.
+		if e.store != nil {
+			for _, k := range keep {
+				if err := e.store.SaveClaims(ctx, k.key, k.claims, k.at); err != nil {
+					log.Printf("series: keeping ISBN matches: %v", err)
+				}
+			}
+		}
 		e.bump()
 	}
 	return spent
