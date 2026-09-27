@@ -220,3 +220,33 @@ func TestTheLookupCacheOutlivesTheProcessAndCanBePruned(t *testing.T) {
 		t.Errorf("claims = %+v, want them back as they were saved", c)
 	}
 }
+
+func TestADecisionDoesNotWaitOnTheDisk(t *testing.T) {
+	// Every park or drop waited for SQLite to sync it to disk, which a slow
+	// disk makes slow. With a write-ahead log, syncing at checkpoints instead
+	// cannot corrupt the database; a crash of the whole machine may lose the
+	// last decision, and a crash of the app loses nothing.
+	var mode int
+	if err := openStore(t).db.QueryRow("PRAGMA synchronous").Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if mode != 1 {
+		t.Errorf("synchronous = %d, want 1 (NORMAL)", mode)
+	}
+}
+
+// BenchmarkAppend records one decision. Run it with TMPDIR on a real disk:
+// on a memory-backed one, syncing costs nothing.
+func BenchmarkAppend(b *testing.B) {
+	st, err := Open(filepath.Join(b.TempDir(), "nextleaf.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	ctx := context.Background()
+	for b.Loop() {
+		if err := st.Append(ctx, Statement{Kind: KindPark, MadeAt: day0, Name: "Mistborn", Anchors: []string{"a", "b"}}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

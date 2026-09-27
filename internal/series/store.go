@@ -173,7 +173,10 @@ func Open(path string) (*Store, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	// With the write-ahead log, syncing at checkpoints rather than on every
+	// commit cannot corrupt the database, and a decision need not wait on the
+	// disk: only a crash of the whole machine can lose the last one.
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", path, err)
 	}
