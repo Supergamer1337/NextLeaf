@@ -8,7 +8,7 @@
        own. */}}
   {{template "drawerToggle" .}}
   {{template "drawerStatus" .}}
-  {{/* Built once the page has opened the drawer, and morphed as a whole: a
+  {{/* Built once the page asks for the rows, and morphed as a whole: a
        morph keeps the rows' nodes, so covers are not reloaded and nothing
        unchanged moves. */}}
   {{if .WithPanel}}<div class="drawer-body" id="drawer-body" hx-swap-oob="morph">{{template "drawerPanel" .}}</div>{{end}}
@@ -125,7 +125,7 @@
 {{end}}
 
 {{/* What a waiting drawer's refresh brings back: the toggle and status, and
-     the rows once the drawer has been opened. */}}
+     the rows once the page asks for them. */}}
 {{define "drawerRefresh"}}{{template "drawerToggle" .}}{{template "drawerStatus" .}}{{if .WithPanel}}{{template "drawerPanel" .}}{{end}}{{end}}
 
 {{define "drawerToggle"}}
@@ -145,7 +145,7 @@
 {{/* The drawer's rows, on their own so the refresh can fetch them without
      touching the card. */}}
 {{define "drawerPanel"}}
-      {{/* The generation these rows were drawn at: an opened drawer listens
+      {{/* The generation these rows were drawn at: a filled drawer listens
            from its rows, which only some answers bring, not from its status,
            which every answer does. */}}
       <span class="drawer-drawn" data-gen="{{.Gen}}" hidden></span>

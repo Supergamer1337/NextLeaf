@@ -1102,10 +1102,11 @@ func TestAReaderIsAVisitAndABackgroundRequestIsNot(t *testing.T) {
 	}
 }
 
-func TestTheDrawerIsBuiltOnlyOnceOpened(t *testing.T) {
+func TestTheDrawersRowsTravelOnlyWhenAskedFor(t *testing.T) {
 	// Every page and every card carried the whole drawer, and its covers,
-	// for a drawer the reader may never open. Its toggle and status still
-	// travel, so the count and the pending dot stay live.
+	// before the card's own cover had arrived. The page asks for the rows
+	// once it has loaded. Its toggle and status always travel, so the count
+	// and the pending dot stay live.
 	h := held(t, midSeries())
 	hasRows := func(body string) bool { return strings.Contains(body, `class="drawer-row"`) }
 	hasPieces := func(body string) bool {
@@ -1128,7 +1129,7 @@ func TestTheDrawerIsBuiltOnlyOnceOpened(t *testing.T) {
 		t.Error("a decision from the card builds the drawer")
 	}
 
-	// A page that has opened its drawer says so, and gets the rows with
+	// A page that wants its drawer's rows says so, and gets them with
 	// everything it asks for.
 	for _, path := range []string{"/view?panel=1", "/view?drawer=1&panel=1", "/view?another=1&panel=1"} {
 		if body := getBody(t, h, path); !hasRows(body) {

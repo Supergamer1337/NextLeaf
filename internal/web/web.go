@@ -370,8 +370,8 @@ type viewData struct {
 	// LibGen is the library generation the page was painted from, for it to
 	// catch up from when the reader comes back to it.
 	LibGen string
-	// WithPanel is set once the page has opened its drawer: only then do the
-	// drawer's rows, and their covers, travel with the rest.
+	// WithPanel is set once the page asks for its drawer's rows: only then do
+	// the rows, and their covers, travel with the rest.
 	WithPanel bool
 }
 
@@ -469,8 +469,8 @@ func (s *server) handlePage(w http.ResponseWriter, r *http.Request) {
 // handleView renders the card and drawer as one fragment. "another" flips
 // from the series continuation to a variety pick; "drawer" asks for the
 // drawer alone, and "after" for the follow-up to a page painted from an old
-// library. "panel" says the page has opened its drawer, so the drawer's rows
-// travel too; until then only its toggle and status do.
+// library. "panel" says the page wants its drawer's rows, which then travel
+// too; until then only its toggle and status do.
 //
 // A page load never waits on a backend. It paints from what is held and asks
 // the catalogue nothing; the background pass does that. If the library is

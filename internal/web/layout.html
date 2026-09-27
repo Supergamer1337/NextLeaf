@@ -534,8 +534,8 @@
       <a class="drawer-close" href="#" aria-label="Close">&times;</a>
     </div>
     <div class="drawer-dim"></div>
-    {{/* Empty until the drawer is first opened: its rows, and their covers,
-         are fetched then rather than with every page. */}}
+    {{/* Empty in the page, so the page and the card's cover come first. The
+         rows are fetched once the page has loaded, or on opening if sooner. */}}
     <div class="drawer-body" id="drawer-body"></div>
     {{/* The page's one drawer listener: here, where no swap reaches, so a
          redraw can never leave a second one running. It asks for the next
@@ -564,14 +564,8 @@
       function syncDrawer() {
         var open = location.hash === "#series";
         var d = drawer();
-        if (d) {
-          d.classList.toggle("open", open);
-          if (open && !d.classList.contains("opened")) {
-            // First opened: from now on the rows travel, starting at once.
-            d.classList.add("opened");
-            listen();
-          }
-        }
+        if (d) { d.classList.toggle("open", open); }
+        if (open) { fill(); }
         var scrim = document.querySelector(".drawer-scrim");
         if (scrim) { scrim.classList.toggle("open", open); }
         // However the drawer closed (scrim, Back, a link), a wheel left open
@@ -608,9 +602,16 @@
       window.addEventListener("pageshow", function (e) { if (e.persisted) { catchUp(); } });
       // The drawer's one listener asks for the next change since the
       // generation the drawer shows, and is asked again after each answer.
-      // Until the drawer is opened it hears only the toggle and status.
+      // Until the drawer is filled it hears only the toggle and status.
       var listener = document.getElementById("drawer-listen");
-      function opened() { var d = drawer(); return !!d && d.classList.contains("opened"); }
+      function filled() { var d = drawer(); return !!d && d.classList.contains("filled"); }
+      // From now on the rows travel with every answer, starting at once.
+      function fill() {
+        var d = drawer();
+        if (!d || filled()) { return; }
+        d.classList.add("filled");
+        listen();
+      }
       // One retry at most: asking again cancels any that is pending, or a
       // drawer answering "nothing" at once would gain a retry per redraw.
       var retry = null;
@@ -788,13 +789,13 @@
       // the notice slot. Anything that fails without saying where it belongs —
       // a proxy's 502 page, say — would otherwise be morphed over the card.
       document.body.addEventListener("htmx:configRequest", function (e) {
-        if (opened()) { e.detail.parameters.panel = "1"; }
+        if (filled()) { e.detail.parameters.panel = "1"; }
         if (e.detail.elt !== listener) { return; }
         var st = document.getElementById("drawer-status");
-        // An opened drawer listens from the rows it shows, and one with none
-        // yet is drawn at once; a closed one needs only its status.
+        // A filled drawer listens from the rows it shows, and one with none
+        // yet is drawn at once; an unfilled one needs only its status.
         var from = st;
-        if (opened()) {
+        if (filled()) {
           from = document.querySelector("#drawer-body .drawer-drawn");
           if (!from) { return; }
         }
@@ -921,6 +922,9 @@
       // it once htmx has taken the page up, which it does on DOMContentLoaded
       // after this listener has run. A cold page listens once its card lands.
       document.addEventListener("DOMContentLoaded", function () { setTimeout(listen, 0); });
+      // The page has loaded, card cover and all: fill the drawer behind it, so
+      // it opens at once with its covers in hand.
+      window.addEventListener("load", fill);
     })();
 
     function wireTheme() {
